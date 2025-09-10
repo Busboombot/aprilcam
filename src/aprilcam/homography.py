@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -114,6 +115,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Homography file
     parser.add_argument("--homography", type=str, default="homography.json", help="Output homography JSON filename (in data dir unless absolute)")
     parser.add_argument("--frames", type=int, default=30, help="Max frames to search for all four tags before failing")
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=None,
+        help=(
+            "Delay in seconds before starting capture; prints a countdown. "
+            "Defaults to 3s when --screen is used, otherwise 0."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Config and data dir
@@ -163,6 +173,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         }
 
     try:
+        # Optional start delay with countdown
+        sleep_secs: float = 3.0 if (args.sleep is None and args.screen) else (float(args.sleep) if args.sleep is not None else 0.0)
+        if sleep_secs > 0:
+            total = int(math.floor(sleep_secs))
+            frac = max(0.0, float(sleep_secs) - float(total))
+            print(f"Starting calibration in {sleep_secs:.1f}s...")
+            for i in range(total, 0, -1):
+                print(f"{i}...")
+                time.sleep(1.0)
+            if frac > 0:
+                time.sleep(frac)
+
         # Resolve output paths and prepare snapshot path
         out_path = Path(args.homography)
         if not out_path.is_absolute():
