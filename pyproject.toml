@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aprilcam"
+version = "0.1.0"
+description = "CLI to list cameras and detect AprilTags from a USB video stream using OpenCV"
+authors = [
+  { name = "Your Name" }
+]
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["opencv", "apriltag", "camera", "computer-vision"]
+
+# opencv-contrib-python includes the aruco module with AprilTag dictionaries
+# numpy is an implicit dependency but we declare it explicitly
+# On Apple Silicon, wheels are available for these packages.
+dependencies = [
+  "opencv-contrib-python>=4.8",
+  "numpy>=1.23",
+  "python-dotenv>=1.0",
+  "mss>=9.0", # for --screen desktop capture on macOS/Windows/Linux
+  "pygame>=2.5", # for the playfield simulator window
+]
+
+[project.scripts]
+aprilcam = "aprilcam.cli.aprilcam_cli:main"
+taggen = "aprilcam.cli.taggen_cli:main"
+arucogen = "aprilcam.cli.arucogen_cli:main"
+homocal = "aprilcam.cli.homocal_cli:main"
+cameras = "aprilcam.cli.cameras_cli:main"
+playfield = "aprilcam.playfield:main"
+
+[tool.uv]
+# uv works with standard pyproject; this section is optional and can hold uv-specific settings later.
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
