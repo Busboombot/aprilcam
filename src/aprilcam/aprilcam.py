@@ -31,6 +31,21 @@ def draw_text_with_outline(
     cv.putText(img, text, org, cv.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv.LINE_AA)
 
 
+def draw_text_centered_with_outline(
+    img: np.ndarray,
+    text: str,
+    center: Tuple[int, int],
+    color: Tuple[int, int, int] = (255, 255, 255),
+    font_scale: float = 0.8,
+    thickness: int = 2,
+):
+    (tw, th), baseline = cv.getTextSize(text, cv.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+    x = int(center[0] - tw / 2)
+    # OpenCV's origin is baseline-left; adjust y so text box is vertically centered
+    y = int(center[1] + th / 2)
+    draw_text_with_outline(img, text, (x, y), color=color, font_scale=font_scale, thickness=thickness)
+
+
 def _get_dict_by_family(name: str):
     m = {
         "16h5": cv.aruco.DICT_APRILTAG_16h5,
@@ -181,9 +196,7 @@ def draw_detections(frame: np.ndarray, detections: List[Tuple[np.ndarray, np.nda
             # If still degenerate, draw straight top edge in green
             cv.line(frame, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), (0, 255, 0), 2, cv.LINE_AA)
 
-        # ID label near top-left
-        x, y = int(p0[0]), int(p0[1])
-        draw_text_with_outline(frame, f"ID {tag_id}", (x, y - 8), color=(0, 0, 255), font_scale=0.6, thickness=1)
+    # (ID drawing moved to draw_velocity_vectors to ensure it's above the yellow center marker)
 
 
 def draw_orientation_velocity_vectors(
@@ -240,6 +253,15 @@ def draw_velocity_vectors(
         end = (int(c[0] + dir_unit[0] * length_px), int(c[1] + dir_unit[1] * length_px))
         cv.arrowedLine(frame, start, end, color, thickness, tipLength=0.12)
         cv.circle(frame, start, 4, color, -1)
+        # Draw numeric tag ID on top of the center marker
+        draw_text_centered_with_outline(
+            frame,
+            f"{int(tag_id)}",
+            start,
+            color=(0, 0, 255),
+            font_scale=0.9,
+            thickness=2,
+        )
 
 
 def save_last_camera(idx: int):
@@ -412,12 +434,23 @@ def run_video(
                         if tid in ARUCO_CORNER_ABBR:
                             draw_text_with_outline(frame, ARUCO_CORNER_ABBR[tid], (u + 6, v - 6), color=(255, 255, 0), font_scale=0.7, thickness=1)
                     if all(k in corners_map for k in (0, 1, 2, 3)):
-                        play_poly = np.array([
+                        # Order corners by geometry to avoid upside-down warps due to any ID/placement mismatch.
+                        pts4 = np.array([
                             corners_map[0],
                             corners_map[1],
-                            corners_map[3],
                             corners_map[2],
+                            corners_map[3],
                         ], dtype=np.float32)
+
+                        # Sort by y to split into top and bottom pairs, then by x within each row.
+                        idx = np.argsort(pts4[:, 1])  # ascending by y
+                        top = pts4[idx[:2]]
+                        bot = pts4[idx[2:]]
+                        top = top[np.argsort(top[:, 0])]   # UL, UR
+                        bot = bot[np.argsort(bot[:, 0])]   # LL, LR
+                        UL, UR = top[0], top[1]
+                        LL, LR = bot[0], bot[1]
+                        play_poly = np.array([UL, UR, LR, LL], dtype=np.float32)
                 except Exception:
                     pass
 
@@ -435,17 +468,63 @@ def run_video(
 
                 draw_detections(frame, detections)
 
-                # World coords via homography (cm)
+                # World coords via homography (display smaller font, no units) — always outside the tag box
                 if homography is not None and len(detections) > 0:
                     for pts, _raw, _tid in detections:
-                        c = pts.astype(np.float32).mean(axis=0)
+                        ptsf = pts.astype(np.float32)
+                        c = ptsf.mean(axis=0)
                         u, v = float(c[0]), float(c[1])
                         vec = np.array([u, v, 1.0], dtype=float)
                         Xw = homography @ vec
                         if abs(Xw[2]) > 1e-6:
                             Xcm = Xw[0] / Xw[2]
                             Ycm = Xw[1] / Xw[2]
-                            draw_text_with_outline(frame, f"{Xcm:.1f}cm,{Ycm:.1f}cm", (int(u) + 8, int(v) + 16), color=(0, 255, 0), font_scale=0.55, thickness=1)
+                            text = f"{Xcm:.1f},{Ycm:.1f}"
+                            # Compute tag axis-aligned bbox
+                            x_coords = ptsf[:, 0]
+                            y_coords = ptsf[:, 1]
+                            xmin = float(x_coords.min())
+                            xmax = float(x_coords.max())
+                            ymin = float(y_coords.min())
+                            ymax = float(y_coords.max())
+                            fw = frame.shape[1]
+                            fh = frame.shape[0]
+                            pad = 8
+                            # Measure text size
+                            (tw, th), base = cv.getTextSize(text, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+
+                            # Choose placement preferring below, else above, else right, else left
+                            placed = False
+                            # Below
+                            tx = int((xmin + xmax) * 0.5 - tw * 0.5)
+                            ty = int(ymax + pad + th)
+                            if ty + base <= fh and tx >= 0 and (tx + tw) <= fw:
+                                draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
+                                placed = True
+                            if not placed:
+                                # Above
+                                tx = int((xmin + xmax) * 0.5 - tw * 0.5)
+                                ty = int(ymin - pad)
+                                if ty - th >= 0 and tx >= 0 and (tx + tw) <= fw:
+                                    draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
+                                    placed = True
+                            if not placed:
+                                # Right
+                                tx = int(xmax + pad)
+                                ty = int((ymin + ymax) * 0.5 + th * 0.5)
+                                if (tx + tw) <= fw and ty + base <= fh and (ty - th) >= 0:
+                                    draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
+                                    placed = True
+                            if not placed:
+                                # Left
+                                tx = int(xmin - pad - tw)
+                                ty = int((ymin + ymax) * 0.5 + th * 0.5)
+                                if tx >= 0 and ty + base <= fh and (ty - th) >= 0:
+                                    draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
+                                    placed = True
+                            if not placed:
+                                # Fallback: put near center with a small outward offset (still likely outside for tiny tags)
+                                draw_text_with_outline(frame, text, (int(u) + 8, int(v) + 14), color=(0, 255, 0), font_scale=0.5, thickness=1)
 
                 # Velocities
                 now = time.monotonic()
@@ -563,152 +642,4 @@ def run_video(
             pass
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="aprilcam", description="Detect AprilTags using input specified by homography JSON.")
-    parser.add_argument("--backend", type=str, choices=["auto", "avfoundation", "v4l2", "msmf", "dshow"], default="auto",
-                        help="Capture backend to prefer for camera sources (homography may include backend)")
-    parser.add_argument("--speed-alpha", type=float, default=0.3,
-                        help="EMA smoothing factor for speed in [0,1]; higher is more responsive, lower is smoother")
-    parser.add_argument("--quiet", action="store_true", help="Reduce OpenCV logging to suppress probe warnings")
-    parser.add_argument("--family", type=str, choices=["16h5", "25h9", "36h10", "36h11", "all"], default="36h11",
-                        help="AprilTag family to detect (fewer families = faster)")
-    parser.add_argument("--proc-width", type=int, default=0,
-                        help="Resize width for detection processing (0 = no downscale; downscales for speed, corners scaled back)")
-    parser.add_argument("--quad-decimate", type=float, default=1.0, help="AprilTag quad decimate (>=1, larger is faster but less accurate)")
-    parser.add_argument("--quad-sigma", type=float, default=0.0, help="AprilTag quad sigma (Gaussian blur) in pixels")
-    parser.add_argument("--corner-refine", type=str, choices=["none", "contour", "subpix"], default="subpix",
-                        help="Corner refinement method (subpix is slower but more accurate)")
-    parser.add_argument("--use-aruco3", action="store_true", help="Use ArUco3 detection (if available)")
-    parser.add_argument("--april-min-wb-diff", type=float, default=3.0,
-                        help="Minimum white-black intensity difference (lower tolerates blur, may increase false positives)")
-    parser.add_argument("--april-min-cluster-pixels", type=int, default=5,
-                        help="Minimum connected-pixel cluster size (lower helps small/blurred tags)")
-    parser.add_argument("--april-max-line-fit-mse", type=float, default=20.0,
-                        help="Max line fit MSE (higher tolerates rotated/interpolated edges)")
-    parser.add_argument("--detect-interval", type=int, default=1,
-                        help="Run full detection every N frames; others use fast optical flow tracking (1 = detect every frame)")
-    parser.add_argument("--clahe", action="store_true", help="Apply CLAHE contrast enhancement before detection")
-    parser.add_argument("--sharpen", action="store_true", help="Apply unsharp mask before detection")
-    parser.add_argument("--print-tags", action="store_true", help="Print per-tag ID, center, orientation, and velocity (fixed-width)")
-    # Homography file (source configuration)
-    parser.add_argument("--homography", type=str, default="homography.json", help="Homography JSON filename (in data dir unless absolute)")
-    # Overlay options
-    parser.add_argument("--deskew-overlay", action="store_true", help="Warp the playfield quadrilateral to a rectangle in the overlay window")
-    args = parser.parse_args(argv)
-
-    # Reduce OpenCV logging if requested
-    if getattr(args, "quiet", False):
-        try:
-            if hasattr(cv, "utils") and hasattr(cv.utils, "logging"):
-                cv.utils.logging.setLogLevel(cv.utils.logging.LOG_LEVEL_ERROR)
-        except Exception:
-            pass
-
-    # Backend mapping
-    be_map = {
-        "auto": None,
-        "avfoundation": getattr(cv, "CAP_AVFOUNDATION", 1200),
-        "v4l2": getattr(cv, "CAP_V4L2", 200),
-        "msmf": getattr(cv, "CAP_MSMF", 1400),
-        "dshow": getattr(cv, "CAP_DSHOW", 700),
-    }
-    be_value = be_map.get(args.backend)
-
-    # Load config and homography JSON (also holds input source info now)
-    cfg = None
-    try:
-        cfg = AppConfig.load()
-    except Exception:
-        cfg = None
-
-    # No camera probing args in this mode; homography provides the source.
-
-    # Open source based on homography JSON metadata
-    # Resolve path
-    H_path = Path(args.homography)
-    if cfg and not H_path.is_absolute():
-        H_path = cfg.data_dir / H_path
-    H_meta = None
-    H_pix = None
-    H = None
-    cap = None
-    try:
-        if H_path.exists():
-            data = json.loads(H_path.read_text())
-            H = np.array(data.get("homography", []), dtype=float) if data.get("homography") is not None else None
-            H_meta = data.get("source")
-            H_pix = data.get("pixel_points")
-    except Exception:
-        H_meta = None
-        H = None
-
-    if not H_meta:
-        print("Homography file missing or missing 'source' config. Run homocal to generate it.")
-        return 2
-
-    src_type = str(H_meta.get("type", "camera"))
-    if src_type == "screen":
-        region = H_meta.get("region")
-        try:
-            from .screencap import ScreenCaptureMSS
-            cap = ScreenCaptureMSS(
-                monitor=int(H_meta.get("monitor", 1)),
-                fps=float(H_meta.get("fps", 30.0)),
-                region=tuple(region) if region else None,
-            )
-        except Exception as e:
-            print(f"Failed to initialize screen capture: {e}")
-            return 2
-    else:
-        # Camera path using AppConfig
-        cam_idx = H_meta.get("index")
-        cap = cfg.get_camera(arg=int(cam_idx) if cam_idx is not None else None, backend=args.backend, quiet=bool(args.quiet)) if cfg else None
-        if cap and cap.isOpened():
-            cw = H_meta.get("cap_width")
-            ch = H_meta.get("cap_height")
-            if cw:
-                cap.set(cv.CAP_PROP_FRAME_WIDTH, int(cw))
-            if ch:
-                cap.set(cv.CAP_PROP_FRAME_HEIGHT, int(ch))
-
-    if cap is None or not cap.isOpened():
-        print("No camera available.")
-        return 1
-
-    # No last-camera persistence; source comes from homography JSON.
-
-    # H already parsed from JSON above if present.
-
-    run_video(
-        index=0,
-        backend=be_value,
-        speed_alpha=max(0.0, min(1.0, float(args.speed_alpha))),
-        family=args.family,
-        proc_width=int(args.proc_width),
-        cap_width=None,
-        cap_height=None,
-        quad_decimate=float(args.quad_decimate),
-        quad_sigma=float(args.quad_sigma),
-        corner_refine=str(args.corner_refine),
-        detect_inverted=bool((H_meta or {}).get("detect_inverted", True)),
-        use_aruco3=bool(args.use_aruco3),
-        detect_interval=max(1, int(args.detect_interval)),
-        use_clahe=bool(args.clahe),
-        use_sharpen=bool(args.sharpen),
-        print_tags=bool(args.print_tags),
-        cap=cap,
-        homography=H,
-        headless=False,
-        deskew_overlay=bool(args.deskew_overlay),
-    april_min_wb_diff=float(args.april_min_wb_diff),
-    april_min_cluster_pixels=int(args.april_min_cluster_pixels),
-    april_max_line_fit_mse=float(args.april_max_line_fit_mse),
-        playfield_poly_init=(
-            np.array([H_pix[i] for i in (0, 1, 3, 2)], dtype=np.float32) if isinstance(H_pix, list) and len(H_pix) == 4 else None
-        ),
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+# CLI main moved to aprilcam.cli.aprilcam_cli

@@ -32,6 +32,9 @@ arucogen = "aprilcam.cli.arucogen_cli:main"
 homocal = "aprilcam.cli.homocal_cli:main"
 cameras = "aprilcam.cli.cameras_cli:main"
 playfield = "aprilcam.playfield:main"
+atscreencap = "aprilcam.cli.atscreencap_cli:main"
+aprilcap = "aprilcam.cli.aprilcap_cli:main"
+apriltest = "aprilcam.cli.apriltest_cli:main"
 
 [tool.uv]
 # uv works with standard pyproject; this section is optional and can hold uv-specific settings later.

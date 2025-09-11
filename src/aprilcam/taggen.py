@@ -20,6 +20,16 @@ def render_tag_image(tag_id: int, size: int = 800) -> np.ndarray:
     return cv.cvtColor(img_gray, cv.COLOR_GRAY2BGR)
 
 
+def add_quiet_zone(img: np.ndarray, quiet_ratio: float) -> np.ndarray:
+    if quiet_ratio <= 0:
+        return img
+    h, w = img.shape[:2]
+    pad = max(1, int(round(min(h, w) * float(quiet_ratio))))
+    out = np.full((h + 2 * pad, w + 2 * pad, 3), 255, dtype=np.uint8)
+    out[pad:pad + h, pad:pad + w] = img
+    return out
+
+
 def add_label_below(img: np.ndarray, label: str, margin: int = 20, font_scale: float = 1.0, thickness: int = 2) -> np.ndarray:
     # Compute text size
     (w, h), baseline = cv.getTextSize(label, cv.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
@@ -38,11 +48,13 @@ def add_label_below(img: np.ndarray, label: str, margin: int = 20, font_scale: f
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate AprilTag 36h11 images (800x800) with labels.")
+    parser = argparse.ArgumentParser(description="Generate AprilTag 36h11 images with optional quiet zone and labels.")
     parser.add_argument("--out-dir", default="april-tag-images", help="Output directory (default: april-tag-images)")
     parser.add_argument("--start", type=int, default=0, help="Start ID (inclusive), default 0")
     parser.add_argument("--end", type=int, default=586, help="End ID (inclusive), default 586 for 36h11")
     parser.add_argument("--size", type=int, default=800, help="Tag image size in pixels (square), default 800")
+    parser.add_argument("--quiet-ratio", type=float, default=2.0/7.0, help="Quiet zone thickness as fraction of tag side per edge (default ~0.2857)")
+    parser.add_argument("--with-label", action="store_true", help="Append an ID label below the tag (off by default)")
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out_dir)
@@ -57,9 +69,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     for tag_id in range(start, end + 1):
         tag_img = render_tag_image(tag_id, size=args.size)
-        labeled = add_label_below(tag_img, f"ID: {tag_id}", margin=30, font_scale=1.2, thickness=2)
+        tag_img = add_quiet_zone(tag_img, float(args.quiet_ratio))
+        if args.with_label:
+            tag_img = add_label_below(tag_img, f"ID: {tag_id}", margin=30, font_scale=1.2, thickness=2)
         out_path = out_dir / f"tag36h11_{tag_id}.png"
-        cv.imwrite(str(out_path), labeled)
+        cv.imwrite(str(out_path), tag_img)
     print(f"Wrote images to {out_dir.resolve()}")
     return 0
 
