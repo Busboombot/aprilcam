@@ -144,17 +144,36 @@ class PlayfieldDisplay:
             ptsf = self._map_points_to_display(pts_src)
             pts = ptsf.astype(np.int32)
             p0, p1, p2, p3 = pts[0], pts[1], pts[2], pts[3]
+            # draw a peaked "roof" indicating the outward top direction
+            try:
+                # Compute apex in source coords using the tag's top direction
+                pts_src4 = tag.corners_px.astype(np.float32)
+                top_mid_src = (pts_src4[0] + pts_src4[1]) * 0.5
+                nux, nuy = getattr(tag, "top_dir_px", (1.0, 0.0))
+                top_len = float(np.linalg.norm(pts_src4[1] - pts_src4[0]))
+                roof_len = max(6.0, min(80.0, 0.35 * top_len))
+                apex_src = np.array([[top_mid_src[0] + nux * roof_len, top_mid_src[1] + nuy * roof_len]], dtype=np.float32)
+                apex = self._map_points_to_display(apex_src).reshape(2).astype(int)
+                cv.line(frame, tuple(p0), tuple(apex), (0, 255, 0), 2, cv.LINE_AA)
+                cv.line(frame, tuple(p1), tuple(apex), (0, 255, 0), 2, cv.LINE_AA)
+            except Exception:
+                # fallback: flat green top edge
+                cv.line(frame, tuple(p0), tuple(p1), (0, 255, 0), 2, cv.LINE_AA)
             cv.line(frame, tuple(p1), tuple(p2), (0, 0, 255), 2, cv.LINE_AA)
             cv.line(frame, tuple(p2), tuple(p3), (0, 0, 255), 2, cv.LINE_AA)
             cv.line(frame, tuple(p3), tuple(p0), (0, 0, 255), 2, cv.LINE_AA)
             c_src = np.array([tag.center_px], dtype=np.float32)
             c_map = self._map_points_to_display(c_src).reshape(2)
             cx, cy = int(c_map[0]), int(c_map[1])
-            # velocity arrow
-            vx, vy = tag.vel_px
+            # velocity arrow (supports AprilTagFlow with vel_px property)
+            vx, vy = (0.0, 0.0)
+            try:
+                vx, vy = getattr(tag, "vel_px", (0.0, 0.0))
+            except Exception:
+                vx, vy = (0.0, 0.0)
             norm = math.hypot(vx, vy)
-            if norm > 1e-3:
-                length_px = int(max(20, min(250, norm * 0.5)))
+            if norm > 1e-6:
+                length_px = int(max(12, min(250, norm * 0.5)))
                 ux, uy = (vx / norm, vy / norm)
                 # build arrow in source coords, then map both points
                 start_src = np.array([[tag.center_px[0], tag.center_px[1]]], dtype=np.float32)
@@ -230,3 +249,12 @@ class PlayfieldDisplay:
         except Exception:
             pass
         cv.imshow(self.window, display)
+
+    def pause(self, frame: np.ndarray, text: str = " Paused: Press Space to Run") -> None:
+        """Overlay a paused message onto the given frame."""
+        if frame is None:
+            return
+        try:
+            self._draw_text_with_outline(frame, text, (10, 30), color=(0, 255, 255), font_scale=0.9, thickness=2)
+        except Exception:
+            pass

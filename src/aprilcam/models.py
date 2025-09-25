@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple, Deque
+from collections import deque
 
 import numpy as np
 
@@ -17,9 +18,9 @@ class AprilTag:
     - top_dir_px: unit vector from center toward the top edge midpoint (image coords)
     - world_xy: optional (X,Y) in world units (via homography)
     - orientation_yaw: yaw angle in radians in image plane (from +X toward +Y)
-    - vel_px: pixel velocity vector (vx, vy) in px/s
-    - speed_px: speed magnitude in px/s
     - last_ts: timestamp of last update
+    - frame: video frame index when measured
+    - in_playfield: whether the tag center is within the playfield polygon
     """
 
     id: int
@@ -28,16 +29,17 @@ class AprilTag:
     top_dir_px: Tuple[float, float]
     orientation_yaw: float
     world_xy: Optional[Tuple[float, float]] = None
-    vel_px: Tuple[float, float] = (0.0, 0.0)
-    speed_px: float = 0.0
     last_ts: Optional[float] = None
+    frame: int = 0
+    in_playfield: bool = False
 
     @staticmethod
     def from_corners(
         tag_id: int,
         corners_px: np.ndarray,
         homography: Optional[np.ndarray] = None,
-        timestamp: Optional[float] = None,
+    timestamp: Optional[float] = None,
+    frame: int = 0,
     ) -> "AprilTag":
         ptsf = corners_px.astype(np.float32)
         c = ptsf.mean(axis=0)
@@ -68,11 +70,10 @@ class AprilTag:
             orientation_yaw=float(yaw),
             world_xy=world_xy,
             last_ts=timestamp,
+            frame=int(frame),
         )
 
     def update(self, corners_px: np.ndarray, timestamp: float, homography: Optional[np.ndarray] = None) -> None:
-        prev_cx, prev_cy = self.center_px
-        prev_ts = self.last_ts
         ptsf = corners_px.astype(np.float32)
         c = ptsf.mean(axis=0)
         p0, p1 = ptsf[0], ptsf[1]
@@ -96,11 +97,103 @@ class AprilTag:
             Xw = homography @ vec
             if abs(float(Xw[2])) > 1e-9:
                 self.world_xy = (float(Xw[0] / Xw[2]), float(Xw[1] / Xw[2]))
-        # velocity
-        if prev_ts is not None and timestamp is not None:
-            dt = max(1e-3, float(timestamp - prev_ts))
-            vx = (self.center_px[0] - prev_cx) / dt
-            vy = (self.center_px[1] - prev_cy) / dt
-            self.vel_px = (float(vx), float(vy))
-            self.speed_px = float(math.hypot(vx, vy))
         self.last_ts = float(timestamp)
+
+    def clone(self) -> "AprilTag":
+        """Return a deep-ish copy suitable for historical storage in flows."""
+        return AprilTag(
+            id=int(self.id),
+            corners_px=self.corners_px.copy(),
+            center_px=(float(self.center_px[0]), float(self.center_px[1])),
+            top_dir_px=(float(self.top_dir_px[0]), float(self.top_dir_px[1])),
+            orientation_yaw=float(self.orientation_yaw),
+            world_xy=(None if self.world_xy is None else (float(self.world_xy[0]), float(self.world_xy[1]))),
+            last_ts=(None if self.last_ts is None else float(self.last_ts)),
+            frame=int(self.frame),
+            in_playfield=bool(self.in_playfield),
+        )
+
+
+class AprilTagFlow:
+    """Fixed-size history of AprilTag observations with convenient properties.
+
+    Exposes the same attribute interface as AprilTag, returning values from the
+    most recent AprilTag in the deque. Additionally computes vel_px and speed_px
+    from the last two observations when available.
+    """
+
+    def __init__(self, maxlen: int = 5) -> None:
+        self._deque: Deque[AprilTag] = deque(maxlen=maxlen)
+        self._id: Optional[int] = None
+
+    def add_tag(self, tag: AprilTag) -> None:
+        if self._id is None:
+            self._id = int(tag.id)
+        self._deque.append(tag)
+
+    # --- core accessors mirroring AprilTag ---
+    @property
+    def id(self) -> int:
+        return int(self._id) if self._id is not None else -1
+
+    def _last(self) -> Optional[AprilTag]:
+        return self._deque[-1] if self._deque else None
+
+    @property
+    def corners_px(self) -> np.ndarray:
+        t = self._last()
+        return t.corners_px if t is not None else np.zeros((4, 2), dtype=np.float32)
+
+    @property
+    def center_px(self) -> Tuple[float, float]:
+        t = self._last()
+        return t.center_px if t is not None else (0.0, 0.0)
+
+    @property
+    def top_dir_px(self) -> Tuple[float, float]:
+        t = self._last()
+        return t.top_dir_px if t is not None else (1.0, 0.0)
+
+    @property
+    def orientation_yaw(self) -> float:
+        t = self._last()
+        return t.orientation_yaw if t is not None else 0.0
+
+    @property
+    def world_xy(self) -> Optional[Tuple[float, float]]:
+        t = self._last()
+        return t.world_xy if t is not None else None
+
+    @property
+    def last_ts(self) -> Optional[float]:
+        t = self._last()
+        return t.last_ts if t is not None else None
+
+    @property
+    def frame(self) -> int:
+        t = self._last()
+        return t.frame if t is not None else 0
+
+    @property
+    def in_playfield(self) -> bool:
+        t = self._last()
+        return bool(t.in_playfield) if t is not None else False
+
+    # --- derived motion ---
+    @property
+    def vel_px(self) -> Tuple[float, float]:
+        if len(self._deque) < 2:
+            return (0.0, 0.0)
+        a = self._deque[-2]
+        b = self._deque[-1]
+        if a.last_ts is None or b.last_ts is None:
+            return (0.0, 0.0)
+        dt = max(1e-3, float(b.last_ts - a.last_ts))
+        vx = (b.center_px[0] - a.center_px[0]) / dt
+        vy = (b.center_px[1] - a.center_px[1]) / dt
+        return (float(vx), float(vy))
+
+    @property
+    def speed_px(self) -> float:
+        vx, vy = self.vel_px
+        return float(math.hypot(vx, vy))

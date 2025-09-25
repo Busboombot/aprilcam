@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict
 
 import cv2 as cv
 import numpy as np
+from .models import AprilTag, AprilTagFlow
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Playfield:
     detect_inverted: bool = False
 
     _poly: Optional[np.ndarray] = None  # shape (4,2) float32 in order UL,UR,LR,LL
+    _flows: Dict[int, AprilTagFlow] = field(default_factory=dict)
 
     def _build_aruco4_detector(self):
         d = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
@@ -80,6 +82,29 @@ class Playfield:
     def get_polygon(self) -> Optional[np.ndarray]:
         return self._poly.copy() if self._poly is not None else None
 
+    def isIn(self, pts: np.ndarray | tuple[float, float]) -> bool:
+        """Return True if the given tag points/center lie within the playfield.
+
+        Accepts either:
+        - An array of shape (N,2) of tag corners/points; uses their mean as center.
+        - A tuple (x, y) representing the center directly.
+
+        If the playfield polygon isn't known yet, returns True (no filtering).
+        """
+        if self._poly is None:
+            return True
+        try:
+            if isinstance(pts, tuple) or (hasattr(pts, "__len__") and len(pts) == 2 and not hasattr(pts[0], "__len__")):
+                u, v = float(pts[0]), float(pts[1])
+            else:
+                P = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+                c = P.mean(axis=0)
+                u, v = float(c[0]), float(c[1])
+            inside = cv.pointPolygonTest(self._poly.astype(np.float32), (u, v), False)
+            return bool(inside >= 0)
+        except Exception:
+            return True
+
     def annotate(self, frame_bgr: np.ndarray) -> None:
         if self._poly is None:
             return
@@ -104,16 +129,24 @@ class Playfield:
         M = cv.getPerspectiveTransform(src, dst)
         return cv.warpPerspective(frame_bgr, M, (out_w, out_h))
 
+    # --- tag flow integration ---
+    def add_tag(self, tag: AprilTag) -> None:
+        """Add/Update a tag into the playfield flows, setting in_playfield.
 
-def main(argv: list[str] | None = None) -> int:
-    # Forward to the CLI module that hosts the simulator
-    try:
-        from .cli.playfield_cli import main as _main
-        return _main(argv)
-    except Exception:
-        print("Playfield CLI not available.")
-        return 2
+        If the playfield polygon is unknown, in_playfield defaults to True.
+        """
+        try:
+            tag.in_playfield = self.isIn(tag.center_px)
+        except Exception:
+            tag.in_playfield = True
+        flow = self._flows.get(tag.id)
+        if flow is None:
+            flow = AprilTagFlow(maxlen=5)
+            self._flows[tag.id] = flow
+        # Store a snapshot so history isn't mutated by future updates
+        flow.add_tag(tag.clone())
 
+    def get_flows(self) -> Dict[int, AprilTagFlow]:
+        return self._flows
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+ 

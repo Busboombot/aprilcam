@@ -43,6 +43,33 @@ class AprilCam:
         deskew_overlay: bool = False,
         playfield_poly_init: Optional[np.ndarray] = None,
     ) -> None:
+        """Initialize the AprilCam controller.
+
+        Args:
+            index: Camera index (ignored when an explicit cap is provided).
+            backend: Preferred OpenCV capture backend constant or None for auto.
+            speed_alpha: EMA smoothing factor for printed speeds in [0,1].
+            family: AprilTag family name (or 'all').
+            proc_width: Processing width for detection downscale (0 disables).
+            cap_width: Optional capture width hint for the camera.
+            cap_height: Optional capture height hint for the camera.
+            quad_decimate: AprilTag decimation (>=1, larger is faster/rougher).
+            quad_sigma: AprilTag Gaussian blur sigma in pixels.
+            corner_refine: Corner refinement mode: none/contour/subpix.
+            detect_inverted: Whether to also detect inverted (white-on-black) tags.
+            detect_interval: Detect every N frames; track between.
+            use_clahe: Apply CLAHE preprocessing before detection.
+            use_sharpen: Apply light sharpening before detection.
+            april_min_wb_diff: Min white/black intensity diff for AprilTag.
+            april_min_cluster_pixels: Min cluster pixel size for AprilTag.
+            april_max_line_fit_mse: Max line fit MSE for AprilTag.
+            print_tags: Print per-tag info each frame when detections exist.
+            cap: Optional pre-opened cv.VideoCapture or image source.
+            homography: 3x3 projective transform to world coords (cm).
+            headless: If True, never opens a window.
+            deskew_overlay: If True, warp the playfield to a rectangle for display.
+            playfield_poly_init: Optional initial 4x2 polygon for playfield.
+        """
         self.index = index
         self.backend = backend
         self.speed_alpha = float(speed_alpha)
@@ -73,10 +100,6 @@ class AprilCam:
         self.detectors = self._build_detectors()
         self.playfield = Playfield(proc_width=self.proc_width or 960, detect_inverted=False)
         self.window = "aprilcam"
-        self.arrow_scale, self.arrow_min, self.arrow_max = 0.25, 10, 125
-        self.arrow_color, self.arrow_width = (255, 0, 255), 2
-        self.M_deskew: Optional[np.ndarray] = None
-        self.deskew_size: Optional[Tuple[int, int]] = None  # (w,h)
         self.display = PlayfieldDisplay(
             self.playfield,
             window_name=self.window,
@@ -84,35 +107,11 @@ class AprilCam:
             deskew_overlay=self.deskew_overlay,
         )
 
-    # ---------- helpers ----------
-    @staticmethod
-    def draw_text_with_outline(
-        img: np.ndarray,
-        text: str,
-        org: Tuple[int, int],
-        color: Tuple[int, int, int] = (255, 255, 255),
-        font_scale: float = 0.7,
-        thickness: int = 1,
-    ) -> None:
-        cv.putText(img, text, org, cv.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness + 2, cv.LINE_AA)
-        cv.putText(img, text, org, cv.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv.LINE_AA)
 
-    @staticmethod
-    def draw_text_centered_with_outline(
-        img: np.ndarray,
-        text: str,
-        center: Tuple[int, int],
-        color: Tuple[int, int, int] = (255, 255, 255),
-        font_scale: float = 0.8,
-        thickness: int = 2,
-    ) -> None:
-        (tw, th), baseline = cv.getTextSize(text, cv.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-        x = int(center[0] - tw / 2)
-        y = int(center[1] + th / 2)
-        AprilCam.draw_text_with_outline(img, text, (x, y), color=color, font_scale=font_scale, thickness=thickness)
 
     @staticmethod
     def _get_dict_by_family(name: str):
+        """Map family string to OpenCV ArUco predefined AprilTag dictionary."""
         m = {
             "16h5": cv.aruco.DICT_APRILTAG_16h5,
             "25h9": cv.aruco.DICT_APRILTAG_25h9,
@@ -122,6 +121,7 @@ class AprilCam:
         return m.get(name, cv.aruco.DICT_APRILTAG_36h11)
 
     def _build_detectors(self):
+        """Create per-family ArUco detectors configured with AprilTag params."""
         fams = [self.family] if self.family != "all" else ["16h5", "25h9", "36h10", "36h11"]
         detectors = []
         for f in fams:
@@ -155,6 +155,7 @@ class AprilCam:
 
     @staticmethod
     def _maybe_preprocess(gray: np.ndarray, use_clahe: bool, use_sharpen: bool) -> np.ndarray:
+        """Optionally apply CLAHE and/or sharpening to a grayscale image."""
         out = gray
         if use_clahe:
             clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -165,6 +166,15 @@ class AprilCam:
         return out
 
     def detect_apriltags(self, frame_bgr: np.ndarray, scale: float = 1.0) -> List[Tuple[np.ndarray, np.ndarray, int]]:
+        """Detect AprilTags in a BGR frame.
+
+        Args:
+            frame_bgr: Input color frame in BGR order.
+            scale: Optional downscale factor for speed (<1 downscales).
+
+        Returns:
+            A list of (pts[4x2], raw_pts[4x2], id) for each detected tag.
+        """
         h, w = frame_bgr.shape[:2]
         gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
         if scale < 1.0:
@@ -188,6 +198,10 @@ class AprilCam:
 
     @staticmethod
     def lk_track(prev_gray: np.ndarray, gray: np.ndarray, pts: np.ndarray) -> Optional[np.ndarray]:
+        """Track points using pyramidal Lucas–Kanade optical flow.
+
+        Returns the new points (Nx2) in the current frame or None on failure.
+        """
         p0 = pts.reshape(-1, 1, 2).astype(np.float32)
         p1, st, err = cv.calcOpticalFlowPyrLK(prev_gray, gray, p0, None, winSize=(21, 21), maxLevel=3,
                                               criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 30, 0.01))
@@ -195,65 +209,10 @@ class AprilCam:
             return None
         return p1.reshape(-1, 2)
 
-    @staticmethod
-    def draw_detections(frame: np.ndarray, detections: List[Tuple[np.ndarray, np.ndarray, int]]):
-        for pts, _raw, tag_id in detections:
-            ptsf = pts.astype(np.float32)
-            p0, p1, p2, p3 = ptsf[0], ptsf[1], ptsf[2], ptsf[3]
-            cv.line(frame, (int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])), (0, 0, 255), 2, cv.LINE_AA)
-            cv.line(frame, (int(p2[0]), int(p2[1])), (int(p3[0]), int(p3[1])), (0, 0, 255), 2, cv.LINE_AA)
-            cv.line(frame, (int(p3[0]), int(p3[1])), (int(p0[0]), int(p0[1])), (0, 0, 255), 2, cv.LINE_AA)
-            center = ptsf.mean(axis=0)
-            top_mid = (p0 + p1) / 2.0
-            h_left = float(np.linalg.norm(p0 - p3))
-            h_right = float(np.linalg.norm(p1 - p2))
-            tag_h = max(1.0, 0.5 * (h_left + h_right))
-            hat_h = 0.30 * tag_h
-            n = top_mid - center
-            n_norm = float(np.linalg.norm(n))
-            if n_norm < 1e-6:
-                e = p1 - p0
-                n = np.array([-e[1], e[0]], dtype=np.float32)
-                n_norm = float(np.linalg.norm(n))
-            if n_norm > 1e-6:
-                n_unit = n / n_norm
-                peak = top_mid + n_unit * hat_h
-                cv.line(frame, (int(p0[0]), int(p0[1])), (int(peak[0]), int(peak[1])), (0, 255, 0), 2, cv.LINE_AA)
-                cv.line(frame, (int(peak[0]), int(peak[1])), (int(p1[0]), int(p1[1])), (0, 255, 0), 2, cv.LINE_AA)
-            else:
-                cv.line(frame, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), (0, 255, 0), 2, cv.LINE_AA)
-
-    @staticmethod
-    def draw_velocity_vectors(
-        frame: np.ndarray,
-        detections: List[Tuple[np.ndarray, np.ndarray, int]],
-        vel_dirs: dict[int, Tuple[float, float]],
-        speeds: dict[int, float],
-        scale: float = 0.5,
-        min_len: int = 20,
-        max_len: int = 250,
-        color: Tuple[int, int, int] = (0, 255, 255),
-        thickness: int = 3,
-    ) -> None:
-        for pts, _raw, tag_id in detections:
-            if tag_id not in vel_dirs:
-                continue
-            vx, vy = vel_dirs[tag_id]
-            norm = math.hypot(vx, vy)
-            if norm < 1e-6:
-                continue
-            dir_unit = (vx / norm, vy / norm)
-            c = pts.astype(np.float32).mean(axis=0)
-            start = (int(c[0]), int(c[1]))
-            speed = float(speeds.get(tag_id, 0.0))
-            length_px = int(max(min_len, min(max_len, speed * scale)))
-            end = (int(c[0] + dir_unit[0] * length_px), int(c[1] + dir_unit[1] * length_px))
-            cv.arrowedLine(frame, start, end, color, thickness, tipLength=0.12)
-            cv.circle(frame, start, 4, color, -1)
-            AprilCam.draw_text_centered_with_outline(frame, f"{int(tag_id)}", start, color=(0, 0, 255), font_scale=0.9, thickness=2)
 
     # ---------- core loop ----------
     def _init_capture(self) -> Optional[cv.VideoCapture]:
+        """Open the capture device or use the provided cap; apply size hints."""
         if self.cap is None:
             self.cap = cv.VideoCapture(int(self.index), 0 if self.backend is None else int(self.backend))
         if not self.cap or not self.cap.isOpened():
@@ -265,147 +224,23 @@ class AprilCam:
             self.cap.set(cv.CAP_PROP_FRAME_HEIGHT, int(self.cap_height))
         return self.cap
 
-    def _init_window(self) -> None:
-        if self.headless:
-            return
-        cv.namedWindow(self.window, cv.WINDOW_NORMAL)
-        target_w, target_h = 1280, 720
-        try:
-            cap = self.cap
-            if cap is not None and hasattr(cap, "get_bbox") and hasattr(cap, "get_display_rect"):
-                cap_l, cap_t, cap_w, cap_h = cap.get_bbox()  # type: ignore[attr-defined]
-                mon_l, mon_t, mon_w, mon_h = cap.get_display_rect()  # type: ignore[attr-defined]
-                mon_r, mon_b = mon_l + mon_w, mon_t + mon_h
-                cap_r, cap_b = cap_l + cap_w, cap_t + cap_h
-                pad = 12
-                candidates = []
-                if cap_r + pad < mon_r:
-                    candidates.append((cap_r + pad, cap_t, mon_r - (cap_r + pad), min(cap_h, mon_b - cap_t)))
-                if mon_l < cap_l - pad:
-                    candidates.append((mon_l, cap_t, (cap_l - pad) - mon_l, min(cap_h, mon_b - cap_t)))
-                if cap_b + pad < mon_b:
-                    candidates.append((cap_l, cap_b + pad, min(cap_w, mon_r - cap_l), mon_b - (cap_b + pad)))
-                if mon_t < cap_t - pad:
-                    candidates.append((cap_l, mon_t, min(cap_w, mon_r - cap_l), (cap_t - pad) - mon_t))
-                if candidates:
-                    bx, by, bw, bh = max(candidates, key=lambda r: r[2] * r[3])
-                    target_w = max(320, min(1280, bw))
-                    target_h = max(180, min(720, bh))
-                    cv.resizeWindow(self.window, int(target_w), int(target_h))
-                    cv.moveWindow(self.window, int(bx), int(by))
-                else:
-                    cv.resizeWindow(self.window, target_w, target_h)
-            else:
-                cv.resizeWindow(self.window, target_w, target_h)
-        except Exception:
-            cv.resizeWindow(self.window, target_w, target_h)
-
     def _update_playfield(self, frame: np.ndarray) -> None:
-        if self.play_poly is None:
-            try:
-                self.playfield.update(frame)
-                poly = self.playfield.get_polygon()
-                if poly is not None:
-                    self.play_poly = poly.astype(np.float32)
-            except Exception:
-                pass
-        # Cache deskew transform once if requested
-        if self.deskew_overlay and self.play_poly is not None and self.M_deskew is None:
-            UL, UR, LR, LL = self.play_poly.astype(np.float32)
-            w_top = float(np.linalg.norm(UR - UL))
-            w_bottom = float(np.linalg.norm(LR - LL))
-            h_left = float(np.linalg.norm(LL - UL))
-            h_right = float(np.linalg.norm(LR - UR))
-            out_w = max(10, int(round(max(w_top, w_bottom))))
-            out_h = max(10, int(round(max(h_left, h_right))))
-            src = np.array([UL, UR, LR, LL], dtype=np.float32)
-            dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
-            self.M_deskew = cv.getPerspectiveTransform(src, dst)
-            self.deskew_size = (out_w, out_h)
+        """Update cached playfield polygon via Playfield.
 
-    def _overlay_world_coords(self, frame: np.ndarray, detections: List[Tuple[np.ndarray, np.ndarray, int]]) -> None:
-        if self.homography is None or not detections:
-            return
-        for pts, _raw, _tid in detections:
-            ptsf = pts.astype(np.float32)
-            c = ptsf.mean(axis=0)
-            u, v = float(c[0]), float(c[1])
-            vec = np.array([u, v, 1.0], dtype=float)
-            Xw = self.homography @ vec
-            if abs(Xw[2]) > 1e-6:
-                Xcm = Xw[0] / Xw[2]
-                Ycm = Xw[1] / Xw[2]
-                text = f"{Xcm:.1f},{Ycm:.1f}"
-                x_coords = ptsf[:, 0]
-                y_coords = ptsf[:, 1]
-                xmin = float(x_coords.min())
-                xmax = float(x_coords.max())
-                ymin = float(y_coords.min())
-                ymax = float(y_coords.max())
-                fw = frame.shape[1]
-                fh = frame.shape[0]
-                pad = 8
-                (tw, th), base = cv.getTextSize(text, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                placed = False
-                # Below
-                tx = int((xmin + xmax) * 0.5 - tw * 0.5)
-                ty = int(ymax + pad + th)
-                if ty + base <= fh and tx >= 0 and (tx + tw) <= fw:
-                    AprilCam.draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                    placed = True
-                if not placed:
-                    # Above
-                    tx = int((xmin + xmax) * 0.5 - tw * 0.5)
-                    ty = int(ymin - pad)
-                    if ty - th >= 0 and tx >= 0 and (tx + tw) <= fw:
-                        AprilCam.draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                        placed = True
-                if not placed:
-                    # Right
-                    tx = int(xmax + pad)
-                    ty = int((ymin + ymax) * 0.5 + th * 0.5)
-                    if (tx + tw) <= fw and ty + base <= fh and (ty - th) >= 0:
-                        AprilCam.draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                        placed = True
-                if not placed:
-                    # Left
-                    tx = int(xmin - pad - tw)
-                    ty = int((ymin + ymax) * 0.5 + th * 0.5)
-                    if tx >= 0 and ty + base <= fh and (ty - th) >= 0:
-                        AprilCam.draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                        placed = True
-                if not placed:
-                    AprilCam.draw_text_with_outline(frame, text, (int(u) + 8, int(v) + 14), color=(0, 255, 0), font_scale=0.5, thickness=1)
+        Deskew is handled by PlayfieldDisplay; this only updates geometry.
+        """
+        try:
+            self.playfield.update(frame)
+            poly = self.playfield.get_polygon()
+            if poly is not None:
+                self.play_poly = poly.astype(np.float32)
+        except Exception:
+            pass
 
-    def _prepare_display(self, frame: np.ndarray) -> np.ndarray:
-        display = frame
-        if self.play_poly is not None and self.play_poly.shape == (4, 2):
-            try:
-                if self.deskew_overlay and self.M_deskew is not None and self.deskew_size is not None:
-                    w, h = self.deskew_size
-                    display = cv.warpPerspective(frame, self.M_deskew, (w, h))
-                else:
-                    PAD = 24
-                    x_coords = self.play_poly[:, 0]
-                    y_coords = self.play_poly[:, 1]
-                    xmin = max(0, int(math.floor(float(x_coords.min()) - PAD)))
-                    ymin = max(0, int(math.floor(float(y_coords.min()) - PAD)))
-                    xmax = min(frame.shape[1], int(math.ceil(float(x_coords.max()) + PAD)))
-                    ymax = min(frame.shape[0], int(math.ceil(float(y_coords.max()) + PAD)))
-                    if xmax > xmin and ymax > ymin:
-                        display = frame[ymin:ymax, xmin:xmax]
-            except Exception:
-                display = frame
-        return display
 
-    def _to_models(self, detections: List[Tuple[np.ndarray, np.ndarray, int]], ts: float) -> List[AprilTagModel]:
-        out: List[AprilTagModel] = []
-        for pts, _raw, tid in detections:
-            tag = AprilTagModel.from_corners(tid, pts, homography=self.homography, timestamp=ts)
-            out.append(tag)
-        return out
 
     def run(self) -> None:
+        """Main capture/detect/track loop with display and overlays."""
         cap = self._init_capture()
         if cap is None:
             return
@@ -423,11 +258,13 @@ class AprilCam:
         try:
             while True:
                 if not paused:
+                    # 1) Read next frame
                     ok, frame = cap.read()
                     if not ok:
                         print("Camera read failed.")
                         break
 
+                    # 2) Convert to gray and perform detection or faster LK tracking
                     gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
                     now = time.monotonic()
                     detections: List[Tuple[np.ndarray, np.ndarray, int]] = []
@@ -437,6 +274,7 @@ class AprilCam:
                         detections = self.detect_apriltags(frame, scale=scale)
                         tracks = {tid: pts for (pts, _raw, tid) in detections}
                     else:
+                        # Track existing tag corners forward with LK; fall back to detection on loss
                         new_tracks: dict[int, np.ndarray] = {}
                         for tid, pts in tracks.items():
                             new_pts = AprilCam.lk_track(prev_gray, gray, pts)
@@ -450,35 +288,36 @@ class AprilCam:
                             detections = self.detect_apriltags(frame, scale=scale)
                             tracks = {tid: pts for (pts, _raw, tid) in detections}
 
-                    # Update display/playfield and cache deskew transform
+                    # 3) Update Playfield cache (polygon) for cropping/deskew
                     self._update_playfield(frame)
 
-                    # Filter detections to inside the playfield if defined
-                    if self.play_poly is not None and self.play_poly.shape == (4, 2):
+                    # 4) Keep only detections inside the current playfield polygon
+                    if detections:
                         in_dets: List[Tuple[np.ndarray, np.ndarray, int]] = []
                         for pts, raw, tid in detections:
-                            c = pts.astype(np.float32).mean(axis=0)
-                            inside = cv.pointPolygonTest(self.play_poly.astype(np.float32), (float(c[0]), float(c[1])), False)
-                            if inside >= 0:
+                            if self.playfield.isIn(pts):
                                 in_dets.append((pts, raw, tid))
                         detections = in_dets
                         tracks = {tid: pts for (pts, _raw, tid) in detections}
 
-                    # Build/update models and let display draw coords later
+                    # 5) Update/maintain tag models and playfield flows
                     tags: List[AprilTagModel] = []
                     for pts, _raw, tid in detections:
                         if tid in tag_models:
                             tag_models[tid].update(pts, timestamp=now, homography=self.homography)
                         else:
-                            tag_models[tid] = AprilTagModel.from_corners(tid, pts, homography=self.homography, timestamp=now)
+                            tag_models[tid] = AprilTagModel.from_corners(tid, pts, homography=self.homography, timestamp=now, frame=frame_idx)
+                        # Feed into playfield flow map (sets in_playfield)
+                        tag_models[tid].frame = frame_idx
+                        self.playfield.add_tag(tag_models[tid])
                         tags.append(tag_models[tid])
-                    # Prune stale models not seen this frame
+                    # Prune models not seen recently
                     seen_ids = {tid for _pts, _r, tid in detections}
                     for tid in list(tag_models.keys()):
                         if tid not in seen_ids and tag_models[tid].last_ts is not None and (now - float(tag_models[tid].last_ts)) > 1.5:
                             del tag_models[tid]
 
-                    # Velocities (for printing only)
+                    # 6) Compute per-tag speeds for printing (UI overlay uses models)
                     speeds: dict[int, float] = {}
                     vel_dirs: dict[int, Tuple[float, float]] = {}
                     for pts, _raw, tag_id in detections:
@@ -496,6 +335,7 @@ class AprilCam:
                             speeds[tag_id] = ema
                         last_seen[tag_id] = (cx, cy, now)
 
+                    # 7) Optional logging to stdout
                     if self.print_tags and detections:
                         lines = []
                         H = self.homography
@@ -521,11 +361,15 @@ class AprilCam:
                             lines.append(line)
                         print("\n".join(lines))
 
-                    # Update display output and draw overlays using models
+                    # 8) Prepare display image and draw overlays
                     display = self.display.update(frame)
-                    self.display.draw_overlays(display if display is not None else frame, tags, homography=self.homography)
+                    # Use most recent tag states from flows for overlay
+                    flows = self.playfield.get_flows()
+                    tags_for_overlay = list(flows.values())
+                    self.display.draw_overlays(display if display is not None else frame, tags_for_overlay, homography=self.homography)
                     last_display = display.copy()
                 else:
+                    # Paused branch: reuse last display buffer and show a pause overlay
                     if last_display is None:
                         ok, frame = cap.read()
                         if not ok:
@@ -534,8 +378,9 @@ class AprilCam:
                         last_display = frame.copy()
                     display = last_display.copy()
                     if not self.headless:
-                        AprilCam.draw_text_with_outline(display, " Paused: Press Space to Run", (10, 30), color=(0, 255, 255), font_scale=0.9, thickness=2)
+                            self.display.pause(display)
 
+                # 9) Present frame (if not headless) and process input
                 if not self.headless:
                     self.display.show(display)
                     key = cv.waitKey(1) & 0xFF
@@ -545,11 +390,14 @@ class AprilCam:
                         paused = not paused
                         continue
                 else:
+                    # Headless: small sleep to avoid tight loop
                     time.sleep(0.001)
+                # 10) Bookkeeping for next iteration
                 if not paused:
                     prev_gray = gray
                     frame_idx += 1
         finally:
+            # 11) Cleanup resources
             try:
                 if self.cap is not None:
                     self.cap.release()
@@ -581,58 +429,7 @@ def load_last_camera() -> Optional[int]:
     return None
 
 
-def run_video(
-    index: int,
-    backend: Optional[int],
-    speed_alpha: float,
-    family: str,
-    proc_width: int,
-    cap_width: Optional[int] = None,
-    cap_height: Optional[int] = None,
-    quad_decimate: float = 1.0,
-    quad_sigma: float = 0.0,
-    corner_refine: str = "subpix",
-    detect_inverted: bool = True,
-    use_aruco3: bool = False,  # unused placeholder to keep CLI stable
-    detect_interval: int = 1,
-    use_clahe: bool = False,
-    use_sharpen: bool = False,
-    april_min_wb_diff: float = 3.0,
-    april_min_cluster_pixels: int = 5,
-    april_max_line_fit_mse: float = 20.0,
-    print_tags: bool = False,
-    cap: Optional[cv.VideoCapture] = None,
-    homography: Optional[np.ndarray] = None,
-    headless: bool = False,
-    deskew_overlay: bool = False,
-    playfield_poly_init: Optional[np.ndarray] = None,
-) -> None:
-    app = AprilCam(
-        index=index,
-        backend=backend,
-        speed_alpha=speed_alpha,
-        family=family,
-        proc_width=proc_width,
-        cap_width=cap_width,
-        cap_height=cap_height,
-        quad_decimate=quad_decimate,
-        quad_sigma=quad_sigma,
-        corner_refine=corner_refine,
-        detect_inverted=detect_inverted,
-        detect_interval=detect_interval,
-        use_clahe=use_clahe,
-        use_sharpen=use_sharpen,
-        april_min_wb_diff=april_min_wb_diff,
-        april_min_cluster_pixels=april_min_cluster_pixels,
-        april_max_line_fit_mse=april_max_line_fit_mse,
-        print_tags=print_tags,
-        cap=cap,
-        homography=homography,
-        headless=headless,
-        deskew_overlay=deskew_overlay,
-        playfield_poly_init=playfield_poly_init,
-    )
-    app.run()
+ 
 
 
 # CLI main moved to aprilcam.cli.aprilcam_cli

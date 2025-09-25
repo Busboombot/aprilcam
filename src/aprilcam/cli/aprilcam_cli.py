@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, List
 
-from ..aprilcam import run_video, build_detectors, detect_apriltags
+from ..aprilcam import AprilCam, build_detectors, detect_apriltags
 from ..config import AppConfig
 import cv2 as cv
 import numpy as np
@@ -93,7 +93,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if cap is None or (hasattr(cap, "isOpened") and not cap.isOpened()):
             print("No camera available.")
             return 1
-        run_video(
+        app = AprilCam(
             index=0,
             backend=be_value,
             speed_alpha=max(0.0, min(1.0, float(args.speed_alpha))),
@@ -105,22 +105,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             quad_sigma=float(args.quad_sigma),
             corner_refine=str(args.corner_refine),
             detect_inverted=bool((H_meta or {}).get("detect_inverted", True)),
-            use_aruco3=bool(args.use_aruco3),
             detect_interval=max(1, int(args.detect_interval)),
             use_clahe=bool(args.clahe),
             use_sharpen=bool(args.sharpen),
+            april_min_wb_diff=float(args.april_min_wb_diff),
+            april_min_cluster_pixels=int(args.april_min_cluster_pixels),
+            april_max_line_fit_mse=float(args.april_max_line_fit_mse),
             print_tags=bool(args.print_tags),
             cap=cap,
             homography=H,
             headless=False,
             deskew_overlay=bool(args.deskew_overlay),
-            april_min_wb_diff=float(args.april_min_wb_diff),
-            april_min_cluster_pixels=int(args.april_min_cluster_pixels),
-            april_max_line_fit_mse=float(args.april_max_line_fit_mse),
             playfield_poly_init=(
                 np.array([H_pix[i] for i in (0, 1, 3, 2)], dtype=np.float32) if isinstance(H_pix, list) and len(H_pix) == 4 else None
             ),
         )
+        app.run()
         return 0
 
     # Offline evaluation path
