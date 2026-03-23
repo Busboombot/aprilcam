@@ -1,13 +1,13 @@
 ---
-id: "001"
-title: "Project Restructure & CLI Foundation"
-status: planning
+id: '001'
+title: Project Restructure & CLI Foundation
+status: done
 branch: sprint/001-project-restructure-cli-foundation
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

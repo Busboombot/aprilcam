@@ -10,8 +10,8 @@ status: draft
 
 ### 1. Unified CLI Entry Point
 
-**Added**: `src/aprilcam/cli/main.py` (or `src/aprilcam/cli/__init__.py`)
-containing the top-level argparse dispatcher.
+**Added**: `src/aprilcam/cli/__init__.py` containing the top-level
+argparse dispatcher.
 
 The dispatcher creates an `ArgumentParser` with subparsers. Each
 subcommand is registered with a handler function that delegates to the
@@ -26,6 +26,7 @@ aprilcam (top-level parser)
   ├── homocal    → aprilcam.cli.homocal_cli:main
   ├── screencap  → aprilcam.cli.atscreencap_cli:main
   ├── detect     → aprilcam.cli.aprilcam_cli:main
+  ├── capture    → aprilcam.cli.aprilcap_cli:main
   └── test       → aprilcam.cli.apriltest_cli:main
 ```
 
@@ -72,15 +73,17 @@ Only the pygame UI and simulator CLI are extracted.
 
 ### 4. CLI Module Renaming
 
-**Removed**: `src/aprilcam/cli/aprilcap_cli.py` entry point. Its
-functionality is merged into the `detect` subcommand, or it becomes
-an internal module if its logic is distinct from `aprilcam_cli.py`.
-(To be determined during implementation based on code analysis.)
+**Retained**: `src/aprilcam/cli/aprilcap_cli.py` as the `capture`
+subcommand. This module performs homography-warped single-frame capture
+with tag detection, which is distinct from `aprilcam_cli.py` (live
+detection loop). Keeping it separate preserves existing functionality
+cleanly.
 
 **Renamed** (logical, not file rename): The subcommand names are
 simplified:
 - `atscreencap` becomes `screencap`
 - `aprilcam` (the old standalone) becomes `detect`
+- `aprilcap` becomes `capture`
 - `apriltest` becomes `test`
 
 The underlying CLI module files keep their original names to minimize
