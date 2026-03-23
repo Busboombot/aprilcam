@@ -1,14 +1,14 @@
 ---
-id: "002"
-title: "Core MCP Server & Camera Tools"
-status: planning
+id: '002'
+title: Core MCP Server & Camera Tools
+status: done
 branch: sprint/002-core-mcp-server-camera-tools
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
