@@ -7,7 +7,7 @@ import sys
 SUBCOMMANDS = {
     "mcp": {
         "help": "Start the MCP server",
-        "module": None,
+        "module": "aprilcam.mcp_server",
     },
     "taggen": {
         "help": "Generate AprilTag images",
@@ -60,10 +60,6 @@ def main(argv=None):
     if args.command is None:
         parser.print_help()
         sys.exit(1)
-
-    if args.command == "mcp":
-        print("MCP server not yet implemented")
-        sys.exit(0)
 
     # Lazy import: only load the target module when actually dispatching.
     import importlib

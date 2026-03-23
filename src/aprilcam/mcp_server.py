@@ -255,7 +255,7 @@ async def close_camera(camera_id: str) -> list[TextContent]:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     try:
         server.run(transport="stdio")
     finally:

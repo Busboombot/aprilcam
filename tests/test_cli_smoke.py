@@ -25,10 +25,21 @@ def test_no_subcommand_shows_help(cli_runner):
     assert code != 0
 
 
-def test_mcp_stub(cli_runner, capsys):
-    """MCP stub should print message and exit 0."""
-    code = cli_runner(["mcp"])
-    assert code == 0
+def test_mcp_dispatches_to_module(monkeypatch):
+    """MCP subcommand should dispatch to aprilcam.mcp_server.main."""
+    from aprilcam.cli import SUBCOMMANDS
+    assert SUBCOMMANDS["mcp"]["module"] == "aprilcam.mcp_server"
+
+    # Verify that the dispatcher would call the module's main()
+    called = []
+    import aprilcam.mcp_server as mcp_mod
+    monkeypatch.setattr(mcp_mod, "main", lambda argv: called.append(argv))
+    from aprilcam.cli import main
+    try:
+        main(["mcp"])
+    except SystemExit:
+        pass
+    assert len(called) == 1
 
 
 def test_import_aprilcam():
