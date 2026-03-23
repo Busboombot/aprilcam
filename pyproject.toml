@@ -22,19 +22,14 @@ dependencies = [
   "numpy>=1.23",
   "python-dotenv>=1.0",
   "mss>=9.0", # for --screen desktop capture on macOS/Windows/Linux
-  "pygame>=2.5", # for the playfield simulator window
 ]
 
 [project.scripts]
-aprilcam = "aprilcam.cli.aprilcam_cli:main"
-taggen = "aprilcam.cli.taggen_cli:main"
-arucogen = "aprilcam.cli.arucogen_cli:main"
-homocal = "aprilcam.cli.homocal_cli:main"
-cameras = "aprilcam.cli.cameras_cli:main"
-playfield = "aprilcam.playfield:main"
-atscreencap = "aprilcam.cli.atscreencap_cli:main"
-aprilcap = "aprilcam.cli.aprilcap_cli:main"
-apriltest = "aprilcam.cli.apriltest_cli:main"
+aprilcam = "aprilcam.cli:main"
+
+[project.optional-dependencies]
+playfield = ["pygame>=2.5"]
+mcp = ["mcp>=1.0"]
 
 [tool.uv]
 # uv works with standard pyproject; this section is optional and can hold uv-specific settings later.
