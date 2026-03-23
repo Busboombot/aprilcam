@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aprilcam"
-version = "0.1.0"
+version = "0.20260323.1"
 description = "CLI to list cameras and detect AprilTags from a USB video stream using OpenCV"
 authors = [
   { name = "Your Name" }
@@ -22,14 +22,15 @@ dependencies = [
   "numpy>=1.23",
   "python-dotenv>=1.0",
   "mss>=9.0", # for --screen desktop capture on macOS/Windows/Linux
+  "mcp>=1.0",
 ]
 
 [project.scripts]
 aprilcam = "aprilcam.cli:main"
+aprilcam-mcp = "aprilcam.mcp_server:main"
 
 [project.optional-dependencies]
 playfield = ["pygame>=2.5"]
-mcp = ["mcp>=1.0"]
 
 [tool.uv]
 # uv works with standard pyproject; this section is optional and can hold uv-specific settings later.
