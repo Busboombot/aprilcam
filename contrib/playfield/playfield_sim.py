@@ -1,3 +1,16 @@
+#!/usr/bin/env python3
+"""Pygame-based playfield simulator with moving AprilTags.
+
+This script displays a window with 4x4 ArUco corner fiducials and four
+AprilTag 36h11 markers that move in different patterns: two edge-runners
+(clockwise around the perimeter), one circular mover, and one center
+spinner.
+
+Requirements:
+    pip install pygame>=2.5
+    The ``aprilcam`` package must be importable (install it or add its
+    ``src/`` directory to PYTHONPATH).
+"""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +20,7 @@ from typing import Tuple, List
 import cv2 as cv
 import numpy as np
 
-# --- Simulator helpers moved here from aprilcam.playfield ---
+# --- Simulator helpers ---
 MARGIN = 20  # margin from window edge to the outer edge of the fiducial's quiet zone
 
 
@@ -176,9 +189,8 @@ class SimPlayfield:
         spin_w = math.radians(90.0)
 
         running = True
-        prev_t = __import__('pygame').time.get_ticks() / 1000.0
+        prev_t = pygame.time.get_ticks() / 1000.0
         speed = 1.0
-        import pygame
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -231,7 +243,7 @@ class SimPlayfield:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="playfield",
+        prog="playfield-sim",
         description="Pygame window with 4x4 corner fiducials and four AprilTags: 2 edge-runners (clockwise), 1 circular mover, 1 center spinner",
     )
     parser.add_argument("--width", type=int, default=1200, help="Window width in pixels (default 1200)")
