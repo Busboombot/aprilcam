@@ -45,14 +45,19 @@ from aprilcam.playfield import Playfield
 
 
 class CameraRegistry:
-    """Manages open camera/capture handles keyed by UUID strings."""
+    """Manages open camera/capture handles keyed by deterministic strings."""
 
     def __init__(self) -> None:
         self._cameras: dict[str, Any] = {}
 
-    def open(self, capture: Any) -> str:
-        """Register *capture* and return a UUID4 handle string."""
-        handle = str(uuid.uuid4())
+    def open(self, capture: Any, handle: str | None = None) -> str:
+        """Register *capture* and return a handle string.
+
+        If *handle* is provided it is used as-is (deterministic).
+        Otherwise a UUID4 is generated.
+        """
+        if handle is None:
+            handle = str(uuid.uuid4())
         self._cameras[handle] = capture
         return handle
 
@@ -322,7 +327,18 @@ async def open_camera(
                     )
                 ]
 
-        camera_id = registry.open(cap)
+        # Deterministic handle: cam_N for indexed cameras, screen for screen capture
+        if source == "screen":
+            handle = "screen"
+        else:
+            handle = f"cam_{idx}"
+        # If this handle is already open, close the old one first
+        if handle in registry._cameras:
+            try:
+                registry.close(handle)
+            except Exception:
+                pass
+        camera_id = registry.open(cap, handle=handle)
         return [
             TextContent(
                 type="text", text=json.dumps({"camera_id": camera_id})
