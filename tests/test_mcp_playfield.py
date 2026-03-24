@@ -13,6 +13,7 @@ from aprilcam.mcp_server import (
     PlayfieldRegistry,
     calibrate_playfield,
     create_playfield,
+    get_playfield_info,
     playfield_registry,
     registry,
 )
@@ -263,3 +264,74 @@ async def test_calibrate_playfield_overwrites(clean_registries):
             registry.close(cam_id)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# get_playfield_info tool tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_playfield_info_uncalibrated(clean_registries):
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        await create_playfield(camera_id=cam_id)
+        pf_id = f"pf_{cam_id}"
+
+        result = await get_playfield_info(playfield_id=pf_id)
+        data = json.loads(result[0].text)
+
+        assert data["playfield_id"] == pf_id
+        assert data["camera_id"] == cam_id
+        assert data["corners"] is not None
+        assert len(data["corners"]) == 4
+        assert data["calibrated"] is False
+        assert "width_cm" not in data
+        assert "homography" not in data
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_get_playfield_info_calibrated(clean_registries):
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        await create_playfield(camera_id=cam_id)
+        pf_id = f"pf_{cam_id}"
+        await calibrate_playfield(playfield_id=pf_id, width=40.0, height=35.0, units="inch")
+
+        result = await get_playfield_info(playfield_id=pf_id)
+        data = json.loads(result[0].text)
+
+        assert data["calibrated"] is True
+        assert "width_cm" in data
+        assert "height_cm" in data
+        assert "homography" in data
+        assert len(data["homography"]) == 3  # 3x3 matrix
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_get_playfield_info_unknown(clean_registries):
+    result = await get_playfield_info(playfield_id="nonexistent")
+    data = json.loads(result[0].text)
+    assert "error" in data

@@ -224,15 +224,28 @@ async def capture_frame(
     quality: int = 85,
 ) -> list[TextContent | ImageContent]:
     """Capture a single frame from an open camera."""
+    # Check if this is a playfield ID first
+    pf_entry = None
     try:
-        cap = registry.get(camera_id)
+        pf_entry = playfield_registry.get(camera_id)
+        # Resolve to underlying camera
+        try:
+            cap = registry.get(pf_entry.camera_id)
+        except KeyError:
+            return [TextContent(type="text", text=json.dumps(
+                {"error": f"Underlying camera '{pf_entry.camera_id}' is no longer open"}
+            ))]
     except KeyError:
-        return [
-            TextContent(
-                type="text",
-                text=json.dumps({"error": f"Unknown camera_id '{camera_id}'"}),
-            )
-        ]
+        # Not a playfield, try camera registry
+        try:
+            cap = registry.get(camera_id)
+        except KeyError:
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"error": f"Unknown camera_id '{camera_id}'"}),
+                )
+            ]
 
     try:
         import cv2
@@ -245,6 +258,10 @@ async def capture_frame(
                     text=json.dumps({"error": "Failed to read frame"}),
                 )
             ]
+
+        # Apply deskew if this is a playfield capture
+        if pf_entry is not None:
+            frame = pf_entry.playfield.deskew(frame)
 
         ok, buf = cv2.imencode(
             ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality]
@@ -414,6 +431,36 @@ async def calibrate_playfield(
         "width_cm": field_spec.width_cm,
         "height_cm": field_spec.height_cm,
     }))]
+
+
+@server.tool()
+async def get_playfield_info(
+    playfield_id: str,
+) -> list[TextContent]:
+    """Return the current state of a registered playfield."""
+    try:
+        entry = playfield_registry.get(playfield_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Unknown playfield_id '{playfield_id}'"}
+        ))]
+
+    poly = entry.playfield.get_polygon()
+    calibrated = entry.homography is not None
+
+    result: dict = {
+        "playfield_id": entry.playfield_id,
+        "camera_id": entry.camera_id,
+        "corners": poly.tolist() if poly is not None else None,
+        "calibrated": calibrated,
+    }
+
+    if calibrated and entry.field_spec is not None:
+        result["width_cm"] = entry.field_spec.width_cm
+        result["height_cm"] = entry.field_spec.height_cm
+        result["homography"] = entry.homography.tolist()
+
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 # ---------------------------------------------------------------------------
