@@ -13,7 +13,12 @@ import numpy as np
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
-from aprilcam.homography import CORNER_ID_MAP, FieldSpec, detect_aruco_4x4
+from aprilcam.homography import (
+    CORNER_ID_MAP,
+    FieldSpec,
+    calibrate_from_corners,
+    detect_aruco_4x4,
+)
 from aprilcam.playfield import Playfield
 
 # ---------------------------------------------------------------------------
@@ -358,6 +363,56 @@ async def create_playfield(
         "playfield_id": playfield_id,
         "corners": corners,
         "calibrated": False,
+    }))]
+
+
+@server.tool()
+async def calibrate_playfield(
+    playfield_id: str,
+    width: float,
+    height: float,
+    units: str = "inch",
+) -> list[TextContent]:
+    """Calibrate a playfield with real-world measurements."""
+    try:
+        entry = playfield_registry.get(playfield_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Unknown playfield_id '{playfield_id}'"}
+        ))]
+
+    poly = entry.playfield.get_polygon()
+    if poly is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Playfield has no polygon (detection not complete)"}
+        ))]
+
+    # Build corner dict from polygon (UL, UR, LR, LL)
+    pixel_corners = {
+        "upper_left": (float(poly[0][0]), float(poly[0][1])),
+        "upper_right": (float(poly[1][0]), float(poly[1][1])),
+        "lower_right": (float(poly[2][0]), float(poly[2][1])),
+        "lower_left": (float(poly[3][0]), float(poly[3][1])),
+    }
+
+    field_spec = FieldSpec(width_in=width, height_in=height, units=units)
+
+    try:
+        H, _, _ = calibrate_from_corners(pixel_corners, field_spec)
+    except Exception as exc:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Homography computation failed: {exc}"}
+        ))]
+
+    # Store calibration in the entry
+    entry.field_spec = field_spec
+    entry.homography = H
+
+    return [TextContent(type="text", text=json.dumps({
+        "playfield_id": playfield_id,
+        "calibrated": True,
+        "width_cm": field_spec.width_cm,
+        "height_cm": field_spec.height_cm,
     }))]
 
 

@@ -11,6 +11,7 @@ import pytest
 from aprilcam.mcp_server import (
     PlayfieldEntry,
     PlayfieldRegistry,
+    calibrate_playfield,
     create_playfield,
     playfield_registry,
     registry,
@@ -174,3 +175,91 @@ class TestCreatePlayfield:
                 registry.close(cam_id)
             except KeyError:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# calibrate_playfield tool tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clean_registries():
+    """Reset both registries before/after each test."""
+    playfield_registry._playfields.clear()
+    registry._cameras.clear()
+    yield
+    playfield_registry._playfields.clear()
+    registry._cameras.clear()
+
+
+@pytest.mark.asyncio
+async def test_calibrate_playfield_success(clean_registries):
+    """Calibrate a playfield with real measurements."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        # First create the playfield
+        await create_playfield(camera_id=cam_id)
+        pf_id = f"pf_{cam_id}"
+
+        # Now calibrate
+        result = await calibrate_playfield(
+            playfield_id=pf_id, width=40.0, height=35.0, units="inch"
+        )
+        data = json.loads(result[0].text)
+
+        assert data["calibrated"] is True
+        assert abs(data["width_cm"] - 101.6) < 0.1
+        assert abs(data["height_cm"] - 88.9) < 0.1
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_calibrate_playfield_unknown_id(clean_registries):
+    result = await calibrate_playfield(
+        playfield_id="nonexistent", width=40.0, height=35.0
+    )
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+@pytest.mark.asyncio
+async def test_calibrate_playfield_overwrites(clean_registries):
+    """Re-calibration overwrites previous calibration."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        await create_playfield(camera_id=cam_id)
+        pf_id = f"pf_{cam_id}"
+
+        # Calibrate with inches
+        await calibrate_playfield(
+            playfield_id=pf_id, width=40.0, height=35.0, units="inch"
+        )
+
+        # Re-calibrate with cm
+        result = await calibrate_playfield(
+            playfield_id=pf_id, width=100.0, height=80.0, units="cm"
+        )
+        data = json.loads(result[0].text)
+        assert data["width_cm"] == 100.0
+        assert data["height_cm"] == 80.0
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
