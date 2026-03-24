@@ -158,12 +158,17 @@ def generate_pdf(
         # Calculate placement — leave room for label at bottom
         label = _family_label(family, tag_id)
         label_h_mm = 6.0  # approximate height reserved for label text
-        margin_mm = 3.0
+        margin_mm = 1.0
         avail_w = PAGE_W_MM - 2 * margin_mm
         avail_h = PAGE_H_MM - 2 * margin_mm - label_h_mm
 
-        # Tag is square; fit within available area
-        tag_dim = min(avail_w, avail_h)
+        # Target: inner tag (without quiet zone) should be ~50mm for AprilTags.
+        # The quiet zone adds 2/7 of the tag size on each side, so the total
+        # image is tag_inner * (1 + 2 * 2/7) = tag_inner * 11/7.
+        # For a 50mm inner tag: total ≈ 78.6mm.
+        quiet_ratio = 2.0 / 7.0
+        target_inner_mm = 50.0 if family == "36h11" else 40.0
+        tag_dim = min(target_inner_mm * (1 + 2 * quiet_ratio), avail_w, avail_h)
         x = (PAGE_W_MM - tag_dim) / 2
         y = margin_mm + (avail_h - tag_dim) / 2
 
