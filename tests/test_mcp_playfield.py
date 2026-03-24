@@ -12,6 +12,7 @@ from aprilcam.mcp_server import (
     PlayfieldEntry,
     PlayfieldRegistry,
     calibrate_playfield,
+    capture_frame,
     create_playfield,
     get_playfield_info,
     playfield_registry,
@@ -333,5 +334,72 @@ async def test_get_playfield_info_calibrated(clean_registries):
 @pytest.mark.asyncio
 async def test_get_playfield_info_unknown(clean_registries):
     result = await get_playfield_info(playfield_id="nonexistent")
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# capture_frame playfield-as-camera pass-through tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_capture_via_playfield_file(clean_registries):
+    """Capture through a playfield returns a deskewed image."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        # Create playfield
+        await create_playfield(camera_id=cam_id)
+        pf_id = f"pf_{cam_id}"
+
+        # Capture via playfield ID
+        result = await capture_frame(camera_id=pf_id, format="file")
+        data = json.loads(result[0].text)
+
+        assert "path" in data
+        # Load and verify the image is deskewed (different dims from original)
+        deskewed = cv2.imread(data["path"])
+        original = cv2.imread(str(img_path))
+        assert deskewed is not None
+        # Deskewed should have different dimensions than original
+        assert deskewed.shape != original.shape
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_capture_normal_camera_still_works(clean_registries):
+    """Normal camera_id capture still works (no regression)."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        result = await capture_frame(camera_id=cam_id, format="file")
+        data = json.loads(result[0].text)
+        assert "path" in data
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_capture_unknown_id_error(clean_registries):
+    """Unknown ID (not in either registry) returns error."""
+    result = await capture_frame(camera_id="nonexistent", format="file")
     data = json.loads(result[0].text)
     assert "error" in data
