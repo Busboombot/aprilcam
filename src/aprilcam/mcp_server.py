@@ -134,6 +134,74 @@ class DetectionEntry:
 
 detection_registry: dict[str, DetectionEntry] = {}
 
+
+# ---------------------------------------------------------------------------
+# Source resolution & image output helpers
+# ---------------------------------------------------------------------------
+
+
+def resolve_source(source_id: str) -> np.ndarray:
+    """Resolve a source_id (playfield or camera) to a captured frame.
+
+    If *source_id* names a playfield, the frame is deskewed automatically.
+
+    Raises:
+        KeyError: if *source_id* is not found in either registry.
+        RuntimeError: if the underlying capture fails to read a frame.
+    """
+    # Try playfield first
+    try:
+        pf_entry = playfield_registry.get(source_id)
+        cap = registry.get(pf_entry.camera_id)
+        ret, frame = cap.read()
+        if not ret:
+            raise RuntimeError("Failed to read frame")
+        return pf_entry.playfield.deskew(frame)
+    except KeyError:
+        pass
+
+    # Try camera
+    try:
+        cap = registry.get(source_id)
+    except KeyError:
+        raise KeyError(f"Unknown source_id '{source_id}'")
+
+    ret, frame = cap.read()
+    if not ret:
+        raise RuntimeError("Failed to read frame")
+    return frame
+
+
+def format_image_output(
+    frame: np.ndarray,
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Encode *frame* as JPEG and return MCP content items.
+
+    Args:
+        frame: BGR image as a NumPy array.
+        format: ``"base64"`` (default) returns an ``ImageContent`` with
+            inline data; ``"file"`` writes a temp file and returns a
+            ``TextContent`` with the path.
+        quality: JPEG quality (0-100).
+    """
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise RuntimeError("Failed to encode frame as JPEG")
+
+    if format == "file":
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.write(buf.tobytes())
+        tmp.close()
+        return [TextContent(type="text", text=json.dumps({"path": tmp.name}))]
+
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return [ImageContent(type="image", data=b64, mimeType="image/jpeg")]
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
