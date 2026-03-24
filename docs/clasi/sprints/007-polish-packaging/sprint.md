@@ -82,6 +82,11 @@ A systematic polish pass organized into eight work areas:
 6. **Deprecated code removal** — remove or archive CLI modules that
    duplicate MCP functionality. Keep `taggen` and `arucogen` as
    subcommands of `aprilcam`; remove standalone entry points.
+9. **Tag generation PDF output** — update `taggen` and `arucogen` to
+   produce multi-page PDF output by default. Each page is 59mm × 102mm
+   (label/card size) with one tag per page, centered with quiet zone.
+   Individual PNG output available via `--png` flag. Requires adding a
+   PDF library dependency (e.g., `reportlab` or `fpdf2`).
 7. **pyproject.toml metadata** — update description, author, keywords,
    classifiers, and project URLs for PyPI.
 8. **README** — installation instructions (`pipx install aprilcam`),
@@ -116,6 +121,8 @@ A systematic polish pass organized into eight work areas:
 - Detection loop performance profiling and optimization.
 - Ring buffer memory cap configuration.
 - Removal of deprecated CLI entry points and dead modules.
+- Tag generation multi-page PDF output (59mm × 102mm page size, one tag
+  per page) for `taggen` and `arucogen` subcommands.
 - README with installation and usage instructions.
 
 ### Out of Scope
@@ -136,12 +143,15 @@ A systematic polish pass organized into eight work areas:
   parameters).
 
 **Integration tests:**
-- Mock `cv2.VideoCapture` to return synthetic frames with known
-  AprilTag patterns.
+- Mock `cv2.VideoCapture` to return captured test images from
+  `tests/data/` (`playfield_cam3.jpg`, `playfield_cam3_moved.jpg`)
+  so all tests run without camera hardware.
 - Test MCP server startup via subprocess, send `initialize` +
   `tools/list` + tool calls over stdio, verify responses.
-- Test detection loop lifecycle: start, query, stop, query-after-stop.
-- Test playfield creation with synthetic corner markers.
+- Test detection loop lifecycle: start, query, stop, query-after-stop
+  using the mock camera with real playfield images.
+- Test playfield creation with real captured images containing ArUco
+  corner markers.
 - Test camera disconnection mid-loop (mock returns None frame).
 
 **Packaging tests:**

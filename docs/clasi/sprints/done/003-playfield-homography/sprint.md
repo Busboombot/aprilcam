@@ -1,14 +1,14 @@
 ---
-id: "003"
-title: "Playfield & Homography"
-status: planning
+id: '003'
+title: Playfield & Homography
+status: done
 branch: sprint/003-playfield-homography
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

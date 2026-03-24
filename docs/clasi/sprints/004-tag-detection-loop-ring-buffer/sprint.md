@@ -133,10 +133,14 @@ None of this is possible with the current interactive loop.
 - `TagRecord` and `FrameRecord` construction and JSON serialization.
 - Ring buffer: adding frames, overflow at capacity, `get_latest()`,
   `get_last_n()` with various N values including 0 and >capacity.
-- `DetectionLoop` lifecycle: start, process synthetic frames, stop.
-  Use a mock `VideoCapture` that yields pre-recorded frames.
-- Velocity computation: verify px/s and world unit/s calculations
-  against known displacements and timestamps.
+- `DetectionLoop` lifecycle: start, process frames, stop. Use a mock
+  `VideoCapture` that yields captured test images from `tests/data/`
+  (`playfield_cam3.jpg`, `playfield_cam3_moved.jpg`) to simulate a
+  real camera feed without hardware.
+- Velocity computation: feed the two test images (tags in different
+  positions) through `AprilTagFlow` and verify px/s calculations
+  match expected displacements between the known tag positions.
+  Also verify near-zero velocity when the same image is fed twice.
 - Thread safety: concurrent reads during active detection loop.
 
 **Integration tests** (`tests/test_mcp_detection.py`):
