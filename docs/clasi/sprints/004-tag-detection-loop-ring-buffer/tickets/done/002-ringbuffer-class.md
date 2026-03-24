@@ -1,14 +1,14 @@
 ---
-id: "002"
-title: "RingBuffer class"
-status: todo
+id: '002'
+title: RingBuffer class
+status: done
 use-cases:
-  - SUC-003
-  - SUC-004
+- SUC-003
+- SUC-004
 depends-on:
-  - "001"
-github-issue: ""
-todo: ""
+- '001'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

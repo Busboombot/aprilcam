@@ -1,13 +1,13 @@
 ---
-id: "003"
-title: "Refactor AprilCam — extract process_frame()"
-status: todo
+id: '003'
+title: "Refactor AprilCam \u2014 extract process_frame()"
+status: done
 use-cases:
-  - SUC-005
+- SUC-005
 depends-on:
-  - "001"
-github-issue: ""
-todo: ""
+- '001'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
