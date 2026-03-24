@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aprilcam"
-version = "0.20260323.4"
+version = "0.20260323.5"
 description = "CLI to list cameras and detect AprilTags from a USB video stream using OpenCV"
 authors = [
   { name = "Your Name" }
