@@ -1,14 +1,14 @@
 ---
-id: "006"
-title: "MCP tools — get_tags and get_tag_history"
-status: todo
+id: '006'
+title: "MCP tools \u2014 get_tags and get_tag_history"
+status: done
 use-cases:
-  - SUC-003
-  - SUC-004
+- SUC-003
+- SUC-004
 depends-on:
-  - "005"
-github-issue: ""
-todo: ""
+- '005'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

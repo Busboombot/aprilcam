@@ -1,14 +1,14 @@
 ---
-id: "005"
-title: "MCP tools — start_detection and stop_detection"
-status: todo
+id: '005'
+title: "MCP tools \u2014 start_detection and stop_detection"
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
+- SUC-001
+- SUC-002
 depends-on:
-  - "004"
-github-issue: ""
-todo: ""
+- '004'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
