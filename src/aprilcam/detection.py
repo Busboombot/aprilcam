@@ -6,6 +6,8 @@ loop and ring buffer to store per-frame tag observations.
 
 from __future__ import annotations
 
+import threading
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List
 
@@ -101,3 +103,39 @@ class FrameRecord:
             "frame_index": self.frame_index,
             "tags": [t.to_dict() for t in self.tags],
         }
+
+
+class RingBuffer:
+    """Thread-safe fixed-size buffer of FrameRecords.
+
+    Uses a collections.deque with a maximum length so that old frames
+    are automatically discarded when the buffer is full.  All public
+    methods are guarded by a threading.Lock for safe concurrent access.
+    """
+
+    def __init__(self, maxlen: int = 300) -> None:
+        self._buf: deque[FrameRecord] = deque(maxlen=maxlen)
+        self._lock = threading.Lock()
+
+    def append(self, record: FrameRecord) -> None:
+        with self._lock:
+            self._buf.append(record)
+
+    def get_latest(self) -> FrameRecord | None:
+        with self._lock:
+            return self._buf[-1] if self._buf else None
+
+    def get_last_n(self, n: int) -> list[FrameRecord]:
+        with self._lock:
+            if n <= 0:
+                return []
+            items = list(self._buf)
+            return items[-n:]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._buf.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._buf)

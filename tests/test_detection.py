@@ -1,11 +1,12 @@
-"""Tests for TagRecord and FrameRecord dataclasses."""
+"""Tests for TagRecord, FrameRecord, and RingBuffer."""
 
 import json
 import math
+import threading
 
 import numpy as np
 
-from aprilcam.detection import FrameRecord, TagRecord
+from aprilcam.detection import FrameRecord, RingBuffer, TagRecord
 from aprilcam.models import AprilTag
 
 
@@ -166,3 +167,97 @@ def test_tagrecord_from_apriltag():
     # Verify JSON-serializable (no numpy)
     d = tr.to_dict()
     assert json.loads(json.dumps(d)) == d
+
+
+# --- RingBuffer tests ---
+
+
+def _make_frame(i: int) -> FrameRecord:
+    """Create a minimal FrameRecord for testing."""
+    return FrameRecord(timestamp=float(i), frame_index=i, tags=[])
+
+
+def test_ringbuffer_empty():
+    rb = RingBuffer()
+    assert len(rb) == 0
+    assert rb.get_latest() is None
+    assert rb.get_last_n(5) == []
+
+
+def test_ringbuffer_append_and_get_latest():
+    rb = RingBuffer()
+    fr = _make_frame(1)
+    rb.append(fr)
+    assert rb.get_latest() is fr
+
+
+def test_ringbuffer_get_last_n():
+    rb = RingBuffer()
+    frames = [_make_frame(i) for i in range(5)]
+    for f in frames:
+        rb.append(f)
+    result = rb.get_last_n(3)
+    assert len(result) == 3
+    assert result == frames[2:]
+
+
+def test_ringbuffer_overflow():
+    rb = RingBuffer(maxlen=300)
+    for i in range(310):
+        rb.append(_make_frame(i))
+    assert len(rb) == 300
+
+
+def test_ringbuffer_get_last_n_exceeds_size():
+    rb = RingBuffer()
+    frames = [_make_frame(i) for i in range(5)]
+    for f in frames:
+        rb.append(f)
+    result = rb.get_last_n(100)
+    assert len(result) == 5
+    assert result == frames
+
+
+def test_ringbuffer_get_last_n_zero():
+    rb = RingBuffer()
+    rb.append(_make_frame(0))
+    assert rb.get_last_n(0) == []
+
+
+def test_ringbuffer_clear():
+    rb = RingBuffer()
+    for i in range(5):
+        rb.append(_make_frame(i))
+    assert len(rb) == 5
+    rb.clear()
+    assert len(rb) == 0
+    assert rb.get_latest() is None
+
+
+def test_ringbuffer_thread_safety():
+    rb = RingBuffer(maxlen=300)
+    errors: list[Exception] = []
+
+    def writer():
+        try:
+            for i in range(500):
+                rb.append(_make_frame(i))
+        except Exception as e:
+            errors.append(e)
+
+    def reader():
+        try:
+            for _ in range(500):
+                rb.get_latest()
+                rb.get_last_n(10)
+                len(rb)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=writer) for _ in range(3)]
+    threads += [threading.Thread(target=reader) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [], f"Thread safety errors: {errors}"
