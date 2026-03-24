@@ -14,7 +14,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--max-cams", type=int, default=10, help="Maximum camera indices to probe (default: 10)")
     parser.add_argument("--backend", type=str, choices=["auto", "avfoundation", "v4l2", "msmf", "dshow"], default="auto")
     parser.add_argument("--pattern", type=str, help="Pattern to match camera name (overrides .env CAMERA)")
-    parser.add_argument("--quiet", action="store_true", help="Reduce OpenCV logging noise")
+    parser.add_argument("--quiet", action="store_true", default=True, help="Reduce OpenCV logging noise (default: on)")
+    parser.add_argument("--verbose", action="store_true", help="Show OpenCV warnings during camera probing")
     parser.add_argument("--details", action="store_true", help="On macOS, use ffmpeg avfoundation names if available")
     parser.add_argument("--stop-after-failures", type=int, default=4, help="Per-backend consecutive failure cutoff to reduce noise (default 4)")
     args = parser.parse_args(argv)
@@ -29,6 +30,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.pattern:
         pattern = args.pattern
 
+    if args.verbose:
+        args.quiet = False
     # Quiet logging if requested
     if args.quiet:
         try:
