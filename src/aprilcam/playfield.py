@@ -19,9 +19,14 @@ class Playfield:
 
     proc_width: int = 960
     detect_inverted: bool = False
+    polygon: Optional[np.ndarray] = None  # shape (4,2) float32, UL/UR/LR/LL
 
-    _poly: Optional[np.ndarray] = None  # shape (4,2) float32 in order UL,UR,LR,LL
-    _flows: Dict[int, AprilTagFlow] = field(default_factory=dict)
+    _poly: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _flows: Dict[int, AprilTagFlow] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self):
+        if self.polygon is not None:
+            self._poly = np.asarray(self.polygon, dtype=np.float32).reshape(4, 2)
 
     def _build_aruco4_detector(self):
         d = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
