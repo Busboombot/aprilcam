@@ -1,11 +1,13 @@
 ---
-id: "005"
-title: "get_playfield_info MCP tool"
-status: todo
-use-cases: [SUC-004]
-depends-on: ["003"]
-github-issue: ""
-todo: ""
+id: '005'
+title: get_playfield_info MCP tool
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '003'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

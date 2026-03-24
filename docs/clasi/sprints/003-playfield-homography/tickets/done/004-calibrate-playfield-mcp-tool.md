@@ -1,11 +1,13 @@
 ---
-id: "004"
-title: "calibrate_playfield MCP tool"
-status: todo
-use-cases: [SUC-003]
-depends-on: ["003"]
-github-issue: ""
-todo: ""
+id: '004'
+title: calibrate_playfield MCP tool
+status: done
+use-cases:
+- SUC-003
+depends-on:
+- '003'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

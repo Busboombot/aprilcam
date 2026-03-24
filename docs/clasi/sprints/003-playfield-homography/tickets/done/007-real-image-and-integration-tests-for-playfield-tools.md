@@ -1,11 +1,20 @@
 ---
-id: "007"
-title: "Real-image and integration tests for playfield tools"
-status: todo
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
-depends-on: ["003", "004", "005", "006"]
-github-issue: ""
-todo: ""
+id: '007'
+title: Real-image and integration tests for playfield tools
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+depends-on:
+- '003'
+- '004'
+- '005'
+- '006'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

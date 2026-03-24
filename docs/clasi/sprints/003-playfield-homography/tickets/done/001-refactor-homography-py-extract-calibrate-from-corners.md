@@ -1,11 +1,12 @@
 ---
-id: "001"
-title: "Refactor homography.py — extract calibrate_from_corners()"
-status: todo
-use-cases: [SUC-005]
+id: '001'
+title: "Refactor homography.py \u2014 extract calibrate_from_corners()"
+status: done
+use-cases:
+- SUC-005
 depends-on: []
-github-issue: ""
-todo: ""
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

@@ -1,11 +1,12 @@
 ---
-id: "002"
-title: "Refactor playfield.py — add optional polygon parameter"
-status: todo
-use-cases: [SUC-005]
+id: '002'
+title: "Refactor playfield.py \u2014 add optional polygon parameter"
+status: done
+use-cases:
+- SUC-005
 depends-on: []
-github-issue: ""
-todo: ""
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

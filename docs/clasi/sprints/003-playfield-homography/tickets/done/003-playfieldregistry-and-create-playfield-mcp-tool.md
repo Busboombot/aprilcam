@@ -1,11 +1,14 @@
 ---
-id: "003"
-title: "PlayfieldRegistry and create_playfield MCP tool"
-status: todo
-use-cases: [SUC-001]
-depends-on: ["001", "002"]
-github-issue: ""
-todo: ""
+id: '003'
+title: PlayfieldRegistry and create_playfield MCP tool
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '001'
+- '002'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

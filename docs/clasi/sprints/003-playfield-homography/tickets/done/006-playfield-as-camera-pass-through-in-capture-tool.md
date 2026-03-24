@@ -1,11 +1,13 @@
 ---
-id: "006"
-title: "Playfield-as-camera pass-through in capture tool"
-status: todo
-use-cases: [SUC-002]
-depends-on: ["003"]
-github-issue: ""
-todo: ""
+id: '006'
+title: Playfield-as-camera pass-through in capture tool
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '003'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
