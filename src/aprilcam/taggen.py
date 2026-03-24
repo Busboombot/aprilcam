@@ -118,9 +118,20 @@ def add_label_below(
 # PDF generation
 # ---------------------------------------------------------------------------
 
+ARUCO_POSITIONS = {
+    0: "Upper Left",
+    1: "Upper Right",
+    2: "Lower Left",
+    3: "Lower Right",
+}
+
+
 def _family_label(family: str, tag_id: int) -> str:
     if family == "36h11":
         return f"AprilTag 36h11 ID: {tag_id}"
+    pos = ARUCO_POSITIONS.get(tag_id)
+    if pos:
+        return f"ArUco 4x4 ID: {tag_id} - {pos}"
     return f"ArUco 4x4 ID: {tag_id}"
 
 
@@ -148,7 +159,8 @@ def generate_pdf(
 
         # Render tag with quiet zone
         gray = render_tag(tag_id, family=family, size=size)
-        gray = add_quiet_zone_gray(gray)
+        # Minimal quiet zone for PDF — just enough for detection
+        gray = add_quiet_zone_gray(gray, quiet_ratio=0.04)
 
         # Write to a temporary PNG so fpdf can embed it
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
@@ -162,22 +174,22 @@ def generate_pdf(
         avail_w = PAGE_W_MM - 2 * margin_mm
         avail_h = PAGE_H_MM - 2 * margin_mm - label_h_mm
 
-        # Target: inner tag (without quiet zone) should be ~50mm for AprilTags.
-        # The quiet zone adds 2/7 of the tag size on each side, so the total
-        # image is tag_inner * (1 + 2 * 2/7) = tag_inner * 11/7.
-        # For a 50mm inner tag: total ≈ 78.6mm.
-        quiet_ratio = 2.0 / 7.0
-        target_inner_mm = 50.0 if family == "36h11" else 40.0
-        tag_dim = min(target_inner_mm * (1 + 2 * quiet_ratio), avail_w, avail_h)
+        # Fill the page width. The tag image includes quiet zone, so the
+        # inner tag will be tag_dim / (1 + 2*quiet_ratio). With the page
+        # at 59mm and 1mm margins, avail_w=57mm. Use a smaller quiet zone
+        # for PDF so the tag fills the page: quiet_ratio ~0.04 gives a
+        # 2mm border, leaving ~53mm for the inner tag.
+        tag_dim = min(avail_w, avail_h)
         x = (PAGE_W_MM - tag_dim) / 2
         y = margin_mm + (avail_h - tag_dim) / 2
 
         pdf.image(tmp.name, x=x, y=y, w=tag_dim, h=tag_dim)
 
-        # Label
+        # Label — right below the tag image
         pdf.set_font("Helvetica", size=7)
-        pdf.set_xy(0, PAGE_H_MM - margin_mm - label_h_mm)
-        pdf.cell(PAGE_W_MM, label_h_mm, label, align="C")
+        label_y = y + tag_dim + 1.0  # 1mm gap below the tag
+        pdf.set_xy(0, label_y)
+        pdf.cell(PAGE_W_MM, 4, label, align="C")
 
         # Clean up temp file
         Path(tmp.name).unlink(missing_ok=True)
