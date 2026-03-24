@@ -6,10 +6,15 @@ import base64
 import json
 import tempfile
 import uuid
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
+import numpy as np
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
+
+from aprilcam.homography import CORNER_ID_MAP, FieldSpec, detect_aruco_4x4
+from aprilcam.playfield import Playfield
 
 # ---------------------------------------------------------------------------
 # Camera registry
@@ -61,11 +66,53 @@ class CameraRegistry:
 
 
 # ---------------------------------------------------------------------------
+# Playfield registry
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PlayfieldEntry:
+    """A registered playfield backed by a camera."""
+
+    playfield_id: str
+    camera_id: str
+    playfield: Playfield
+    field_spec: Optional[FieldSpec] = None
+    homography: Optional[np.ndarray] = None
+
+
+class PlayfieldRegistry:
+    """Manages playfield entries keyed by playfield_id."""
+
+    def __init__(self) -> None:
+        self._playfields: dict[str, PlayfieldEntry] = {}
+
+    def register(self, entry: PlayfieldEntry) -> None:
+        self._playfields[entry.playfield_id] = entry
+
+    def get(self, playfield_id: str) -> PlayfieldEntry:
+        return self._playfields[playfield_id]  # raises KeyError
+
+    def list(self) -> list[str]:
+        return list(self._playfields.keys())
+
+    def remove(self, playfield_id: str) -> None:
+        del self._playfields[playfield_id]
+
+    def find_by_camera(self, camera_id: str) -> Optional[str]:
+        for pid, entry in self._playfields.items():
+            if entry.camera_id == camera_id:
+                return pid
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Module-level instances
 # ---------------------------------------------------------------------------
 
 server = FastMCP("aprilcam")
 registry = CameraRegistry()
+playfield_registry = PlayfieldRegistry()
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -248,6 +295,70 @@ async def close_camera(camera_id: str) -> list[TextContent]:
     return [
         TextContent(type="text", text=json.dumps({"status": "closed"}))
     ]
+
+
+@server.tool()
+async def create_playfield(
+    camera_id: str,
+    max_frames: int = 30,
+) -> list[TextContent]:
+    """Create a playfield from a camera by detecting ArUco corner markers."""
+    # Validate camera exists
+    try:
+        cap = registry.get(camera_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Unknown camera_id '{camera_id}'"}
+        ))]
+
+    # Create playfield and try to detect corners
+    pf = Playfield(detect_inverted=True)
+    for _ in range(max(1, max_frames)):
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        pf.update(frame)
+        if pf.get_polygon() is not None:
+            break
+
+    poly = pf.get_polygon()
+    if poly is None:
+        # Detect which corners are missing
+        import cv2
+
+        ret, frame = cap.read()
+        missing = [0, 1, 2, 3]
+        if ret:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            dets = detect_aruco_4x4(gray)
+            found_ids = [tid for _, tid in dets if tid in (0, 1, 2, 3)]
+            missing = [i for i in (0, 1, 2, 3) if i not in found_ids]
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Failed to detect all 4 corner markers",
+            "missing_corner_ids": missing,
+        }))]
+
+    # Register the playfield
+    playfield_id = f"pf_{camera_id}"
+
+    # Replace existing if same camera
+    existing = playfield_registry.find_by_camera(camera_id)
+    if existing:
+        playfield_registry.remove(existing)
+
+    entry = PlayfieldEntry(
+        playfield_id=playfield_id,
+        camera_id=camera_id,
+        playfield=pf,
+    )
+    playfield_registry.register(entry)
+
+    corners = poly.tolist()  # UL, UR, LR, LL
+    return [TextContent(type="text", text=json.dumps({
+        "playfield_id": playfield_id,
+        "corners": corners,
+        "calibrated": False,
+    }))]
 
 
 # ---------------------------------------------------------------------------
