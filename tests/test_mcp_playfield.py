@@ -403,3 +403,51 @@ async def test_capture_unknown_id_error(clean_registries):
     result = await capture_frame(camera_id="nonexistent", format="file")
     data = json.loads(result[0].text)
     assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_full_flow_create_calibrate_info_capture(clean_registries):
+    """End-to-end: create -> calibrate -> info -> capture via playfield."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    fake_cap = FakeCapture(str(img_path))
+    cam_id = registry.open(fake_cap)
+
+    try:
+        # Step 1: Create playfield
+        result = await create_playfield(camera_id=cam_id)
+        data = json.loads(result[0].text)
+        assert "playfield_id" in data
+        pf_id = data["playfield_id"]
+
+        # Step 2: Calibrate
+        result = await calibrate_playfield(
+            playfield_id=pf_id, width=102.0, height=89.0, units="cm"
+        )
+        data = json.loads(result[0].text)
+        assert data["calibrated"] is True
+
+        # Step 3: Get info
+        result = await get_playfield_info(playfield_id=pf_id)
+        data = json.loads(result[0].text)
+        assert data["calibrated"] is True
+        assert abs(data["width_cm"] - 102.0) < 0.1
+        assert abs(data["height_cm"] - 89.0) < 0.1
+        assert len(data["homography"]) == 3
+
+        # Step 4: Capture via playfield
+        result = await capture_frame(camera_id=pf_id, format="file")
+        data = json.loads(result[0].text)
+        assert "path" in data
+    finally:
+        try:
+            registry.close(cam_id)
+        except Exception:
+            pass
