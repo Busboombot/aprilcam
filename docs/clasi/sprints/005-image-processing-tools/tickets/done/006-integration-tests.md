@@ -1,11 +1,23 @@
 ---
-id: "006"
-title: "Integration tests"
-status: todo
-use-cases: ["SUC-001", "SUC-002", "SUC-003", "SUC-004", "SUC-005", "SUC-006", "SUC-007", "SUC-008"]
-depends-on: ["002", "003", "004", "005"]
-github-issue: ""
-todo: ""
+id: '006'
+title: Integration tests
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
+depends-on:
+- '002'
+- '003'
+- '004'
+- '005'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
