@@ -9,6 +9,7 @@ import cv2 as cv
 import numpy as np
 
 from .config import AppConfig
+from .detection import TagRecord
 from .iohelpers import get_data_dir
 from .camutil import list_cameras as _list_cameras, select_camera_by_pattern
 from .playfield import Playfield
@@ -107,7 +108,18 @@ class AprilCam:
             deskew_overlay=self.deskew_overlay,
         )
 
+        # Tracking state (initialized by reset_state)
+        self._prev_gray: Optional[np.ndarray] = None
+        self._tracks: dict[int, np.ndarray] = {}
+        self._tag_models: dict[int, AprilTagModel] = {}
+        self._frame_idx: int = 0
 
+    def reset_state(self) -> None:
+        """Reset all tracking state to initial values."""
+        self._prev_gray = None
+        self._tracks = {}
+        self._tag_models = {}
+        self._frame_idx = 0
 
     @staticmethod
     def _get_dict_by_family(name: str):
@@ -239,6 +251,113 @@ class AprilCam:
 
 
 
+    def process_frame(self, frame_bgr: np.ndarray, timestamp: float) -> List[TagRecord]:
+        """Process a single BGR frame: detect/track tags and return TagRecords.
+
+        This is the stateful detection/tracking core extracted from ``run()``.
+        It updates ``self._prev_gray``, ``self._tracks``, ``self._tag_models``,
+        and ``self._frame_idx``.
+
+        The method does **not** open windows, call ``waitKey``, print, or read
+        from a camera.
+
+        Args:
+            frame_bgr: A BGR image (numpy array) to process.
+            timestamp: Monotonic timestamp for this frame.
+
+        Returns:
+            A list of :class:`TagRecord` for every tag detected/tracked in
+            this frame.
+        """
+        # 2) Convert to gray and perform detection or faster LK tracking
+        gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
+        detections: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        if (self.detect_interval <= 1
+                or self._frame_idx % max(1, self.detect_interval) == 0
+                or self._prev_gray is None
+                or not self._tracks):
+            w = frame_bgr.shape[1]
+            scale = (min(1.0, float(self.proc_width) / float(w))
+                     if (self.proc_width and self.proc_width > 0 and w > 0)
+                     else 1.0)
+            detections = self.detect_apriltags(frame_bgr, scale=scale)
+            self._tracks = {tid: pts for (pts, _raw, tid) in detections}
+        else:
+            # Track existing tag corners forward with LK; fall back to detection on loss
+            new_tracks: dict[int, np.ndarray] = {}
+            for tid, pts in self._tracks.items():
+                new_pts = AprilCam.lk_track(self._prev_gray, gray, pts)
+                if new_pts is not None:
+                    new_tracks[tid] = new_pts
+                    detections.append((new_pts, new_pts, tid))
+            self._tracks = new_tracks
+            if len(detections) == 0:
+                w = frame_bgr.shape[1]
+                scale = (min(1.0, float(self.proc_width) / float(w))
+                         if (self.proc_width and self.proc_width > 0 and w > 0)
+                         else 1.0)
+                detections = self.detect_apriltags(frame_bgr, scale=scale)
+                self._tracks = {tid: pts for (pts, _raw, tid) in detections}
+
+        # 3) Update Playfield cache (polygon) for cropping/deskew
+        self._update_playfield(frame_bgr)
+
+        # 4) Keep only detections inside the current playfield polygon
+        if detections:
+            in_dets: List[Tuple[np.ndarray, np.ndarray, int]] = []
+            for pts, raw, tid in detections:
+                if self.playfield.isIn(pts):
+                    in_dets.append((pts, raw, tid))
+            detections = in_dets
+            self._tracks = {tid: pts for (pts, _raw, tid) in detections}
+
+        # 5) Update/maintain tag models and playfield flows
+        for pts, _raw, tid in detections:
+            if tid in self._tag_models:
+                self._tag_models[tid].update(pts, timestamp=timestamp, homography=self.homography)
+            else:
+                self._tag_models[tid] = AprilTagModel.from_corners(
+                    tid, pts, homography=self.homography,
+                    timestamp=timestamp, frame=self._frame_idx,
+                )
+            self._tag_models[tid].frame = self._frame_idx
+            self.playfield.add_tag(self._tag_models[tid])
+
+        # Prune models not seen recently (>1.5s)
+        seen_ids = {tid for _pts, _r, tid in detections}
+        for tid in list(self._tag_models.keys()):
+            if (tid not in seen_ids
+                    and self._tag_models[tid].last_ts is not None
+                    and (timestamp - float(self._tag_models[tid].last_ts)) > 1.5):
+                del self._tag_models[tid]
+
+        # Build TagRecord objects
+        flows = self.playfield.get_flows()
+        tag_records: List[TagRecord] = []
+        for pts, _raw, tid in detections:
+            model = self._tag_models.get(tid)
+            if model is None:
+                continue
+            flow = flows.get(tid)
+            vel_px_val = flow.vel_px if flow else None
+            speed_px_val = flow.speed_px if flow else None
+            tr = TagRecord.from_apriltag(
+                model,
+                vel_px=vel_px_val,
+                speed_px=speed_px_val,
+                vel_world=None,
+                speed_world=None,
+                heading_rad=None,
+                timestamp=timestamp,
+                frame_index=self._frame_idx,
+            )
+            tag_records.append(tr)
+
+        # Bookkeeping
+        self._frame_idx += 1
+        self._prev_gray = gray
+        return tag_records
+
     def run(self) -> None:
         """Main capture/detect/track loop with display and overlays."""
         cap = self._init_capture()
@@ -246,14 +365,11 @@ class AprilCam:
             return
         # Window is managed by PlayfieldDisplay
 
-        prev_gray: Optional[np.ndarray] = None
-        frame_idx = 0
-        tracks: dict[int, np.ndarray] = {}
+        self.reset_state()
         vel_ema: dict[int, float] = {}
         last_seen: dict[int, Tuple[float, float, float]] = {}
         paused = False
         last_display: Optional[np.ndarray] = None
-        tag_models: dict[int, AprilTagModel] = {}
 
         try:
             while True:
@@ -264,65 +380,15 @@ class AprilCam:
                         print("Camera read failed.")
                         break
 
-                    # 2) Convert to gray and perform detection or faster LK tracking
-                    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
                     now = time.monotonic()
-                    detections: List[Tuple[np.ndarray, np.ndarray, int]] = []
-                    if self.detect_interval <= 1 or frame_idx % max(1, self.detect_interval) == 0 or prev_gray is None or not tracks:
-                        w = frame.shape[1]
-                        scale = min(1.0, float(self.proc_width) / float(w)) if (self.proc_width and self.proc_width > 0 and w > 0) else 1.0
-                        detections = self.detect_apriltags(frame, scale=scale)
-                        tracks = {tid: pts for (pts, _raw, tid) in detections}
-                    else:
-                        # Track existing tag corners forward with LK; fall back to detection on loss
-                        new_tracks: dict[int, np.ndarray] = {}
-                        for tid, pts in tracks.items():
-                            new_pts = AprilCam.lk_track(prev_gray, gray, pts)
-                            if new_pts is not None:
-                                new_tracks[tid] = new_pts
-                                detections.append((new_pts, new_pts, tid))
-                        tracks = new_tracks
-                        if len(detections) == 0:
-                            w = frame.shape[1]
-                            scale = min(1.0, float(self.proc_width) / float(w)) if (self.proc_width and self.proc_width > 0 and w > 0) else 1.0
-                            detections = self.detect_apriltags(frame, scale=scale)
-                            tracks = {tid: pts for (pts, _raw, tid) in detections}
-
-                    # 3) Update Playfield cache (polygon) for cropping/deskew
-                    self._update_playfield(frame)
-
-                    # 4) Keep only detections inside the current playfield polygon
-                    if detections:
-                        in_dets: List[Tuple[np.ndarray, np.ndarray, int]] = []
-                        for pts, raw, tid in detections:
-                            if self.playfield.isIn(pts):
-                                in_dets.append((pts, raw, tid))
-                        detections = in_dets
-                        tracks = {tid: pts for (pts, _raw, tid) in detections}
-
-                    # 5) Update/maintain tag models and playfield flows
-                    tags: List[AprilTagModel] = []
-                    for pts, _raw, tid in detections:
-                        if tid in tag_models:
-                            tag_models[tid].update(pts, timestamp=now, homography=self.homography)
-                        else:
-                            tag_models[tid] = AprilTagModel.from_corners(tid, pts, homography=self.homography, timestamp=now, frame=frame_idx)
-                        # Feed into playfield flow map (sets in_playfield)
-                        tag_models[tid].frame = frame_idx
-                        self.playfield.add_tag(tag_models[tid])
-                        tags.append(tag_models[tid])
-                    # Prune models not seen recently
-                    seen_ids = {tid for _pts, _r, tid in detections}
-                    for tid in list(tag_models.keys()):
-                        if tid not in seen_ids and tag_models[tid].last_ts is not None and (now - float(tag_models[tid].last_ts)) > 1.5:
-                            del tag_models[tid]
+                    tag_records = self.process_frame(frame, now)
 
                     # 6) Compute per-tag speeds for printing (UI overlay uses models)
                     speeds: dict[int, float] = {}
                     vel_dirs: dict[int, Tuple[float, float]] = {}
-                    for pts, _raw, tag_id in detections:
-                        c = pts.mean(axis=0)
-                        cx, cy = float(c[0]), float(c[1])
+                    for tr in tag_records:
+                        cx, cy = tr.center_px
+                        tag_id = tr.id
                         if tag_id in last_seen:
                             px, py, pt = last_seen[tag_id]
                             dt = max(1e-3, now - pt)
@@ -336,12 +402,12 @@ class AprilCam:
                         last_seen[tag_id] = (cx, cy, now)
 
                     # 7) Optional logging to stdout
-                    if self.print_tags and detections:
+                    if self.print_tags and tag_records:
                         lines = []
                         H = self.homography
-                        for pts, _raw, tag_id in detections:
-                            ptsf = pts.astype(np.float32)
-                            center = ptsf.mean(axis=0)
+                        for tr in tag_records:
+                            tag_id = tr.id
+                            center = np.array(tr.center_px, dtype=np.float32)
                             wtxt = ""
                             if H is not None:
                                 u, v = float(center[0]), float(center[1])
@@ -351,19 +417,16 @@ class AprilCam:
                                     Xcm = Xw[0] / Xw[2]
                                     Ycm = Xw[1] / Xw[2]
                                     wtxt = f"  WX:{Xcm:7.1f}cm  WY:{Ycm:7.1f}cm"
-                            top_mid = (ptsf[0] + ptsf[1]) / 2.0
-                            dir_vec = top_mid - center
-                            ori_ang = math.degrees(math.atan2(float(dir_vec[1]), float(dir_vec[0]))) if np.linalg.norm(dir_vec) > 1e-6 else 0.0
+                            ori_ang = math.degrees(tr.orientation_yaw)
                             v = float(speeds.get(tag_id, 0.0))
                             vx, vy = vel_dirs.get(tag_id, (0.0, 0.0))
                             vang = math.degrees(math.atan2(vy, vx)) if (vx != 0.0 or vy != 0.0) else 0.0
-                            line = f"ID:{tag_id:4d}  CX:{int(center[0]):4d}  CY:{int(center[1]):4d}  ORI:{ori_ang:+7.1f}°  V:{v:7.1f} px/s  VANG:{vang:+7.1f}°{wtxt}"
+                            line = f"ID:{tag_id:4d}  CX:{int(center[0]):4d}  CY:{int(center[1]):4d}  ORI:{ori_ang:+7.1f}\u00b0  V:{v:7.1f} px/s  VANG:{vang:+7.1f}\u00b0{wtxt}"
                             lines.append(line)
                         print("\n".join(lines))
 
                     # 8) Prepare display image and draw overlays
                     display = self.display.update(frame)
-                    # Use most recent tag states from flows for overlay
                     flows = self.playfield.get_flows()
                     tags_for_overlay = list(flows.values())
                     self.display.draw_overlays(display if display is not None else frame, tags_for_overlay, homography=self.homography)
@@ -392,12 +455,8 @@ class AprilCam:
                 else:
                     # Headless: small sleep to avoid tight loop
                     time.sleep(0.001)
-                # 10) Bookkeeping for next iteration
-                if not paused:
-                    prev_gray = gray
-                    frame_idx += 1
         finally:
-            # 11) Cleanup resources
+            # Cleanup resources
             try:
                 if self.cap is not None:
                     self.cap.release()

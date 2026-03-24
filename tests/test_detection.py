@@ -261,3 +261,75 @@ def test_ringbuffer_thread_safety():
     for t in threads:
         t.join()
     assert errors == [], f"Thread safety errors: {errors}"
+
+
+# --- process_frame tests ---
+
+import time
+from pathlib import Path
+
+import cv2 as cv
+
+from aprilcam.aprilcam import AprilCam
+
+TEST_DATA = Path(__file__).parent / "data"
+
+
+def _make_aprilcam(img: np.ndarray) -> AprilCam:
+    """Create a headless AprilCam suitable for process_frame testing."""
+    return AprilCam(
+        index=0,
+        backend=None,
+        speed_alpha=0.5,
+        family="36h11",
+        proc_width=960,
+        headless=True,
+        cap=cv.VideoCapture(0),
+    )
+
+
+def test_process_frame_returns_tagrecords():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    img = cv.imread(str(path))
+    assert img is not None, "Failed to read test image"
+    cam = _make_aprilcam(img)
+    records = cam.process_frame(img, time.monotonic())
+    assert isinstance(records, list)
+    for r in records:
+        assert isinstance(r, TagRecord)
+
+
+def test_process_frame_increments_frame_idx():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    img = cv.imread(str(path))
+    assert img is not None
+    cam = _make_aprilcam(img)
+    assert cam._frame_idx == 0
+    cam.process_frame(img, time.monotonic())
+    assert cam._frame_idx == 1
+    cam.process_frame(img, time.monotonic())
+    assert cam._frame_idx == 2
+
+
+def test_reset_state():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    img = cv.imread(str(path))
+    assert img is not None
+    cam = _make_aprilcam(img)
+    # Process a frame to populate state
+    cam.process_frame(img, time.monotonic())
+    assert cam._frame_idx == 1
+    assert cam._prev_gray is not None
+
+    # Reset and verify clean state
+    cam.reset_state()
+    assert cam._frame_idx == 0
+    assert cam._prev_gray is None
+    assert cam._tracks == {}
+    assert cam._tag_models == {}
