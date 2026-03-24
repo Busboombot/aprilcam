@@ -36,6 +36,7 @@ dependencies = [
   "python-dotenv>=1.0",
   "mss>=9.0", # for --screen desktop capture on macOS/Windows/Linux
   "mcp>=1.0",
+  "fpdf2>=2.7",
 ]
 
 [project.urls]

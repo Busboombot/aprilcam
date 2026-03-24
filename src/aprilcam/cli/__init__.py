@@ -10,12 +10,8 @@ SUBCOMMANDS = {
         "module": "aprilcam.mcp_server",
     },
     "taggen": {
-        "help": "Generate AprilTag images",
+        "help": "Generate AprilTag or ArUco marker images (PDF or PNG)",
         "module": "aprilcam.cli.taggen_cli",
-    },
-    "arucogen": {
-        "help": "Generate ArUco marker images",
-        "module": "aprilcam.cli.arucogen_cli",
     },
     "cameras": {
         "help": "List available cameras",
