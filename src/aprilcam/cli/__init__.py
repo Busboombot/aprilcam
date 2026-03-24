@@ -1,6 +1,5 @@
 """Unified CLI dispatcher for aprilcam."""
 
-import argparse
 import sys
 
 
@@ -24,26 +23,37 @@ SUBCOMMANDS = {
 }
 
 
+def _print_help():
+    print("usage: aprilcam <command> [options]")
+    print()
+    print("AprilCam -- AprilTag detection and generation toolkit")
+    print()
+    print("commands:")
+    for name, info in SUBCOMMANDS.items():
+        print(f"  {name:<12} {info['help']}")
+    print()
+    print("Run 'aprilcam <command> --help' for command-specific options.")
+
+
 def main(argv=None):
     """Entry point for the aprilcam CLI."""
-    parser = argparse.ArgumentParser(
-        prog="aprilcam",
-        description="AprilCam — AprilTag detection and generation toolkit",
-    )
-    sub = parser.add_subparsers(dest="command")
+    args = argv if argv is not None else sys.argv[1:]
 
-    for name, info in SUBCOMMANDS.items():
-        sub.add_parser(name, help=info["help"])
+    if not args or args[0] in ("-h", "--help"):
+        _print_help()
+        sys.exit(0)
 
-    args, remaining = parser.parse_known_args(argv)
+    command = args[0]
+    remaining = args[1:]
 
-    if args.command is None:
-        parser.print_help()
+    if command not in SUBCOMMANDS:
+        print(f"Unknown command: {command}")
+        _print_help()
         sys.exit(1)
 
     # Lazy import: only load the target module when actually dispatching.
     import importlib
 
-    mod = importlib.import_module(SUBCOMMANDS[args.command]["module"])
+    mod = importlib.import_module(SUBCOMMANDS[command]["module"])
     rc = mod.main(remaining) or 0
     sys.exit(rc)

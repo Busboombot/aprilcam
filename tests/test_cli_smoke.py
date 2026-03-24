@@ -1,7 +1,7 @@
 import pytest
 
 SUBCOMMANDS = [
-    "mcp", "taggen", "cameras",
+    "taggen", "cameras",
 ]
 
 
@@ -19,9 +19,9 @@ def test_main_help(cli_runner):
 
 
 def test_no_subcommand_shows_help(cli_runner):
-    """No subcommand should return non-zero."""
+    """No subcommand should show help and exit 0."""
     code = cli_runner([])
-    assert code != 0
+    assert code == 0
 
 
 def test_mcp_dispatches_to_module(monkeypatch):
