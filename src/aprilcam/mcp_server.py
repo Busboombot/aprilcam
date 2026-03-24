@@ -768,6 +768,184 @@ async def get_tag_history(
 
 
 # ---------------------------------------------------------------------------
+# Image processing tools
+# ---------------------------------------------------------------------------
+
+_motion_prev_frames: dict[str, Any] = {}
+
+
+@server.tool()
+async def get_frame(
+    source_id: str,
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Capture a raw frame from a camera or playfield."""
+    try:
+        frame = resolve_source(source_id)
+    except KeyError as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    except RuntimeError as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    return format_image_output(frame, format, quality)
+
+
+@server.tool()
+async def crop_region(
+    source_id: str,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Crop a rectangular region from a camera or playfield frame."""
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    fh, fw = frame.shape[:2]
+    # Clip to frame bounds
+    x1 = max(0, min(x, fw))
+    y1 = max(0, min(y, fh))
+    x2 = max(0, min(x + w, fw))
+    y2 = max(0, min(y + h, fh))
+    if x2 <= x1 or y2 <= y1:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Crop region is entirely outside frame bounds"}
+        ))]
+    cropped = frame[y1:y2, x1:x2]
+    return format_image_output(cropped, format, quality)
+
+
+@server.tool()
+async def detect_lines(
+    source_id: str,
+    threshold: int = 50,
+    min_length: int = 50,
+    max_gap: int = 10,
+) -> list[TextContent]:
+    """Detect line segments in a frame using Hough transform."""
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    from aprilcam.image_processing import process_detect_lines
+
+    lines = process_detect_lines(frame, threshold, min_length, max_gap)
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "lines": lines}
+    ))]
+
+
+@server.tool()
+async def detect_circles(
+    source_id: str,
+    min_radius: int = 0,
+    max_radius: int = 0,
+    param1: float = 100.0,
+    param2: float = 30.0,
+) -> list[TextContent]:
+    """Detect circles in a frame using Hough transform."""
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    from aprilcam.image_processing import process_detect_circles
+
+    circles = process_detect_circles(frame, min_radius, max_radius, param1, param2)
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "circles": circles}
+    ))]
+
+
+@server.tool()
+async def detect_contours(
+    source_id: str,
+    min_area: float = 100.0,
+) -> list[TextContent]:
+    """Detect contours in a frame."""
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    from aprilcam.image_processing import process_detect_contours
+
+    contours = process_detect_contours(frame, min_area)
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "contours": contours}
+    ))]
+
+
+@server.tool()
+async def detect_motion(source_id: str) -> list[TextContent]:
+    """Detect motion between current and previous frame."""
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    import cv2
+
+    from aprilcam.image_processing import process_detect_motion
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    prev = _motion_prev_frames.get(source_id)
+    regions = process_detect_motion(frame, prev)
+    _motion_prev_frames[source_id] = gray
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "motion_regions": regions, "is_baseline": prev is None}
+    ))]
+
+
+@server.tool()
+async def detect_qr_codes(source_id: str) -> list[TextContent]:
+    """Detect and decode QR codes in a frame."""
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    from aprilcam.image_processing import process_detect_qr_codes
+
+    codes = process_detect_qr_codes(frame)
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "qr_codes": codes}
+    ))]
+
+
+@server.tool()
+async def apply_transform(
+    source_id: str,
+    operation: str,
+    params: str = "{}",
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Apply an image transform to a frame.
+
+    The *params* argument is a JSON string with operation-specific
+    parameters (e.g. ``{"angle": 45}`` for rotate).
+    """
+    try:
+        frame = resolve_source(source_id)
+    except (KeyError, RuntimeError) as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    import json as _json
+
+    try:
+        p = _json.loads(params) if isinstance(params, str) else params
+    except Exception:
+        p = {}
+    from aprilcam.image_processing import process_apply_transform
+
+    try:
+        result = process_apply_transform(frame, operation, p)
+    except ValueError as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    return format_image_output(result, format, quality)
+
+
+# ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
 
