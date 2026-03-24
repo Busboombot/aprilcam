@@ -1,14 +1,14 @@
 ---
-id: "006"
-title: "Multi-Camera Compositing"
-status: planning
+id: '006'
+title: Multi-Camera Compositing
+status: done
 branch: sprint/006-multi-camera-compositing
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
