@@ -1,14 +1,14 @@
 ---
-id: "004"
-title: "Tag Detection Loop & Ring Buffer"
-status: planning
+id: '004'
+title: Tag Detection Loop & Ring Buffer
+status: done
 branch: sprint/004-tag-detection-loop-ring-buffer
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
