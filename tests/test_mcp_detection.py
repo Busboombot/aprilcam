@@ -142,3 +142,109 @@ class TestGetTagHistory:
     def test_get_tag_history_no_loop(self):
         result = _parse(_run(get_tag_history("nonexistent-id")))
         assert "error" in result
+
+
+class TestDetectionIntegration:
+    """Integration tests exercising the full detection roundtrip."""
+
+    def test_full_detection_roundtrip(self):
+        """Open fake camera, start/get/history/stop — each returns success."""
+        camera_id = _open_fake_camera()
+        try:
+            start_res = _parse(_run(start_detection(camera_id)))
+            assert start_res["status"] == "started"
+
+            time.sleep(1)
+
+            tags_res = _parse(_run(get_tags(camera_id)))
+            assert "tags" in tags_res
+            assert "source_id" in tags_res
+
+            hist_res = _parse(_run(get_tag_history(camera_id)))
+            assert "frames" in hist_res
+            assert "source_id" in hist_res
+        finally:
+            stop_res = _parse(_run(stop_detection(camera_id)))
+            assert stop_res["status"] == "stopped"
+
+    def test_tag_positions_match_expected(self):
+        """Detected tags have non-empty list with id and center_px."""
+        camera_id = _open_fake_camera()
+        try:
+            _run(start_detection(camera_id))
+            time.sleep(0.5)
+            result = _parse(_run(get_tags(camera_id)))
+            tags = result["tags"]
+            assert len(tags) > 0, "Expected at least one tag detection"
+            for tag in tags:
+                assert "id" in tag
+                assert "center_px" in tag
+                cx, cy = tag["center_px"]
+                # Plausible pixel coordinates (positive, within a reasonable image)
+                assert cx > 0 and cy > 0
+                assert cx < 5000 and cy < 5000
+        finally:
+            _run(stop_detection(camera_id))
+
+    def test_velocity_near_zero_static(self):
+        """Static image repeated → speed_px should be small or None."""
+        camera_id = _open_fake_camera()
+        try:
+            _run(start_detection(camera_id))
+            time.sleep(0.5)
+            result = _parse(_run(get_tags(camera_id)))
+            for tag in result["tags"]:
+                speed = tag.get("speed_px")
+                if speed is not None:
+                    assert speed < 5.0, f"Expected near-zero speed, got {speed}"
+        finally:
+            _run(stop_detection(camera_id))
+
+    def test_all_json_fields_present(self):
+        """Each tag record contains all expected keys."""
+        expected_keys = {
+            "id",
+            "center_px",
+            "corners_px",
+            "orientation_yaw",
+            "world_xy",
+            "in_playfield",
+            "vel_px",
+            "speed_px",
+            "vel_world",
+            "speed_world",
+            "heading_rad",
+            "timestamp",
+            "frame_index",
+        }
+        camera_id = _open_fake_camera()
+        try:
+            _run(start_detection(camera_id))
+            time.sleep(0.5)
+            result = _parse(_run(get_tags(camera_id)))
+            assert len(result["tags"]) > 0, "Need at least one tag to check fields"
+            for tag in result["tags"]:
+                missing = expected_keys - set(tag.keys())
+                assert not missing, f"Tag {tag.get('id')} missing keys: {missing}"
+        finally:
+            _run(stop_detection(camera_id))
+
+    def test_history_chronological_order(self):
+        """History frames have ascending timestamp and frame_index."""
+        camera_id = _open_fake_camera()
+        try:
+            _run(start_detection(camera_id))
+            time.sleep(0.5)
+            result = _parse(_run(get_tag_history(camera_id, num_frames=10)))
+            frames = result["frames"]
+            if len(frames) >= 2:
+                timestamps = [f["timestamp"] for f in frames]
+                frame_indices = [f["frame_index"] for f in frames]
+                assert timestamps == sorted(timestamps), (
+                    "Timestamps not in ascending order"
+                )
+                assert frame_indices == sorted(frame_indices), (
+                    "Frame indices not in ascending order"
+                )
+        finally:
+            _run(stop_detection(camera_id))
