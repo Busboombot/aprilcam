@@ -576,7 +576,7 @@ async def get_playfield_info(
 async def start_detection(
     source_id: str,
     family: str = "36h11",
-    proc_width: int = 960,
+    proc_width: int = 0,
     detect_interval: int = 1,
     use_clahe: bool = False,
     use_sharpen: bool = False,
