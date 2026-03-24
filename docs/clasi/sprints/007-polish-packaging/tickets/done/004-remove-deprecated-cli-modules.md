@@ -1,13 +1,13 @@
 ---
-id: "004"
-title: "Remove deprecated CLI modules"
-status: todo
+id: '004'
+title: Remove deprecated CLI modules
+status: done
 use-cases:
-  - SUC-004
+- SUC-004
 depends-on:
-  - "003"
-github-issue: ""
-todo: ""
+- '003'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

@@ -1,13 +1,13 @@
 ---
-id: "005"
-title: "README"
-status: todo
+id: '005'
+title: README
+status: done
 use-cases:
-  - SUC-005
+- SUC-005
 depends-on:
-  - "003"
-github-issue: ""
-todo: ""
+- '003'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
