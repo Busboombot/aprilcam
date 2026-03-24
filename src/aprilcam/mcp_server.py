@@ -741,6 +741,151 @@ async def create_composite(
         return [TextContent(type="text", text=json.dumps({"error": str(exc)}))]
 
 
+def _detect_apriltags_on_frame(frame: np.ndarray) -> list[tuple[np.ndarray, np.ndarray, int]]:
+    """Detect AprilTag 36h11 markers on a BGR frame.
+
+    Returns a list of (corners_4x2, raw_corners, tag_id) tuples suitable
+    for passing to ``map_tags_to_primary``.
+    """
+    import cv2
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+    params = cv2.aruco.DetectorParameters()
+    detector = cv2.aruco.ArucoDetector(aruco_dict, params)
+    corners, ids, _ = detector.detectMarkers(gray)
+
+    results: list[tuple[np.ndarray, np.ndarray, int]] = []
+    if ids is not None and len(ids) > 0:
+        for c, tid in zip(corners, ids.flatten()):
+            pts = np.array(c, dtype=np.float32).reshape(-1, 2)
+            results.append((pts, c, int(tid)))
+    return results
+
+
+def render_tag_overlay(frame: np.ndarray, mapped_tags: list[dict]) -> np.ndarray:
+    """Draw tag overlays (polygon + ID label) onto a frame copy.
+
+    Args:
+        frame: BGR image (will be copied, not modified in place).
+        mapped_tags: list of dicts with ``corners_px`` and ``id`` keys.
+
+    Returns:
+        Annotated BGR image.
+    """
+    import cv2
+
+    out = frame.copy()
+    for tag in mapped_tags:
+        corners = np.array(tag["corners_px"], dtype=np.int32).reshape(-1, 1, 2)
+        cv2.polylines(out, [corners], isClosed=True, color=(0, 255, 0), thickness=2)
+        cx, cy = int(tag["center_px"][0]), int(tag["center_px"][1])
+        cv2.putText(
+            out, str(tag["id"]),
+            (cx - 10, cy - 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2,
+        )
+    return out
+
+
+@server.tool()
+async def get_composite_frame(
+    composite_id: str,
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Capture the primary camera frame with secondary-camera tag detections overlaid."""
+    try:
+        comp = composite_manager.get(composite_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Unknown composite_id '{composite_id}'"}
+        ))]
+
+    try:
+        cap_pri = registry.get(comp.primary_camera_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Primary camera '{comp.primary_camera_id}' is no longer open"}
+        ))]
+
+    try:
+        cap_sec = registry.get(comp.secondary_camera_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Secondary camera '{comp.secondary_camera_id}' is no longer open"}
+        ))]
+
+    ret1, frame_pri = cap_pri.read()
+    if not ret1:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Failed to read frame from primary camera"}
+        ))]
+
+    ret2, frame_sec = cap_sec.read()
+    if not ret2:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Failed to read frame from secondary camera"}
+        ))]
+
+    # Detect tags on secondary frame
+    detections = _detect_apriltags_on_frame(frame_sec)
+    mapped = map_tags_to_primary(detections, comp.homography)
+
+    # Overlay on primary frame
+    annotated = render_tag_overlay(frame_pri, mapped)
+
+    return format_image_output(annotated, format, quality)
+
+
+@server.tool()
+async def get_composite_tags(
+    composite_id: str,
+) -> list[TextContent]:
+    """Detect tags on the secondary camera and return their positions in primary camera coords."""
+    try:
+        comp = composite_manager.get(composite_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Unknown composite_id '{composite_id}'"}
+        ))]
+
+    try:
+        cap_sec = registry.get(comp.secondary_camera_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Secondary camera '{comp.secondary_camera_id}' is no longer open"}
+        ))]
+
+    ret, frame_sec = cap_sec.read()
+    if not ret:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Failed to read frame from secondary camera"}
+        ))]
+
+    detections = _detect_apriltags_on_frame(frame_sec)
+    mapped = map_tags_to_primary(detections, comp.homography)
+
+    # Add world_xy if composite has a calibrated playfield
+    if comp.playfield_id:
+        try:
+            pf_entry = playfield_registry.get(comp.playfield_id)
+            if pf_entry.homography is not None:
+                for tag in mapped:
+                    cx, cy = tag["center_px"]
+                    vec = np.array([cx, cy, 1.0], dtype=np.float64)
+                    Xw = pf_entry.homography @ vec
+                    if abs(Xw[2]) > 1e-9:
+                        tag["world_xy"] = [float(Xw[0] / Xw[2]), float(Xw[1] / Xw[2])]
+        except KeyError:
+            pass  # playfield not found, skip world coords
+
+    return [TextContent(type="text", text=json.dumps({
+        "composite_id": composite_id,
+        "tags": mapped,
+    }))]
+
+
 # ---------------------------------------------------------------------------
 # Detection tools
 # ---------------------------------------------------------------------------
