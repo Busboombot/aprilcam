@@ -21,26 +21,6 @@ SUBCOMMANDS = {
         "help": "List available cameras",
         "module": "aprilcam.cli.cameras_cli",
     },
-    "homocal": {
-        "help": "Calibrate homography",
-        "module": "aprilcam.cli.homocal_cli",
-    },
-    "screencap": {
-        "help": "Capture frames from screen or camera",
-        "module": "aprilcam.cli.atscreencap_cli",
-    },
-    "detect": {
-        "help": "Run live AprilTag detection",
-        "module": "aprilcam.cli.aprilcam_cli",
-    },
-    "capture": {
-        "help": "Batch detect tags in images",
-        "module": "aprilcam.cli.aprilcap_cli",
-    },
-    "test": {
-        "help": "Run detection parameter tests",
-        "module": "aprilcam.cli.apriltest_cli",
-    },
 }
 
 

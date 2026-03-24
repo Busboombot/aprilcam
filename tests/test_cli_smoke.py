@@ -1,8 +1,7 @@
 import pytest
 
 SUBCOMMANDS = [
-    "mcp", "taggen", "arucogen", "cameras", "homocal",
-    "screencap", "detect", "capture", "test",
+    "mcp", "taggen", "arucogen", "cameras",
 ]
 
 
