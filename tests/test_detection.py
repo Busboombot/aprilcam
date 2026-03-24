@@ -460,3 +460,34 @@ def test_detectionloop_consecutive_failure_stops():
     time.sleep(1.0)
     assert not loop.is_running  # auto-stopped due to consecutive failures
     loop.stop()
+
+
+def test_process_frame_static_velocity_near_zero():
+    """Feed the same image 15 times — static tags should have speed_px == 0.0."""
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    img = cv.imread(str(path))
+    assert img is not None, "Failed to read test image"
+    cam = _make_aprilcam(img)
+
+    # Feed the same image repeatedly with incrementing timestamps
+    all_records: list[list[TagRecord]] = []
+    base_ts = 1000.0
+    for i in range(15):
+        records = cam.process_frame(img, base_ts + i * 0.033)  # ~30 fps
+        all_records.append(records)
+
+    # Check the last 5 frames: all tags should have speed_px == 0.0
+    # because the EMA-smoothed speed of a static tag falls below the
+    # 2.0 px/s dead-band threshold.
+    for frame_records in all_records[-5:]:
+        assert len(frame_records) > 0, "Expected at least one tag detection"
+        for tr in frame_records:
+            assert tr.speed_px is not None, f"Tag {tr.id}: speed_px should not be None"
+            assert tr.speed_px < 2.0, (
+                f"Tag {tr.id}: speed_px={tr.speed_px} should be < 2.0 for static tags"
+            )
+            assert tr.speed_px == 0.0, (
+                f"Tag {tr.id}: speed_px={tr.speed_px} should be 0.0 (dead-band)"
+            )

@@ -113,6 +113,8 @@ class AprilCam:
         self._tracks: dict[int, np.ndarray] = {}
         self._tag_models: dict[int, AprilTagModel] = {}
         self._frame_idx: int = 0
+        self._vel_ema: dict[int, float] = {}
+        self._last_seen: dict[int, tuple[float, float, float]] = {}
 
     def reset_state(self) -> None:
         """Reset all tracking state to initial values."""
@@ -120,6 +122,8 @@ class AprilCam:
         self._tracks = {}
         self._tag_models = {}
         self._frame_idx = 0
+        self._vel_ema: dict[int, float] = {}
+        self._last_seen: dict[int, tuple[float, float, float]] = {}
 
     @staticmethod
     def _get_dict_by_family(name: str):
@@ -331,16 +335,39 @@ class AprilCam:
                     and (timestamp - float(self._tag_models[tid].last_ts)) > 1.5):
                 del self._tag_models[tid]
 
-        # Build TagRecord objects
-        flows = self.playfield.get_flows()
+        # Build TagRecord objects with EMA-smoothed velocity
         tag_records: List[TagRecord] = []
         for pts, _raw, tid in detections:
             model = self._tag_models.get(tid)
             if model is None:
                 continue
-            flow = flows.get(tid)
-            vel_px_val = flow.vel_px if flow else None
-            speed_px_val = flow.speed_px if flow else None
+
+            # Compute EMA-smoothed velocity from _last_seen positions
+            cx, cy = model.center_px
+            vel_px_val: Optional[Tuple[float, float]] = None
+            speed_px_val: Optional[float] = None
+            if tid in self._last_seen:
+                px, py, pt = self._last_seen[tid]
+                dt = max(1e-3, timestamp - pt)
+                dx = (cx - px) / dt
+                dy = (cy - py) / dt
+                inst_speed = math.hypot(dx, dy)
+                prev_ema = self._vel_ema.get(tid)
+                smoothed = (
+                    self.speed_alpha * inst_speed + (1 - self.speed_alpha) * prev_ema
+                    if prev_ema is not None
+                    else inst_speed
+                )
+                self._vel_ema[tid] = smoothed
+                # Dead-band: suppress jitter below 2.0 px/s
+                if smoothed < 2.0:
+                    vel_px_val = (0.0, 0.0)
+                    speed_px_val = 0.0
+                else:
+                    vel_px_val = (dx, dy)
+                    speed_px_val = smoothed
+            self._last_seen[tid] = (cx, cy, timestamp)
+
             tr = TagRecord.from_apriltag(
                 model,
                 vel_px=vel_px_val,
@@ -366,8 +393,6 @@ class AprilCam:
         # Window is managed by PlayfieldDisplay
 
         self.reset_state()
-        vel_ema: dict[int, float] = {}
-        last_seen: dict[int, Tuple[float, float, float]] = {}
         paused = False
         last_display: Optional[np.ndarray] = None
 
@@ -383,25 +408,7 @@ class AprilCam:
                     now = time.monotonic()
                     tag_records = self.process_frame(frame, now)
 
-                    # 6) Compute per-tag speeds for printing (UI overlay uses models)
-                    speeds: dict[int, float] = {}
-                    vel_dirs: dict[int, Tuple[float, float]] = {}
-                    for tr in tag_records:
-                        cx, cy = tr.center_px
-                        tag_id = tr.id
-                        if tag_id in last_seen:
-                            px, py, pt = last_seen[tag_id]
-                            dt = max(1e-3, now - pt)
-                            dx, dy = (cx - px), (cy - py)
-                            inst = math.hypot(dx, dy) / dt
-                            vel_dirs[tag_id] = (dx / dt, dy / dt)
-                            prev = vel_ema.get(tag_id)
-                            ema = (self.speed_alpha * inst + (1 - self.speed_alpha) * prev) if prev is not None else inst
-                            vel_ema[tag_id] = ema
-                            speeds[tag_id] = ema
-                        last_seen[tag_id] = (cx, cy, now)
-
-                    # 7) Optional logging to stdout
+                    # 6) Optional logging to stdout (velocities from process_frame)
                     if self.print_tags and tag_records:
                         lines = []
                         H = self.homography
@@ -418,8 +425,8 @@ class AprilCam:
                                     Ycm = Xw[1] / Xw[2]
                                     wtxt = f"  WX:{Xcm:7.1f}cm  WY:{Ycm:7.1f}cm"
                             ori_ang = math.degrees(tr.orientation_yaw)
-                            v = float(speeds.get(tag_id, 0.0))
-                            vx, vy = vel_dirs.get(tag_id, (0.0, 0.0))
+                            v = float(tr.speed_px) if tr.speed_px is not None else 0.0
+                            vx, vy = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
                             vang = math.degrees(math.atan2(vy, vx)) if (vx != 0.0 or vy != 0.0) else 0.0
                             line = f"ID:{tag_id:4d}  CX:{int(center[0]):4d}  CY:{int(center[1]):4d}  ORI:{ori_ang:+7.1f}\u00b0  V:{v:7.1f} px/s  VANG:{vang:+7.1f}\u00b0{wtxt}"
                             lines.append(line)
