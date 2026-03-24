@@ -1,15 +1,15 @@
 ---
-id: "004"
-title: "DetectionLoop class"
-status: todo
+id: '004'
+title: DetectionLoop class
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
+- SUC-001
+- SUC-002
 depends-on:
-  - "002"
-  - "003"
-github-issue: ""
-todo: ""
+- '002'
+- '003'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
