@@ -1,11 +1,14 @@
 ---
-id: "002"
-title: "get_frame and crop_region MCP tools"
-status: todo
-use-cases: ["SUC-001", "SUC-007"]
-depends-on: ["001"]
-github-issue: ""
-todo: ""
+id: '002'
+title: get_frame and crop_region MCP tools
+status: done
+use-cases:
+- SUC-001
+- SUC-007
+depends-on:
+- '001'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

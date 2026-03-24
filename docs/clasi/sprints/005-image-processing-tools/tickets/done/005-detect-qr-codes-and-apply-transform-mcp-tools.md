@@ -1,11 +1,14 @@
 ---
-id: "005"
-title: "detect_qr_codes and apply_transform MCP tools"
-status: todo
-use-cases: ["SUC-006", "SUC-008"]
-depends-on: ["001"]
-github-issue: ""
-todo: ""
+id: '005'
+title: detect_qr_codes and apply_transform MCP tools
+status: done
+use-cases:
+- SUC-006
+- SUC-008
+depends-on:
+- '001'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

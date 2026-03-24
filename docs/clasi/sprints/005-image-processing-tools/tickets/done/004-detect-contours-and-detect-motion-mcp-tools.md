@@ -1,11 +1,14 @@
 ---
-id: "004"
-title: "detect_contours and detect_motion MCP tools"
-status: todo
-use-cases: ["SUC-004", "SUC-005"]
-depends-on: ["001"]
-github-issue: ""
-todo: ""
+id: '004'
+title: detect_contours and detect_motion MCP tools
+status: done
+use-cases:
+- SUC-004
+- SUC-005
+depends-on:
+- '001'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
