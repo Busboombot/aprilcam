@@ -1,17 +1,17 @@
 ---
-id: "007"
-title: "Integration tests"
-status: todo
+id: '007'
+title: Integration tests
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 depends-on:
-  - "006"
-github-issue: ""
-todo: ""
+- '006'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
