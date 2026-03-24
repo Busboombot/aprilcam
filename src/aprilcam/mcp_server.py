@@ -14,6 +14,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
 from aprilcam.aprilcam import AprilCam
+from aprilcam.composite import (
+    CompositeManager,
+    compute_cross_camera_homography,
+    map_tags_to_primary,
+)
 from aprilcam.detection import DetectionLoop, RingBuffer
 from aprilcam.homography import (
     CORNER_ID_MAP,
@@ -120,6 +125,7 @@ class PlayfieldRegistry:
 server = FastMCP("aprilcam")
 registry = CameraRegistry()
 playfield_registry = PlayfieldRegistry()
+composite_manager = CompositeManager()
 
 
 @dataclass
@@ -633,6 +639,106 @@ async def get_playfield_info(
         result["homography"] = entry.homography.tolist()
 
     return [TextContent(type="text", text=json.dumps(result))]
+
+
+# ---------------------------------------------------------------------------
+# Composite tools
+# ---------------------------------------------------------------------------
+
+
+@server.tool()
+async def create_composite(
+    primary_camera_id: str,
+    secondary_camera_id: str,
+    playfield_id: str = "",
+    correspondence_points: str = "",
+) -> list[TextContent]:
+    """Create a multi-camera composite by computing cross-camera homography.
+
+    If *correspondence_points* is empty, auto-detect shared ArUco markers
+    between both cameras.  Otherwise provide a JSON string of point pairs:
+    ``[[px1,py1,sx1,sy1], ...]`` where each entry has primary x,y then
+    secondary x,y.
+    """
+    import cv2
+
+    try:
+        if correspondence_points and correspondence_points.strip():
+            # Manual correspondence mode
+            pairs = json.loads(correspondence_points)
+            if not isinstance(pairs, list) or len(pairs) < 4:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": "Need at least 4 correspondence point pairs"}
+                ))]
+            primary_pts = np.array([[p[0], p[1]] for p in pairs], dtype=np.float64)
+            secondary_pts = np.array([[p[2], p[3]] for p in pairs], dtype=np.float64)
+        else:
+            # Auto-detect shared ArUco markers
+            try:
+                cap_pri = registry.get(primary_camera_id)
+            except KeyError:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"Unknown primary camera_id '{primary_camera_id}'"}
+                ))]
+            try:
+                cap_sec = registry.get(secondary_camera_id)
+            except KeyError:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"Unknown secondary camera_id '{secondary_camera_id}'"}
+                ))]
+
+            ret1, frame1 = cap_pri.read()
+            if not ret1:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": "Failed to read frame from primary camera"}
+                ))]
+            ret2, frame2 = cap_sec.read()
+            if not ret2:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": "Failed to read frame from secondary camera"}
+                ))]
+
+            gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+            dets1 = detect_aruco_4x4(gray1)
+            dets2 = detect_aruco_4x4(gray2)
+
+            # Build id->center maps
+            map1 = {tid: pts.mean(axis=0) for pts, tid in dets1}
+            map2 = {tid: pts.mean(axis=0) for pts, tid in dets2}
+
+            shared_ids = sorted(set(map1.keys()) & set(map2.keys()))
+            if len(shared_ids) < 4:
+                return [TextContent(type="text", text=json.dumps({
+                    "error": "Not enough shared markers for homography",
+                    "shared_ids": shared_ids,
+                    "primary_ids": sorted(map1.keys()),
+                    "secondary_ids": sorted(map2.keys()),
+                }))]
+
+            primary_pts = np.array([map1[sid].tolist() for sid in shared_ids], dtype=np.float64)
+            secondary_pts = np.array([map2[sid].tolist() for sid in shared_ids], dtype=np.float64)
+
+        H, rms_error = compute_cross_camera_homography(primary_pts, secondary_pts)
+
+        comp = composite_manager.create(
+            primary_camera_id=primary_camera_id,
+            secondary_camera_id=secondary_camera_id,
+            homography=H,
+            reprojection_error=rms_error,
+            playfield_id=playfield_id if playfield_id else None,
+        )
+
+        return [TextContent(type="text", text=json.dumps({
+            "composite_id": comp.composite_id,
+            "reprojection_error": rms_error,
+            "num_correspondences": len(primary_pts),
+        }))]
+    except (ValueError, json.JSONDecodeError) as exc:
+        return [TextContent(type="text", text=json.dumps({"error": str(exc)}))]
+    except Exception as exc:
+        return [TextContent(type="text", text=json.dumps({"error": str(exc)}))]
 
 
 # ---------------------------------------------------------------------------
