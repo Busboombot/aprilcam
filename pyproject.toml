@@ -5,14 +5,28 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aprilcam"
 version = "0.20260323.6"
-description = "CLI to list cameras and detect AprilTags from a USB video stream using OpenCV"
+description = "MCP server and CLI for camera management, AprilTag/ArUco detection, playfield homography, and image processing"
 authors = [
-  { name = "Your Name" }
+  { name = "Eric Busboom" }
 ]
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["opencv", "apriltag", "camera", "computer-vision"]
+keywords = ["opencv", "apriltag", "aruco", "camera", "computer-vision", "mcp", "robotics", "homography", "fiducial"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 # opencv-contrib-python includes the aruco module with AprilTag dictionaries
 # numpy is an implicit dependency but we declare it explicitly
@@ -25,9 +39,11 @@ dependencies = [
   "mcp>=1.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/Busboombot/aprilcam"
+
 [project.scripts]
 aprilcam = "aprilcam.cli:main"
-aprilcam-mcp = "aprilcam.mcp_server:main"
 
 [project.optional-dependencies]
 playfield = ["pygame>=2.5"]
