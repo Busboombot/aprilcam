@@ -1,12 +1,14 @@
-"""Tests for TagRecord, FrameRecord, and RingBuffer."""
+"""Tests for TagRecord, FrameRecord, RingBuffer, and DetectionLoop."""
 
 import json
 import math
 import threading
 
+import pytest
+
 import numpy as np
 
-from aprilcam.detection import FrameRecord, RingBuffer, TagRecord
+from aprilcam.detection import FrameRecord, RingBuffer, TagRecord, DetectionLoop
 from aprilcam.models import AprilTag
 
 
@@ -333,3 +335,128 @@ def test_reset_state():
     assert cam._prev_gray is None
     assert cam._tracks == {}
     assert cam._tag_models == {}
+
+
+# --- DetectionLoop tests ---
+
+
+class FakeCapture:
+    """A fake video capture that returns the same image repeatedly."""
+
+    def __init__(self, image_path, max_frames=1000):
+        self._img = cv.imread(str(image_path))
+        assert self._img is not None
+        self._count = 0
+        self._max = max_frames
+
+    def read(self):
+        if self._count >= self._max:
+            return False, None
+        self._count += 1
+        return True, self._img.copy()
+
+    def release(self):
+        pass
+
+
+class FailingCapture:
+    """A fake capture that always raises on read()."""
+
+    def read(self):
+        raise RuntimeError("simulated capture failure")
+
+    def release(self):
+        pass
+
+
+def _make_loop_aprilcam():
+    """Create a headless AprilCam for DetectionLoop tests."""
+    dummy_cap = cv.VideoCapture()
+    return AprilCam(
+        index=0,
+        backend=None,
+        speed_alpha=0.5,
+        family="36h11",
+        proc_width=960,
+        headless=True,
+        cap=dummy_cap,
+    )
+
+
+def test_detectionloop_start_stop():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    fake_cap = FakeCapture(path)
+    cam = _make_loop_aprilcam()
+    buf = RingBuffer()
+    loop = DetectionLoop(source=fake_cap, aprilcam=cam, ring_buffer=buf)
+    loop.start()
+    time.sleep(0.5)
+    loop.stop()
+    assert loop.frame_count > 0
+    assert not loop.is_running
+
+
+def test_detectionloop_writes_to_ringbuffer():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    fake_cap = FakeCapture(path)
+    cam = _make_loop_aprilcam()
+    buf = RingBuffer()
+    loop = DetectionLoop(source=fake_cap, aprilcam=cam, ring_buffer=buf)
+    loop.start()
+    time.sleep(0.3)
+    loop.stop()
+    assert buf.get_latest() is not None
+
+
+def test_detectionloop_double_start_raises():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    fake_cap = FakeCapture(path, max_frames=100000)
+    cam = _make_loop_aprilcam()
+    buf = RingBuffer()
+    loop = DetectionLoop(source=fake_cap, aprilcam=cam, ring_buffer=buf)
+    loop.start()
+    try:
+        with pytest.raises(RuntimeError):
+            loop.start()
+    finally:
+        loop.stop()
+
+
+def test_detectionloop_stop_idempotent():
+    path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not path.exists():
+        pytest.skip("Test image not available")
+    fake_cap = FakeCapture(path)
+    cam = _make_loop_aprilcam()
+    buf = RingBuffer()
+    loop = DetectionLoop(source=fake_cap, aprilcam=cam, ring_buffer=buf)
+    loop.start()
+    time.sleep(0.1)
+    loop.stop()
+    loop.stop()  # second stop should not raise
+
+
+def test_detectionloop_handles_frame_errors():
+    cam = _make_loop_aprilcam()
+    buf = RingBuffer()
+    loop = DetectionLoop(source=FailingCapture(), aprilcam=cam, ring_buffer=buf)
+    loop.start()
+    time.sleep(0.5)
+    loop.stop()
+    assert loop.error is not None
+
+
+def test_detectionloop_consecutive_failure_stops():
+    cam = _make_loop_aprilcam()
+    buf = RingBuffer()
+    loop = DetectionLoop(source=FailingCapture(), aprilcam=cam, ring_buffer=buf)
+    loop.start()
+    time.sleep(1.0)
+    assert not loop.is_running  # auto-stopped due to consecutive failures
+    loop.stop()

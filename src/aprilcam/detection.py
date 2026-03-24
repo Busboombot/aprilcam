@@ -7,9 +7,13 @@ loop and ring buffer to store per-frame tag observations.
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import TYPE_CHECKING, Any, Optional, List
+
+if TYPE_CHECKING:
+    from aprilcam.aprilcam import AprilCam
 
 from aprilcam.models import AprilTag
 
@@ -139,3 +143,71 @@ class RingBuffer:
     def __len__(self) -> int:
         with self._lock:
             return len(self._buf)
+
+
+class DetectionLoop:
+    """Runs tag detection in a background thread, writing results to a RingBuffer."""
+
+    def __init__(self, source: Any, aprilcam: Any, ring_buffer: RingBuffer) -> None:
+        self._source = source
+        self._cam = aprilcam
+        self._buf = ring_buffer
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._frame_count = 0
+        self._error: Exception | None = None
+        self._max_consecutive_failures = 10
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("DetectionLoop is already running")
+        self._stop_event.clear()
+        self._frame_count = 0
+        self._error = None
+        self._cam.reset_state()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+
+    @property
+    def is_running(self) -> bool:
+        return (self._thread is not None and self._thread.is_alive()
+                and not self._stop_event.is_set())
+
+    @property
+    def frame_count(self) -> int:
+        return self._frame_count
+
+    @property
+    def error(self) -> Exception | None:
+        return self._error
+
+    def _run(self) -> None:
+        consecutive_failures = 0
+        while not self._stop_event.is_set():
+            try:
+                ret, frame = self._source.read()
+                if not ret:
+                    consecutive_failures += 1
+                    if consecutive_failures >= self._max_consecutive_failures:
+                        break
+                    continue
+                ts = time.monotonic()
+                tag_records = self._cam.process_frame(frame, ts)
+                frame_record = FrameRecord(
+                    timestamp=ts,
+                    frame_index=self._frame_count,
+                    tags=tag_records,
+                )
+                self._buf.append(frame_record)
+                self._frame_count += 1
+                consecutive_failures = 0
+            except Exception as exc:
+                self._error = exc
+                consecutive_failures += 1
+                if consecutive_failures >= self._max_consecutive_failures:
+                    break
