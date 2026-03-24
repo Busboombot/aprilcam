@@ -1,14 +1,14 @@
 ---
-id: "006"
-title: "pipx install verification"
-status: todo
+id: '006'
+title: pipx install verification
+status: done
 use-cases:
-  - SUC-006
+- SUC-006
 depends-on:
-  - "003"
-  - "004"
-github-issue: ""
-todo: ""
+- '003'
+- '004'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
