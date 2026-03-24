@@ -1,15 +1,15 @@
 ---
-id: "007"
-title: "Polish & Packaging"
-status: planning
+id: '007'
+title: Polish & Packaging
+status: done
 branch: sprint/007-polish-packaging
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
-  - SUC-006
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
