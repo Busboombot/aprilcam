@@ -1,85 +1,102 @@
-# aprilcam
+# AprilCam MCP Server
 
-CLI to list available cameras and detect AprilTags from a USB video stream using OpenCV.
+MCP server and CLI tools for AI agents to interact with cameras,
+AprilTag/ArUco fiducial marker detection, playfield homography, and
+image processing. Designed for robotics playfields where agents need
+to perceive tag positions, orientations, velocities, and visual
+features without performing their own vision processing.
 
-## Setup
+## Installation
 
-This project is configured for uv (https://docs.astral.sh/uv/), but works with any PEP 517 tool as it uses a standard `pyproject.toml`.
-
-### With uv
-
-1. Create/activate a virtual environment (uv will do this automatically if you use `uv run`).
-2. Install dependencies:
-
-```bash
-uv pip install -e .
+```
+pipx install aprilcam
 ```
 
-Or run directly without installing:
+Or with uv:
 
-```bash
-uv run aprilcam --help
+```
+uv pip install aprilcam
 ```
 
-If you prefer pip:
+## Requirements
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+- Python >= 3.9
+- opencv-contrib-python >= 4.8
+- numpy >= 1.23
+- mcp >= 1.0
+
+## MCP Server
+
+Start the MCP server (stdio transport):
+
+```
+aprilcam mcp
 ```
 
-## Usage
+### Claude Code configuration
 
-List and select a camera (default remembers the previous selection; press Enter to accept):
+Add to your `.mcp.json`:
 
-```bash
-aprilcam
+```json
+{
+  "mcpServers": {
+    "aprilcam": {
+      "command": "aprilcam",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-Skip prompt and use a specific camera index:
+## MCP Tools Reference
 
-```bash
-aprilcam --camera 0
+### Camera Management
+
+- **list_cameras** -- Enumerate available cameras with names and indices.
+- **open_camera** -- Open a camera by index or name pattern; returns a camera_id handle.
+- **capture_frame** -- Grab a single frame from a camera (base64 or file path).
+- **close_camera** -- Release a camera handle.
+
+### Playfield and Homography
+
+- **create_playfield** -- Create a playfield from a camera using ArUco corner markers; establishes the playfield polygon and homography.
+- **create_playfield_from_image** -- Create a playfield from a static image file.
+- **calibrate_playfield** -- Provide real-world measurements to map pixels to physical units.
+- **deskew_image** -- Warp a playfield view to a top-down rectangular image.
+- **get_playfield_info** -- Query playfield state: corners, calibration, polygon.
+
+### Tag Detection and Tracking
+
+- **start_detection** -- Start a persistent detection loop on a camera or playfield; maintains a ring buffer of per-frame tag records.
+- **stop_detection** -- Stop the detection loop.
+- **get_tags** -- Return the latest tag detections: id, position, orientation, velocity.
+- **get_tag_history** -- Return the last N frames of tag records from the ring buffer.
+
+### Image Processing
+
+- **get_frame** -- Raw frame capture (no processing), as base64 or file path.
+- **crop_region** -- Crop a rectangular region and return the sub-image.
+- **detect_lines** -- Hough line detection; returns line segments.
+- **detect_circles** -- Hough circle detection; returns centers and radii.
+- **detect_contours** -- Contour detection with optional filtering.
+- **detect_motion** -- Frame difference motion detection; returns changed regions.
+- **detect_qr_codes** -- QR code detection and decoding.
+- **apply_transform** -- Rotate, scale, threshold, edge-detect, or apply other OpenCV transformations.
+
+### Multi-Camera Compositing
+
+- **create_composite** -- Combine multiple cameras viewing the same playfield.
+- **get_composite_frame** -- Capture a frame from a composite source.
+- **get_composite_tags** -- Get tag detections merged across composite cameras.
+
+## CLI Commands
+
 ```
-
-Adjust how many indices to probe (0..N-1):
-
-```bash
-aprilcam --max-cams 15
+aprilcam mcp        # Start the MCP server
+aprilcam taggen     # Generate AprilTag 36h11 images (PNG)
+aprilcam arucogen   # Generate 4x4 ArUco marker images
+aprilcam cameras    # List available cameras
 ```
-
-Specify a capture backend explicitly (helpful if detection fails):
-
-```bash
-aprilcam --backend avfoundation   # macOS
-aprilcam --backend v4l2           # Linux
-aprilcam --backend msmf           # Windows
-```
-
-Controls:
-- Press `q` or `Esc` to quit the video window.
-
-Notes:
-- Requires `opencv-contrib-python` for the ArUco AprilTag detectors.
-- On macOS you may need to grant camera permission to Terminal/VS Code (System Settings > Privacy & Security > Camera). The first probe may trigger a permission prompt.
-
-## How it works
-
-- Enumerates cameras by trying indices from 0 up to `--max-cams` and checking if they open.
-- Uses OpenCV's ArUco AprilTag dictionaries (16h5, 25h9, 36h10, 36h11) to detect tags.
-- Draws a red box around each detected tag and overlays the detected ID.
-- Remembers the last selected camera in `~/.config/aprilcam/config.json`.
-
-### Generate AprilTag images (36h11)
-
-Create 800x800 px tags with a label line below into `april-tag-images/`:
-
-```bash
-taggen --out-dir april-tag-images --start 0 --end 586 --size 800
-```
-
-This produces files like `tag36h11_<id>.png` with a white background, black tag, and a centered "ID: <id>" text below the tag.
 
 ## License
 
