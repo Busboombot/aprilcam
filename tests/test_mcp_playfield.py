@@ -14,6 +14,8 @@ from aprilcam.mcp_server import (
     calibrate_playfield,
     capture_frame,
     create_playfield,
+    create_playfield_from_image,
+    deskew_image,
     get_playfield_info,
     playfield_registry,
     registry,
@@ -451,3 +453,178 @@ async def test_full_flow_create_calibrate_info_capture(clean_registries):
             registry.close(cam_id)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# create_playfield_from_image tool tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_playfield_from_image_success(clean_registries):
+    """Create a playfield from a static image file."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    result = await create_playfield_from_image(image_path=str(img_path))
+    data = json.loads(result[0].text)
+
+    assert "playfield_id" in data
+    assert data["playfield_id"].startswith("pf_")
+    assert "corners" in data
+    assert len(data["corners"]) == 4
+    assert data["calibrated"] is False
+
+    # Verify it's registered
+    entry = playfield_registry.get(data["playfield_id"])
+    assert entry.camera_id == f"file:{img_path}"
+
+
+@pytest.mark.asyncio
+async def test_create_playfield_from_image_nonexistent_file(clean_registries):
+    """Error for nonexistent image path."""
+    result = await create_playfield_from_image(image_path="/no/such/file.jpg")
+    data = json.loads(result[0].text)
+    assert "error" in data
+    assert "Failed to read" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_playfield_from_image_no_markers(clean_registries):
+    """Blank image returns error with missing corner IDs."""
+    import tempfile
+
+    # Write a blank image to a temp file
+    blank = np.zeros((480, 640, 3), dtype=np.uint8)
+    tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+    cv2.imwrite(tmp.name, blank)
+
+    result = await create_playfield_from_image(image_path=tmp.name)
+    data = json.loads(result[0].text)
+    assert "error" in data
+    assert "missing_corner_ids" in data
+    assert len(data["missing_corner_ids"]) == 4
+
+
+# ---------------------------------------------------------------------------
+# deskew_image tool tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deskew_image_base64(clean_registries):
+    """Deskew returns base64 ImageContent."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    # Create playfield from image
+    result = await create_playfield_from_image(image_path=str(img_path))
+    data = json.loads(result[0].text)
+    pf_id = data["playfield_id"]
+
+    # Deskew same image
+    result = await deskew_image(playfield_id=pf_id, image_path=str(img_path))
+    assert len(result) == 1
+    assert result[0].type == "image"
+    assert result[0].mimeType == "image/jpeg"
+    assert len(result[0].data) > 0
+
+
+@pytest.mark.asyncio
+async def test_deskew_image_file(clean_registries):
+    """Deskew returns file path; verify image dimensions differ from original."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    result = await create_playfield_from_image(image_path=str(img_path))
+    data = json.loads(result[0].text)
+    pf_id = data["playfield_id"]
+
+    result = await deskew_image(
+        playfield_id=pf_id, image_path=str(img_path), format="file"
+    )
+    data = json.loads(result[0].text)
+    assert "path" in data
+
+    deskewed = cv2.imread(data["path"])
+    original = cv2.imread(str(img_path))
+    assert deskewed is not None
+    assert deskewed.shape != original.shape
+
+
+@pytest.mark.asyncio
+async def test_deskew_image_unknown_playfield(clean_registries):
+    """Error for unknown playfield_id."""
+    result = await deskew_image(
+        playfield_id="nonexistent", image_path="/some/file.jpg"
+    )
+    data = json.loads(result[0].text)
+    assert "error" in data
+    assert "Unknown playfield_id" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_deskew_image_bad_image_path(clean_registries):
+    """Error for nonexistent image path."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    result = await create_playfield_from_image(image_path=str(img_path))
+    data = json.loads(result[0].text)
+    pf_id = data["playfield_id"]
+
+    result = await deskew_image(
+        playfield_id=pf_id, image_path="/no/such/file.jpg"
+    )
+    data = json.loads(result[0].text)
+    assert "error" in data
+    assert "Failed to read" in data["error"]
+
+
+# ---------------------------------------------------------------------------
+# File-based playfield compatibility tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_file_playfield_works_with_calibrate(clean_registries):
+    """Create from image, then calibrate, verify calibrated=True."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    result = await create_playfield_from_image(image_path=str(img_path))
+    data = json.loads(result[0].text)
+    pf_id = data["playfield_id"]
+
+    result = await calibrate_playfield(
+        playfield_id=pf_id, width=40.0, height=35.0, units="inch"
+    )
+    data = json.loads(result[0].text)
+    assert data["calibrated"] is True
+    assert abs(data["width_cm"] - 101.6) < 0.1
+
+
+@pytest.mark.asyncio
+async def test_file_playfield_works_with_info(clean_registries):
+    """Create from image, then get_playfield_info, verify corners present."""
+    img_path = TEST_DATA / "playfield_cam3_moved.jpg"
+    if not img_path.exists():
+        pytest.skip("Test image not available")
+
+    result = await create_playfield_from_image(image_path=str(img_path))
+    data = json.loads(result[0].text)
+    pf_id = data["playfield_id"]
+
+    result = await get_playfield_info(playfield_id=pf_id)
+    data = json.loads(result[0].text)
+
+    assert data["playfield_id"] == pf_id
+    assert data["camera_id"].startswith("file:")
+    assert data["corners"] is not None
+    assert len(data["corners"]) == 4
+    assert data["calibrated"] is False

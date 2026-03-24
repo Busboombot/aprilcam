@@ -434,6 +434,95 @@ async def calibrate_playfield(
 
 
 @server.tool()
+async def create_playfield_from_image(
+    image_path: str,
+) -> list[TextContent]:
+    """Create a playfield from a static image file by detecting ArUco corner markers."""
+    import cv2
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Failed to read image file '{image_path}'"}
+        ))]
+
+    pf = Playfield(detect_inverted=True)
+    pf.update(img)
+
+    poly = pf.get_polygon()
+    if poly is None:
+        # Detect which corners are missing
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        dets = detect_aruco_4x4(gray)
+        found_ids = [tid for _, tid in dets if tid in (0, 1, 2, 3)]
+        missing = [i for i in (0, 1, 2, 3) if i not in found_ids]
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Failed to detect all 4 corner markers",
+            "missing_corner_ids": missing,
+        }))]
+
+    playfield_id = f"pf_{uuid.uuid4().hex[:8]}"
+    camera_id = f"file:{image_path}"
+
+    entry = PlayfieldEntry(
+        playfield_id=playfield_id,
+        camera_id=camera_id,
+        playfield=pf,
+    )
+    playfield_registry.register(entry)
+
+    corners = poly.tolist()
+    return [TextContent(type="text", text=json.dumps({
+        "playfield_id": playfield_id,
+        "corners": corners,
+        "calibrated": False,
+    }))]
+
+
+@server.tool()
+async def deskew_image(
+    playfield_id: str,
+    image_path: str,
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Read a static image and apply a playfield's deskew transform."""
+    try:
+        entry = playfield_registry.get(playfield_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Unknown playfield_id '{playfield_id}'"}
+        ))]
+
+    import cv2
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Failed to read image file '{image_path}'"}
+        ))]
+
+    deskewed = entry.playfield.deskew(img)
+
+    ok, buf = cv2.imencode(
+        ".jpg", deskewed, [cv2.IMWRITE_JPEG_QUALITY, quality]
+    )
+    if not ok:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Failed to encode deskewed image"}
+        ))]
+
+    if format == "file":
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.write(buf.tobytes())
+        tmp.close()
+        return [TextContent(type="text", text=json.dumps({"path": tmp.name}))]
+
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return [ImageContent(type="image", data=b64, mimeType="image/jpeg")]
+
+
+@server.tool()
 async def get_playfield_info(
     playfield_id: str,
 ) -> list[TextContent]:
