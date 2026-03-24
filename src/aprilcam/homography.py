@@ -72,6 +72,39 @@ def compute_homography(pixel_pts: np.ndarray, world_pts_cm: np.ndarray) -> np.nd
     return H
 
 
+def calibrate_from_corners(
+    pixel_corners: Dict[str, Tuple[float, float]],
+    field_spec: FieldSpec,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute homography from four corner positions and a field spec.
+
+    Args:
+        pixel_corners: Dict with keys 'upper_left', 'upper_right',
+            'lower_left', 'lower_right', each a (x, y) tuple.
+        field_spec: FieldSpec with physical dimensions.
+
+    Returns:
+        Tuple of (H, pixel_pts, world_pts_cm) where H is the 3x3
+        homography matrix mapping [u,v,1] pixels to [X,Y,W] world cm,
+        pixel_pts is the 4x2 array of pixel coordinates, and
+        world_pts_cm is the 4x2 array of world coordinates in cm.
+    """
+    world_pts_cm = np.array([
+        [0.0, 0.0],
+        [field_spec.width_cm, 0.0],
+        [0.0, field_spec.height_cm],
+        [field_spec.width_cm, field_spec.height_cm],
+    ], dtype=np.float32)
+    pixel_pts = np.array([
+        pixel_corners["upper_left"],
+        pixel_corners["upper_right"],
+        pixel_corners["lower_left"],
+        pixel_corners["lower_right"],
+    ], dtype=np.float32)
+    H = compute_homography(pixel_pts, world_pts_cm)
+    return H, pixel_pts, world_pts_cm
+
+
 def run_once(cap: cv.VideoCapture) -> Optional[Dict[str, Tuple[float, float]]]:
     ok, frame = cap.read()
     if not ok:
@@ -216,20 +249,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         # Build correspondences. Pixel: detected centers. World: field coordinates in cm.
         field = FieldSpec(width_in=float(args.width), height_in=float(args.height), units=str(args.units))
-        world_pts_cm = np.array([
-            [0.0, 0.0],
-            [field.width_cm, 0.0],
-            [0.0, field.height_cm],
-            [field.width_cm, field.height_cm],
-        ], dtype=np.float32)
-        pixel_pts = np.array([
-            found["upper_left"],
-            found["upper_right"],
-            found["lower_left"],
-            found["lower_right"],
-        ], dtype=np.float32)
-
-        H = compute_homography(pixel_pts, world_pts_cm)
+        H, pixel_pts, world_pts_cm = calibrate_from_corners(found, field)
 
         # Save JSON with homography and source metadata
         out = {
