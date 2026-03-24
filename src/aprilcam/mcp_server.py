@@ -1,4 +1,15 @@
-"""MCP server exposing AprilCam camera tools."""
+"""MCP server exposing AprilCam camera, playfield, and image-processing tools.
+
+This module implements the FastMCP server that provides AI agents with
+programmatic access to camera management, playfield homography, tag
+detection loops, multi-camera compositing, and image processing
+operations. It is the primary entry point for the ``aprilcam mcp``
+subcommand and the ``aprilcam-mcp`` standalone script.
+
+All ``@server.tool()`` functions follow a consistent error-handling
+contract: on success they return structured JSON (or image data), and
+on error they return ``{"error": "<message>"}``.
+"""
 
 from __future__ import annotations
 
@@ -1559,6 +1570,15 @@ async def apply_transform(
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run the MCP server on stdio transport.
+
+    On shutdown, all detection loops are stopped and all open cameras
+    are released, regardless of whether the server exits cleanly or
+    due to an exception.
+
+    Args:
+        argv: Unused; accepted for CLI entry-point compatibility.
+    """
     try:
         server.run(transport="stdio")
     finally:
