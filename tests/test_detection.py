@@ -480,14 +480,11 @@ def test_process_frame_static_velocity_near_zero():
 
     # Check the last 5 frames: all tags should have speed_px == 0.0
     # because the EMA-smoothed speed of a static tag falls below the
-    # 2.0 px/s dead-band threshold.
+    # 10.0 px/s dead-band threshold.
     for frame_records in all_records[-5:]:
         assert len(frame_records) > 0, "Expected at least one tag detection"
         for tr in frame_records:
             assert tr.speed_px is not None, f"Tag {tr.id}: speed_px should not be None"
-            assert tr.speed_px < 2.0, (
-                f"Tag {tr.id}: speed_px={tr.speed_px} should be < 2.0 for static tags"
-            )
             assert tr.speed_px == 0.0, (
                 f"Tag {tr.id}: speed_px={tr.speed_px} should be 0.0 (dead-band)"
             )

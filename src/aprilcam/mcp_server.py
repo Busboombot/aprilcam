@@ -618,7 +618,7 @@ async def start_detection(
     cam = AprilCam(
         index=0,
         backend=None,
-        speed_alpha=0.5,
+        speed_alpha=0.1,
         family=family,
         proc_width=proc_width,
         detect_interval=detect_interval,

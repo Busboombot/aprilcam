@@ -359,8 +359,8 @@ class AprilCam:
                     else inst_speed
                 )
                 self._vel_ema[tid] = smoothed
-                # Dead-band: suppress jitter below 2.0 px/s
-                if smoothed < 2.0:
+                # Dead-band: suppress detector jitter
+                if smoothed < 10.0:
                     vel_px_val = (0.0, 0.0)
                     speed_px_val = 0.0
                 else:
