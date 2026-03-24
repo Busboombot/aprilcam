@@ -348,8 +348,8 @@ async def create_playfield(
             {"error": f"Unknown camera_id '{camera_id}'"}
         ))]
 
-    # Create playfield and try to detect corners
-    pf = Playfield(detect_inverted=True)
+    # Create playfield and try to detect corners (proc_width=0 disables downscale)
+    pf = Playfield(detect_inverted=True, proc_width=0)
     for _ in range(max(1, max_frames)):
         ret, frame = cap.read()
         if not ret:
@@ -461,7 +461,7 @@ async def create_playfield_from_image(
             {"error": f"Failed to read image file '{image_path}'"}
         ))]
 
-    pf = Playfield(detect_inverted=True)
+    pf = Playfield(detect_inverted=True, proc_width=0)
     pf.update(img)
 
     poly = pf.get_polygon()
