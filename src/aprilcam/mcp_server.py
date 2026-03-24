@@ -13,6 +13,8 @@ import numpy as np
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
+from aprilcam.aprilcam import AprilCam
+from aprilcam.detection import DetectionLoop, RingBuffer
 from aprilcam.homography import (
     CORNER_ID_MAP,
     FieldSpec,
@@ -118,6 +120,19 @@ class PlayfieldRegistry:
 server = FastMCP("aprilcam")
 registry = CameraRegistry()
 playfield_registry = PlayfieldRegistry()
+
+
+@dataclass
+class DetectionEntry:
+    """A running detection loop bound to a source (camera or playfield)."""
+
+    source_id: str
+    loop: DetectionLoop
+    ring_buffer: RingBuffer
+    aprilcam: AprilCam
+
+
+detection_registry: dict[str, DetectionEntry] = {}
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -553,6 +568,138 @@ async def get_playfield_info(
 
 
 # ---------------------------------------------------------------------------
+# Detection tools
+# ---------------------------------------------------------------------------
+
+
+@server.tool()
+async def start_detection(
+    source_id: str,
+    family: str = "36h11",
+    proc_width: int = 960,
+    detect_interval: int = 1,
+    use_clahe: bool = False,
+    use_sharpen: bool = False,
+) -> list[TextContent]:
+    """Start a tag detection loop on a camera or playfield."""
+    if source_id in detection_registry:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Detection already running on '{source_id}'"}
+        ))]
+
+    import cv2
+
+    # Resolve source to a capture object and optional playfield data
+    cap = None
+    homography = None
+    playfield_poly = None
+
+    try:
+        pf_entry = playfield_registry.get(source_id)
+        try:
+            cap = registry.get(pf_entry.camera_id)
+        except KeyError:
+            return [TextContent(type="text", text=json.dumps(
+                {"error": f"Underlying camera '{pf_entry.camera_id}' is no longer open"}
+            ))]
+        homography = pf_entry.homography
+        poly = pf_entry.playfield.get_polygon()
+        if poly is not None:
+            playfield_poly = poly
+    except KeyError:
+        # Not a playfield — try camera registry
+        try:
+            cap = registry.get(source_id)
+        except KeyError:
+            return [TextContent(type="text", text=json.dumps(
+                {"error": f"Unknown source_id '{source_id}'"}
+            ))]
+
+    cam = AprilCam(
+        index=0,
+        backend=None,
+        speed_alpha=0.5,
+        family=family,
+        proc_width=proc_width,
+        detect_interval=detect_interval,
+        use_clahe=use_clahe,
+        use_sharpen=use_sharpen,
+        headless=True,
+        cap=cv2.VideoCapture(),
+        homography=homography,
+        playfield_poly_init=playfield_poly,
+    )
+
+    buf = RingBuffer(maxlen=300)
+    loop = DetectionLoop(source=cap, aprilcam=cam, ring_buffer=buf)
+    loop.start()
+
+    detection_registry[source_id] = DetectionEntry(
+        source_id=source_id,
+        loop=loop,
+        ring_buffer=buf,
+        aprilcam=cam,
+    )
+
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "status": "started"}
+    ))]
+
+
+@server.tool()
+async def stop_detection(source_id: str) -> list[TextContent]:
+    """Stop a running tag detection loop."""
+    entry = detection_registry.pop(source_id, None)
+    if entry is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"No detection running on '{source_id}'"}
+        ))]
+
+    entry.loop.stop()
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "status": "stopped"}
+    ))]
+
+
+@server.tool()
+async def get_tags(source_id: str) -> list[TextContent]:
+    """Return the latest tag detections from a running detection loop."""
+    entry = detection_registry.get(source_id)
+    if entry is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"No detection running on '{source_id}'"}
+        ))]
+
+    latest = entry.ring_buffer.get_latest()
+    if latest is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"source_id": source_id, "frame": None, "tags": []}
+        ))]
+
+    result = latest.to_dict()
+    result["source_id"] = source_id
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def get_tag_history(
+    source_id: str,
+    num_frames: int = 30,
+) -> list[TextContent]:
+    """Return recent tag detection history from a running detection loop."""
+    entry = detection_registry.get(source_id)
+    if entry is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"No detection running on '{source_id}'"}
+        ))]
+
+    records = entry.ring_buffer.get_last_n(num_frames)
+    return [TextContent(type="text", text=json.dumps(
+        {"source_id": source_id, "frames": [r.to_dict() for r in records]}
+    ))]
+
+
+# ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
 
@@ -561,6 +708,13 @@ def main(argv: list[str] | None = None) -> None:
     try:
         server.run(transport="stdio")
     finally:
+        # Stop all detection loops before closing cameras
+        for entry in list(detection_registry.values()):
+            try:
+                entry.loop.stop()
+            except Exception:
+                pass
+        detection_registry.clear()
         registry.close_all()
 
 
