@@ -127,8 +127,25 @@ server cannot call these workflows. The agent needs to:
   world coordinates within tolerance.
 - Verify `FieldSpec` unit conversions (inch to cm).
 
+**Real-image tests** (`tests/test_playfield_real.py`):
+- Mock the camera to return captured test images from `tests/data/`
+  (`playfield_cam3.jpg`, `playfield_cam3_moved.jpg`) instead of a
+  live camera feed.
+- Verify ArUco corner detection finds all 4 corners (IDs 0-3) in
+  both images.
+- Verify `create_playfield` succeeds and returns a valid polygon from
+  the real images.
+- Verify `compute_homography()` against `data/homography.json` — the
+  computed matrix from detected corners should match the reference
+  within tolerance.
+- Verify `deskew()` produces a rectangular top-down image from the
+  real playfield capture.
+- Verify AprilTag detection finds the expected tags (IDs 0-6, 30 in
+  the first image) after deskew.
+
 **Integration tests** (`tests/test_mcp_playfield.py`):
-- Mock the camera registry to return synthetic frames.
+- Mock the camera registry to return captured test images from
+  `tests/data/` (not synthetic — real playfield frames).
 - Call `create_playfield` tool handler and verify registry state.
 - Call `calibrate_playfield` and verify homography is stored.
 - Call `get_playfield_info` and verify JSON schema.
@@ -148,6 +165,78 @@ server cannot call these workflows. The agent needs to:
   Only one playfield per camera is supported in this sprint.
 - The `PlayfieldRegistry` is a simple dict in the server module; no
   persistence across server restarts.
+
+### Homography File Specification (`data/homography.json`)
+
+The `calibrate_playfield` tool (and the existing `homocal` CLI) persist
+calibration results to `data/homography.json`. This file is the
+canonical on-disk representation of a playfield calibration and is
+loaded by downstream tools (detection loop, CLI viewers) at startup.
+
+**Schema:**
+
+```json
+{
+  "units": "cm",
+  "width_cm": 102.0,
+  "height_cm": 89.0,
+  "pixel_points": [
+    [269.25, 91.0],
+    [961.25, 94.75],
+    [255.0, 692.0],
+    [954.25, 711.0]
+  ],
+  "world_points_cm": [
+    [0.0, 0.0],
+    [102.0, 0.0],
+    [0.0, 89.0],
+    [102.0, 89.0]
+  ],
+  "homography": [
+    [0.1528, 0.0036, -41.47],
+    [-0.0008, 0.1514, -13.56],
+    [3.65e-05, 1.89e-05, 1.0]
+  ],
+  "note": "Maps [u,v,1]^T pixels to [X,Y,W]^T; use X/W,Y/W in centimeters.",
+  "source": {
+    "type": "camera",
+    "index": 1,
+    "backend": "auto",
+    "cap_width": null,
+    "cap_height": null
+  },
+  "detect_inverted": true
+}
+```
+
+**Field definitions:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `units` | `str` | Always `"cm"` for now |
+| `width_cm` | `float` | Physical width of the playfield in centimeters (UL→UR distance) |
+| `height_cm` | `float` | Physical height of the playfield in centimeters (UL→LL distance) |
+| `pixel_points` | `float[4][2]` | Detected ArUco corner centers in pixel coords, order: UL, UR, LL, LR |
+| `world_points_cm` | `float[4][2]` | Corresponding world coordinates in cm, order: UL, UR, LL, LR |
+| `homography` | `float[3][3]` | 3×3 projective matrix mapping `[u,v,1]` → `[X,Y,W]`; world = `(X/W, Y/W)` cm |
+| `note` | `str` | Human-readable description of the homography convention |
+| `source` | `object` | Camera source metadata (type, index, backend, resolution hints) |
+| `detect_inverted` | `bool` | Whether inverted marker detection was enabled during calibration |
+
+**Corner ordering:** `pixel_points` and `world_points_cm` use the same
+index order — `[0]` = upper-left, `[1]` = upper-right, `[2]` = lower-left,
+`[3]` = lower-right. This matches the `CORNER_ID_MAP` in `homography.py`.
+
+**Loading:** The MCP server should load this file at startup (if it exists)
+to pre-populate a calibrated playfield, so that an agent reconnecting to
+the server doesn't need to re-calibrate.
+
+### Test Image
+
+A reference playfield image is saved at `tests/data/playfield_cam3.jpg`
+(captured from Camera 3 — the B&W overhead camera). This image contains
+all 4 ArUco corner markers (IDs 0-3) and 8 AprilTags (IDs 0-6, 30) and
+should be used for offline homography and detection tests.
 
 ## GitHub Issues
 
