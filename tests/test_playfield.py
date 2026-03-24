@@ -44,6 +44,27 @@ def test_order_poly_canonical():
     np.testing.assert_allclose(result, expected, atol=1.0)
 
 
+def test_deskew_masks_outside_polygon():
+    """Deskew should mask out content outside the playfield polygon."""
+    # Create image filled with red (outside content)
+    img = np.full((480, 640, 3), (0, 0, 255), dtype=np.uint8)
+    # Paint green inside the polygon region
+    poly = np.array([[100, 50], [500, 50], [500, 400], [100, 400]], dtype=np.int32)
+    cv.fillConvexPoly(img, poly, (0, 255, 0))
+    pf = Playfield(polygon=poly.astype(np.float32))
+    result = pf.deskew(img)
+    # The output should contain NO red pixels (outside content was masked)
+    red_channel = result[:, :, 2]  # BGR -> R
+    green_channel = result[:, :, 1]  # BGR -> G
+    # Check that no pixel is pure red (0,0,255)
+    is_red = (result[:, :, 0] == 0) & (result[:, :, 1] == 0) & (result[:, :, 2] == 255)
+    assert not np.any(is_red), "Red (outside) pixels found in deskewed output"
+    # Most of the output should be green (inside content)
+    is_green = (result[:, :, 0] == 0) & (result[:, :, 1] == 255) & (result[:, :, 2] == 0)
+    green_ratio = np.sum(is_green) / (result.shape[0] * result.shape[1])
+    assert green_ratio > 0.9, f"Expected >90% green pixels, got {green_ratio:.1%}"
+
+
 def test_deskew_output_dimensions():
     """Deskew produces correct output dimensions from injected polygon."""
     poly = np.array([[100, 50], [500, 50], [500, 400], [100, 400]], dtype=np.float32)

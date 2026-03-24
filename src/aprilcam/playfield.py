@@ -132,7 +132,11 @@ class Playfield:
         src = np.array([UL, UR, LR, LL], dtype=np.float32)
         dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
         M = cv.getPerspectiveTransform(src, dst)
-        return cv.warpPerspective(frame_bgr, M, (out_w, out_h))
+        # Mask source to playfield polygon so outside pixels don't bleed in
+        mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+        cv.fillConvexPoly(mask, self._poly.astype(np.int32), 255)
+        masked = cv.bitwise_and(frame_bgr, frame_bgr, mask=mask)
+        return cv.warpPerspective(masked, M, (out_w, out_h))
 
     # --- tag flow integration ---
     def add_tag(self, tag: AprilTag) -> None:
