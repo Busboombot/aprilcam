@@ -15,6 +15,7 @@ from aprilcam.mcp_server import (
     detect_lines,
     detect_motion,
     detect_qr_codes,
+    frame_registry,
     get_frame,
     playfield_registry,
     registry,
@@ -66,6 +67,7 @@ def _clean_registries():
     """Ensure registries and motion state are empty before and after each test."""
     yield
     _motion_prev_frames.clear()
+    frame_registry.clear()
     for pid in list(playfield_registry._playfields):
         playfield_registry.remove(pid)
     for cid in list(registry._cameras):
