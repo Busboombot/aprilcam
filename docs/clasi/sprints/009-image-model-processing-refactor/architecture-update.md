@@ -1,136 +1,167 @@
 ---
 sprint: "009"
-status: draft
+status: reviewed
 ---
 
 # Architecture Update -- Sprint 009: Image Model & Processing Refactor
 
 ## What Changed
 
-### New: `ImageFrame` dataclass (in `models.py`)
+### New: `FrameEntry` dataclass (in `mcp_server.py`)
 
-A unified image container that separates raw data from processing results:
+Server-side resource representing a captured image with three slots:
 
 ```python
 @dataclass
-class ImageFrame:
-    raw: np.ndarray                    # Original captured image (BGR)
-    source: str                        # e.g. "cam_0", "file:path.jpg"
-    timestamp: float                   # Time of capture
-    width: int                         # Derived from raw.shape
-    height: int                        # Derived from raw.shape
+class FrameEntry:
+    frame_id: str
+    source: str               # "cam_0", "file:/path/to/img.jpg"
+    timestamp: float
 
-    # Homography / calibration (optional)
-    homography: Optional[np.ndarray] = None
-    calibration_units: Optional[str] = None
+    # --- Three image slots ---
+    original: np.ndarray      # Slot 1: raw captured image, never modified
+    deskewed: np.ndarray      # Slot 2: deskewed (or reference to original)
+    processed: np.ndarray     # Slot 3: pipeline output (starts as ref to slot 2)
 
-    # Processed variant
-    processed: Optional[np.ndarray] = None
-    processing_steps: List[str] = field(default_factory=list)
+    # --- Metadata ---
+    is_deskewed: bool = False
+    operations_applied: List[str] = field(default_factory=list)
+    results: Dict[str, Any] = field(default_factory=dict)
 
-    # Detection results
-    aruco_corners: Optional[Dict[int, np.ndarray]] = None  # ID -> 4x2 corners
-    apriltags: Optional[List[AprilTag]] = None
+    # Detection results cached on the frame
+    aruco_corners: Optional[Dict] = None
+    apriltags: Optional[List] = None
 ```
+
+**Slot promotion logic:**
+1. On create: `original = captured`. `deskewed = original` (same ref).
+   `processed = deskewed` (same ref). Zero copies.
+2. On deskew: `deskewed = warp(original)` (new array).
+   `processed = deskewed` (ref updated). `is_deskewed = True`.
+3. On pipeline ops: read from `processed`. Detection ops store results
+   without modifying the array. Transform ops write new array to `processed`.
+4. `get_frame_image` stages: `"original"` -> slot 1, `"deskewed"` -> slot 2,
+   `"processed"` -> slot 3.
+
+### New: `FrameRegistry` (in `mcp_server.py`)
+
+Ring-buffer-backed registry for FrameEntry objects. Mirrors CameraRegistry
+pattern with auto-eviction:
+
+- Capacity: 300 entries (configurable)
+- Deterministic IDs: `frm_000`, `frm_001`, ...
+- Auto-evicts oldest frame when full
+- `release_frame` for explicit early cleanup
+- Thread-safe (locking like existing RingBuffer)
+
+### New MCP Tools: Frame Lifecycle
+
+| Tool | Purpose |
+|------|---------|
+| `create_frame(source_id, operations?)` | Capture from camera/playfield, optional pipeline |
+| `create_frame_from_image(image_path, operations?)` | Load from disk, optional pipeline |
+| `process_frame(frame_id, operations)` | Batch operations on existing frame |
+| `get_frame_image(frame_id, stage)` | Inspect original/deskewed/processed |
+| `save_frame(frame_id, output_dir)` | Write frame directory to disk |
+| `release_frame(frame_id)` | Explicit cleanup |
+| `list_frames()` | Show ring buffer contents |
+
+### New MCP Tool: `stream_tags`
+
+Replaces `start_detection` internally. Accepts `operations` list (fixed at
+start). Continuous loop: capture -> run pipeline -> write TagRecords to
+detection RingBuffer, frames to frame RingBuffer. `get_tags` / `get_tag_history`
+read from detection RingBuffer as before.
+
+### Batch Operations
+
+`process_frame` accepts an ordered list of operation flags:
+
+| Operation | Reads from | Writes to |
+|-----------|-----------|-----------|
+| `"deskew"` | `original` | `deskewed` (new array), `processed` (ref update) |
+| `"detect_tags"` | `processed` | `results["detect_tags"]`, `apriltags` |
+| `"detect_aruco"` | `processed` | `results["detect_aruco"]`, `aruco_corners` |
+| `"detect_lines"` | `processed` | `results["detect_lines"]` |
+| `"detect_circles"` | `processed` | `results["detect_circles"]` |
+| `"detect_contours"` | `processed` | `results["detect_contours"]` |
+| `"detect_qr"` | `processed` | `results["detect_qr"]` |
+
+Operations execute in order. All results returned in one response.
 
 ### Modified: `AprilTag` dataclass (in `models.py`)
 
-- Retains: `id`, `corners_px`, `center_px`, `top_dir_px`, `orientation_yaw`,
-  `world_xy`, `frame`, `in_playfield`, `last_ts`
-- Removes: velocity fields from per-detection data. Velocity is now
-  exclusively computed by `Playfield` from flow history.
-- Adds: `family: str` field (e.g. "36h11", "25h9")
+- Adds: `family: str` field (e.g. "36h11"). Populated by modifying
+  `AprilCam.detect_apriltags()` to thread the family name through detections.
+- No velocity fields exist on AprilTag (unchanged).
 
 ### Modified: `AprilTagFlow` (in `models.py`)
 
-- Still maintains position history deque
-- `vel_px` and `speed_px` properties remain but are set by Playfield
-  when it computes velocity, not self-computed from internal history
-- May be simplified or merged into Playfield's internal tracking
-
-### Modified: `image_processing.py`
-
-All `process_*` functions already accept `np.ndarray`. This sprint
-ensures no function reaches back to a camera or source_id. The module
-becomes a pure function library: `f(ndarray, params) -> result`.
-
-No signature changes needed — the functions already take arrays. The
-change is ensuring callers pass arrays (not capturing frames internally).
+- Remains a separate class with history deque
+- Velocity self-computation removed
+- `vel_px` and `speed_px` set externally by Playfield
 
 ### Modified: `Playfield` (in `playfield.py`)
 
-- Owns tag flow tracking (already does via `_flows` dict)
-- Adds velocity computation: compares current and previous tag positions
-  in flow history, computes `vel_px`, `speed_px`, `vel_world`, `speed_world`
-- ArUco corner detection (`update()`) remains one-time setup — called once
-  during `create_playfield`, not every frame
-- `add_tag()` now computes and stores velocity on the flow
+- Adds EMA + dead-band velocity computation (adopted from `AprilCam.process_frame()`)
+- Parameters configurable via `__init__()`: EMA alpha, dead-band threshold
+- `add_tag()` computes velocity and stores on the flow
+- ArUco corner detection remains one-time setup
 
 ### Modified: `AprilCam` (in `aprilcam.py`)
 
-- `process_frame()` returns an `ImageFrame` populated with detection results
-  instead of directly returning `List[TagRecord]`
-- Velocity computation removed from `process_frame()` — delegated to Playfield
-- Frame preprocessing (CLAHE, sharpening) recorded in `ImageFrame.processing_steps`
-
-### Modified: `mcp_server.py`
-
-- All image-returning tools resolve `source_id` to a captured frame early,
-  construct an `ImageFrame`, then pass `frame.raw` to processing functions
-- Detection loop feeds `ImageFrame` objects to Playfield
-- No external API changes — same tool names, same parameters, same response shapes
+- Velocity computation (`_vel_ema`, `_last_seen`) removed — moved to Playfield
+- `process_frame()` returns detection results suitable for FrameEntry
 
 ### Modified: `detection.py`
 
-- `DetectionLoop` produces `ImageFrame` objects internally
-- `TagRecord` construction uses data from `ImageFrame.apriltags` + velocity
-  from Playfield flow
+- `DetectionLoop` uses batch-operation pipeline internally
+- `TagRecord` construction remains in DetectionLoop
 - `RingBuffer` and `FrameRecord` unchanged
+
+### Modified: `mcp_server.py`
+
+- Existing per-operation tools become thin wrappers: create transient frame,
+  run operation, return results. Backward compatible.
+- `resolve_source()` still used internally for backward-compat tools
 
 ## Why
 
-The current architecture tightly couples camera capture with image processing
-and tag tracking. This prevents:
-
-1. **Testing without cameras** — processing functions need a `source_id` to
-   capture a frame, making unit tests require camera mocks or hardware
-2. **Static image analysis** — no way to run the detection pipeline on an
-   image file without opening a fake camera
-3. **Clear ownership of velocity** — velocity is computed in multiple places
-   (AprilTag, AprilTagFlow, AprilCam) when it conceptually belongs in Playfield
-   which has the temporal context
-
-This refactor establishes clear data flow:
-`Camera -> ImageFrame -> Processing (pure functions on arrays) -> Playfield (temporal tracking)`
+1. **Testability** — `create_frame_from_image` enables full pipeline testing
+   with static images, no camera needed
+2. **Inspectability** — `get_frame_image` at each stage lets agents understand
+   what the pipeline does
+3. **Efficiency** — batch operations eliminate multiple round-trips for common
+   multi-operation workflows
+4. **Memory safety** — ring buffer bounds frame storage, auto-evicts old frames
+5. **Velocity ownership** — single source of truth in Playfield with proven
+   EMA + dead-band algorithm
 
 ## Impact on Existing Components
 
-- **MCP external API**: No changes. Tools accept the same parameters and
-  return the same response shapes.
-- **Detection loop**: Internal change only. Produces ImageFrame instead of
-  raw arrays, but RingBuffer/FrameRecord interface unchanged.
-- **Tests**: Existing tests need updates for new function signatures and
-  return types. New tests added for ImageFrame and array-based processing.
-- **CLI tools**: No changes (they don't use image processing directly).
+- **MCP external API**: Existing tools unchanged. New tools are additive.
+- **Detection loop**: Internal change — uses batch pipeline, writes to both
+  frame and detection ring buffers.
+- **Tests**: Existing tests updated. New tests for frame lifecycle, batch
+  operations, static image flow.
+- **CLI tools**: No changes.
 
 ## Migration Concerns
 
-- All changes are internal refactoring — no external API changes
+- All changes are internal refactoring + additive MCP tools
 - No data migration needed
-- Existing test images in `tests/data/` used for new tests
-- Backward compatibility: MCP tool responses unchanged
+- Backward compatibility: existing tool responses unchanged
+- Velocity behavioral parity: Playfield EMA must match current AprilCam output
 
-## Open Questions
+## Decisions
 
-1. Should `ImageFrame` be immutable (frozen dataclass) or mutable? Mutable
-   allows progressive enrichment (detect corners, then detect tags, then
-   add metadata). Frozen requires creating new instances at each step.
-
-2. Should `AprilTagFlow` remain a separate class, or should its tracking
-   be fully absorbed into `Playfield._flows`? Currently `AprilTagFlow` is
-   a thin wrapper around a deque of `AprilTag` snapshots — Playfield could
-   own this directly.
-
-3. Where should `TagRecord` construction happen? Currently in `DetectionLoop`.
-   Options: (a) keep in DetectionLoop, (b) move to Playfield since it now
-   owns velocity, (c) construct in ImageFrame as a convenience method.
+1. **FrameEntry is mutable** — progressive enrichment through pipeline.
+2. **Three image slots** — original (immutable), deskewed (copy or ref),
+   processed (pipeline output). Zero-copy when no deskew applied.
+3. **Frame ring buffer (300 entries)** — auto-eviction, bounded memory.
+4. **Create tools accept optional operations** — one call for capture + process.
+5. **Keep both old and new tools** — no breaking changes.
+6. **Stream pipeline fixed at start** — stop and restart to change.
+7. **AprilTagFlow stays** — Playfield sets velocity externally.
+8. **Playfield uses EMA + dead-band velocity** — from AprilCam.
+9. **TagRecord construction stays in DetectionLoop**.

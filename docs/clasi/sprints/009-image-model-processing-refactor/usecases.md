@@ -1,79 +1,97 @@
 ---
-status: draft
+status: reviewed
 ---
 
 # Sprint 009 Use Cases
 
-## SUC-001: Process a Static Image Without a Camera
+## SUC-001: Create and Process a Frame From a Static Image
 Parent: UC-003 (Tag Detection & Tracking)
 
-- **Actor**: Developer / Test harness
+- **Actor**: AI agent / Test harness
 - **Preconditions**: A JPEG/PNG image file exists on disk
 - **Main Flow**:
-  1. Load image from disk as a NumPy array
-  2. Construct an `ImageFrame` with the raw array and source metadata
-  3. Run tag detection on the ImageFrame's raw array
-  4. Populated ImageFrame now holds detected ArUco corners and AprilTags
-  5. Run additional processing (detect_lines, detect_contours, etc.) on
-     the raw array — returns structured results
-- **Postconditions**: All detection and processing results are available
-  without any camera having been opened
+  1. Call `create_frame_from_image(path, operations=["detect_tags"])`
+  2. Receive `frame_id` and detection results in one response
+  3. Call `get_frame_image(frame_id, "original")` to inspect the raw image
+  4. Call `get_frame_image(frame_id, "processed")` to see pipeline output
+  5. Call `save_frame(frame_id, output_dir)` to persist all three slots
+- **Postconditions**: Frame exists in registry with detection results.
+  No camera was opened.
 - **Acceptance Criteria**:
-  - [ ] `ImageFrame` can be constructed from a file-loaded ndarray
-  - [ ] Tag detection works on ImageFrame without a camera handle
-  - [ ] Image processing functions accept ndarray, not source_id
+  - [ ] `create_frame_from_image` loads image and returns frame_id
+  - [ ] Optional operations run during creation
+  - [ ] `get_frame_image` returns image at each stage
+  - [ ] `save_frame` writes directory with original.jpg, deskewed.jpg,
+        processed.jpg, metadata.json
 
-## SUC-002: MCP Tool Uses ImageFrame Internally
+## SUC-002: Batch Operations on a Camera Frame
 Parent: UC-003, UC-005 (Image Processing Tools)
 
 - **Actor**: AI agent (via MCP)
-- **Preconditions**: Camera is open, MCP server running
+- **Preconditions**: Camera is open
 - **Main Flow**:
-  1. Agent calls `detect_lines(source_id="cam_0")`
-  2. MCP server resolves source_id to camera, captures frame
-  3. Server constructs an `ImageFrame` from the captured ndarray
-  4. Server calls `process_detect_lines(frame.raw)` with the raw array
-  5. Server returns structured line data to agent
-- **Postconditions**: MCP external API unchanged; internal pipeline uses
-  ImageFrame and array-based processing
+  1. Call `create_frame(source_id="cam_0")`
+  2. Call `process_frame(frame_id, ["deskew", "detect_tags", "detect_lines"])`
+  3. Receive all results in one response
+  4. Call `get_frame_image(frame_id, "deskewed")` to inspect deskewed image
+  5. Call `get_frame_image(frame_id, "processed")` to inspect final result
+- **Postconditions**: Frame holds deskewed image in slot 2, detection and
+  line results in results dict
 - **Acceptance Criteria**:
-  - [ ] MCP tools resolve source_id to ImageFrame early in the call
-  - [ ] Processing functions receive ndarray from ImageFrame
-  - [ ] External MCP API unchanged (same params, same response shape)
+  - [ ] Operations execute in order
+  - [ ] Deskew updates slot 2, detection reads from slot 3
+  - [ ] All results returned in one response
+  - [ ] Frame inspectable at each stage
 
 ## SUC-003: Playfield Computes Tag Velocity From History
-Parent: UC-003 (Tag Detection & Tracking)
-
-- **Actor**: Detection loop / Playfield
-- **Preconditions**: Playfield created, detection loop running
-- **Main Flow**:
-  1. Detection loop captures a frame, runs tag detection
-  2. Detected tags (position, orientation) are passed to Playfield
-  3. Playfield adds tags to its flow history
-  4. Playfield computes velocity from the last N positions in history
-  5. Agent queries `get_tags()` — response includes velocity from Playfield
-- **Postconditions**: Velocity is computed by Playfield from positional
-  history, not by individual tag objects or per-frame processing
-- **Acceptance Criteria**:
-  - [ ] Playfield owns velocity computation
-  - [ ] Individual tag detection results carry position but not velocity
-  - [ ] `get_tags()` returns velocity sourced from Playfield flow history
-
-## SUC-004: Test Detection With Static Test Images
 Parent: UC-003
 
-- **Actor**: Test harness (pytest)
-- **Preconditions**: Test images exist in `tests/data/`
+- **Actor**: Detection loop / Playfield
+- **Preconditions**: Playfield created, detection running
 - **Main Flow**:
-  1. Test loads `playfield_cam3.jpg` as ndarray
-  2. Test creates ImageFrame from the array
-  3. Test runs ArUco corner detection on the array
-  4. Test runs AprilTag detection on the array
-  5. Test asserts expected tags are found at expected positions
-  6. For velocity testing: test feeds two frames (original + moved) to
-     Playfield sequentially, asserts velocity is computed
-- **Postconditions**: Full detection pipeline tested without camera hardware
+  1. Detection loop captures frame, detects tags
+  2. Tags passed to Playfield via `add_tag()`
+  3. Playfield computes velocity using EMA + dead-band
+  4. Agent queries `get_tags()` — velocity from Playfield
+- **Postconditions**: Velocity computed by Playfield, not per-frame
 - **Acceptance Criteria**:
-  - [ ] Tests use static images from `tests/data/`
-  - [ ] No camera fixture or mock needed for detection tests
-  - [ ] Velocity test uses two-frame sequence through Playfield
+  - [ ] Playfield owns velocity computation (EMA + dead-band)
+  - [ ] Individual tag detections carry position but not velocity
+  - [ ] `get_tags()` returns velocity sourced from Playfield
+
+## SUC-004: Stream Tags With Fixed Pipeline
+Parent: UC-003
+
+- **Actor**: AI agent
+- **Preconditions**: Camera open, playfield created
+- **Main Flow**:
+  1. Call `stream_tags(source_id, operations=["deskew", "detect_tags"])`
+  2. Loop runs continuously: capture -> deskew -> detect -> ring buffer
+  3. Agent calls `get_tags()` / `get_tag_history()` to read results
+  4. Frames cycle through frame ring buffer (accessible by frame_id)
+  5. Agent calls `stop_stream()` to end
+- **Postconditions**: Tag history in detection ring buffer, recent frames
+  in frame ring buffer
+- **Acceptance Criteria**:
+  - [ ] Pipeline fixed at start, runs every frame
+  - [ ] Results in detection ring buffer (TagRecords)
+  - [ ] Frames in frame ring buffer (300 entries)
+  - [ ] get_tags / get_tag_history work as before
+
+## SUC-005: Access Earlier Frames From Ring Buffer
+Parent: UC-003
+
+- **Actor**: AI agent
+- **Preconditions**: Frames have been created (manually or via streaming)
+- **Main Flow**:
+  1. Call `list_frames()` to see available frames
+  2. Pick an earlier frame_id
+  3. Call `get_frame_image(frame_id, "original")` to inspect it
+  4. Call `process_frame(frame_id, ["detect_contours"])` to run new
+     operations on an old frame
+- **Postconditions**: Earlier frame retrieved and further processed
+- **Acceptance Criteria**:
+  - [ ] Ring buffer holds up to 300 frames
+  - [ ] Old frames auto-evict when buffer is full
+  - [ ] Earlier frames accessible by frame_id
+  - [ ] Can run new operations on earlier frames
