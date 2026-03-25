@@ -34,6 +34,8 @@ class AprilCam:
         detect_interval: int = 1,
         use_clahe: bool = False,
         use_sharpen: bool = False,
+        use_highpass: bool = True,
+        highpass_ksize: int = 51,
         april_min_wb_diff: float = 3.0,
         april_min_cluster_pixels: int = 5,
         april_max_line_fit_mse: float = 20.0,
@@ -86,6 +88,8 @@ class AprilCam:
         self.detect_interval = int(detect_interval)
         self.use_clahe = bool(use_clahe)
         self.use_sharpen = bool(use_sharpen)
+        self.use_highpass = bool(use_highpass)
+        self.highpass_ksize = int(highpass_ksize)
         self.april_min_wb_diff = float(april_min_wb_diff)
         self.april_min_cluster_pixels = int(april_min_cluster_pixels)
         self.april_max_line_fit_mse = float(april_max_line_fit_mse)
@@ -177,9 +181,27 @@ class AprilCam:
         return detectors
 
     @staticmethod
-    def _maybe_preprocess(gray: np.ndarray, use_clahe: bool, use_sharpen: bool) -> np.ndarray:
-        """Optionally apply CLAHE and/or sharpening to a grayscale image."""
+    def _maybe_preprocess(
+        gray: np.ndarray,
+        use_clahe: bool,
+        use_sharpen: bool,
+        use_highpass: bool = True,
+        highpass_ksize: int = 51,
+    ) -> np.ndarray:
+        """Optionally apply preprocessing to a grayscale image.
+
+        High-pass filtering is on by default — it subtracts a blurred
+        version of the image, removing low-frequency glare gradients
+        while preserving the high-frequency edges that define tags.
+        """
         out = gray
+        if use_highpass:
+            k = highpass_ksize
+            if k % 2 == 0:
+                k += 1
+            blurred = cv.GaussianBlur(out, (k, k), 0)
+            hp = cv.subtract(out, blurred)
+            out = cv.normalize(hp, None, 0, 255, cv.NORM_MINMAX).astype(np.uint8)
         if use_clahe:
             clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             out = clahe.apply(out)
@@ -204,7 +226,10 @@ class AprilCam:
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
             gray = cv.resize(gray, (new_w, new_h), interpolation=cv.INTER_AREA)
-        gray = self._maybe_preprocess(gray, self.use_clahe, self.use_sharpen)
+        gray = self._maybe_preprocess(
+            gray, self.use_clahe, self.use_sharpen,
+            self.use_highpass, self.highpass_ksize,
+        )
 
         detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
         for d, p, fam in self.detectors:

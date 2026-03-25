@@ -342,6 +342,7 @@ def run_live_view(
     family: str = "36h11",
     detect_aruco: bool = False,
     proc_width: int = 0,
+    use_highpass: bool = True,
     use_clahe: bool = False,
     use_sharpen: bool = False,
 ) -> None:
@@ -387,6 +388,7 @@ def run_live_view(
         use_clahe=use_clahe,
         use_sharpen=use_sharpen,
         detect_aruco_4x4=detect_aruco,
+        use_highpass=use_highpass,
         headless=False,
         deskew_overlay=deskew,
         print_tags=True,

@@ -40,6 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Processing width for detection downscale (0 = no downscale)",
     )
     parser.add_argument(
+        "--no-highpass", action="store_true",
+        help="Disable high-pass glare removal (enabled by default)",
+    )
+    parser.add_argument(
         "--clahe", action="store_true",
         help="Apply CLAHE contrast enhancement",
     )
@@ -59,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         family=args.family,
         detect_aruco=args.aruco,
         proc_width=args.proc_width,
+        use_highpass=not args.no_highpass,
         use_clahe=args.clahe,
         use_sharpen=args.sharpen,
     )
