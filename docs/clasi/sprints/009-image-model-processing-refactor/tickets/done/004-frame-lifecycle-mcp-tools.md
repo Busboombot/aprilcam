@@ -1,11 +1,15 @@
 ---
-id: "004"
-title: "Frame lifecycle MCP tools"
-status: todo
-use-cases: [SUC-001, SUC-002, SUC-005]
-depends-on: ["001"]
-github-issue: ""
-todo: ""
+id: '004'
+title: Frame lifecycle MCP tools
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-005
+depends-on:
+- '001'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -53,18 +57,18 @@ the operations dispatch when ticket 005 lands.
 
 ## Acceptance Criteria
 
-- [ ] `create_frame(source_id)` captures from camera/playfield and returns frame_id
-- [ ] `create_frame_from_image(image_path)` loads from disk and returns frame_id
-- [ ] `create_frame_from_image` validates the file exists and is a valid image
-- [ ] `get_frame_image(frame_id, "original")` returns the raw captured image
-- [ ] `get_frame_image(frame_id, "deskewed")` returns deskewed (or original if not deskewed)
-- [ ] `get_frame_image(frame_id, "processed")` returns pipeline output
-- [ ] `save_frame(frame_id, output_dir)` writes directory with 3 images + metadata.json
-- [ ] `metadata.json` contains frame_id, source, timestamp, operations_applied, results
-- [ ] `release_frame(frame_id)` removes the frame from the registry
-- [ ] `list_frames()` returns summary of all frames in the ring buffer
-- [ ] Error handling: invalid frame_id returns clear error message
-- [ ] Error handling: invalid image_path returns clear error message
+- [x] `create_frame(source_id)` captures from camera/playfield and returns frame_id
+- [x] `create_frame_from_image(image_path)` loads from disk and returns frame_id
+- [x] `create_frame_from_image` validates the file exists and is a valid image
+- [x] `get_frame_image(frame_id, "original")` returns the raw captured image
+- [x] `get_frame_image(frame_id, "deskewed")` returns deskewed (or original if not deskewed)
+- [x] `get_frame_image(frame_id, "processed")` returns pipeline output
+- [x] `save_frame(frame_id, output_dir)` writes directory with 3 images + metadata.json
+- [x] `metadata.json` contains frame_id, source, timestamp, operations_applied, results
+- [x] `release_frame(frame_id)` removes the frame from the registry
+- [x] `list_frames()` returns summary of all frames in the ring buffer
+- [x] Error handling: invalid frame_id returns clear error message
+- [x] Error handling: invalid image_path returns clear error message
 
 ## Implementation Notes
 
