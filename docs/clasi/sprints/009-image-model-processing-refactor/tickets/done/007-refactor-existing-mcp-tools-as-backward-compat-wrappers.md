@@ -1,11 +1,14 @@
 ---
-id: "007"
-title: "Refactor existing MCP tools as backward-compat wrappers"
-status: todo
-use-cases: [SUC-002]
-depends-on: ["004", "005"]
-github-issue: ""
-todo: ""
+id: '007'
+title: Refactor existing MCP tools as backward-compat wrappers
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '004'
+- '005'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

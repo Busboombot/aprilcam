@@ -1,11 +1,15 @@
 ---
-id: "006"
-title: "stream_tags and detection loop refactor"
-status: todo
-use-cases: [SUC-004]
-depends-on: ["001", "003", "005"]
-github-issue: ""
-todo: ""
+id: '006'
+title: stream_tags and detection loop refactor
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '001'
+- '003'
+- '005'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
