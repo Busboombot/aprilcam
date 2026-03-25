@@ -20,10 +20,24 @@ SUBCOMMANDS = {
         "help": "Configure MCP server entries for Claude Code and VS Code",
         "module": "aprilcam.cli.init_cli",
     },
+    "tool": {
+        "help": "List, inspect, and run MCP tools from the command line",
+        "module": "aprilcam.cli.tool_cli",
+    },
 }
 
 
+def _get_version():
+    try:
+        from importlib.metadata import version
+        return version("aprilcam")
+    except Exception:
+        return "unknown"
+
+
 def _print_help():
+    print(f"aprilcam {_get_version()}")
+    print()
     print("usage: aprilcam <command> [options]")
     print()
     print("AprilCam -- AprilTag detection and generation toolkit")
@@ -41,6 +55,10 @@ def main(argv=None):
 
     if not args or args[0] in ("-h", "--help"):
         _print_help()
+        sys.exit(0)
+
+    if args[0] in ("-V", "--version"):
+        print(f"aprilcam {_get_version()}")
         sys.exit(0)
 
     command = args[0]
