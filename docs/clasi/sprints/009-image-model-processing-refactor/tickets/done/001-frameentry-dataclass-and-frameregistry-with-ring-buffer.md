@@ -1,11 +1,12 @@
 ---
-id: "001"
-title: "FrameEntry dataclass and FrameRegistry with ring buffer"
-status: todo
-use-cases: [SUC-005]
+id: '001'
+title: FrameEntry dataclass and FrameRegistry with ring buffer
+status: done
+use-cases:
+- SUC-005
 depends-on: []
-github-issue: ""
-todo: ""
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -69,17 +70,17 @@ class FrameEntry:
 
 ## Acceptance Criteria
 
-- [ ] `FrameEntry` dataclass defined with all three image slots and metadata fields
-- [ ] Slot promotion: on creation, `deskewed` and `processed` are the same object
+- [x] `FrameEntry` dataclass defined with all three image slots and metadata fields
+- [x] Slot promotion: on creation, `deskewed` and `processed` are the same object
       reference as `original` (verified with `is` operator)
-- [ ] Deskew creates a new array for `deskewed`, updates `processed` reference
-- [ ] `FrameRegistry` stores up to 300 entries (configurable)
-- [ ] Deterministic IDs: first frame is `frm_000`, second is `frm_001`, etc.
-- [ ] Auto-eviction: adding frame 301 evicts frame `frm_000`
-- [ ] `release(frame_id)` removes a frame before auto-eviction
-- [ ] `get(frame_id)` raises `KeyError` for unknown/evicted frames
-- [ ] `list()` returns summary dicts (frame_id, source, timestamp, operations_applied)
-- [ ] Thread-safe: concurrent add/get/release do not corrupt state
+- [x] Deskew creates a new array for `deskewed`, updates `processed` reference
+- [x] `FrameRegistry` stores up to 300 entries (configurable)
+- [x] Deterministic IDs: first frame is `frm_000`, second is `frm_001`, etc.
+- [x] Auto-eviction: adding frame 301 evicts frame `frm_000`
+- [x] `release(frame_id)` removes a frame before auto-eviction
+- [x] `get(frame_id)` raises `KeyError` for unknown/evicted frames
+- [x] `list()` returns summary dicts (frame_id, source, timestamp, operations_applied)
+- [x] Thread-safe: concurrent add/get/release do not corrupt state
 
 ## Implementation Notes
 
