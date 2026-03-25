@@ -161,6 +161,7 @@ class DetectionEntry:
     loop: DetectionLoop
     ring_buffer: RingBuffer
     aprilcam: AprilCam
+    operations: list[str] = field(default_factory=lambda: ["detect_tags"])
 
 
 detection_registry: dict[str, DetectionEntry] = {}
@@ -1289,6 +1290,186 @@ async def stop_detection(source_id: str) -> list[TextContent]:
 
 
 @server.tool()
+async def stream_tags(
+    source_id: str,
+    operations: list[str] | None = None,
+    family: str = "36h11",
+    proc_width: int = 0,
+) -> list[TextContent]:
+    """Start continuous tag detection on a camera or playfield with a fixed operation pipeline.
+
+    This is the preferred entry point for starting a detection stream.  It
+    wraps the same infrastructure as ``start_detection`` (AprilCam +
+    DetectionLoop + RingBuffer) while recording an explicit *operations*
+    pipeline for metadata.
+
+    Args:
+        source_id: A camera handle (``cam_N``) or playfield_id to stream from.
+        operations: Operation pipeline names to apply each frame.  Stored as
+            metadata; the underlying loop currently uses ``AprilCam.process_frame()``.
+            Defaults to ``["detect_tags"]``.
+        family: AprilTag family (default ``"36h11"``).
+        proc_width: Processing width in pixels; 0 means no downscale.
+
+    Returns:
+        On success: ``{"stream_id": "<id>", "operations": [...], "status": "started"}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    if operations is None:
+        operations = ["detect_tags"]
+
+    try:
+        if source_id in detection_registry:
+            return [TextContent(type="text", text=json.dumps(
+                {"error": f"Detection already running on '{source_id}'"}
+            ))]
+
+        import cv2
+
+        # Resolve source to a capture object and optional playfield data
+        cap = None
+        homography = None
+        playfield_poly = None
+        camera_id: str | None = None
+        camera_index: int | None = None
+        exclusive_cap = None
+
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            camera_id = pf_entry.camera_id
+            try:
+                cap = registry.get(camera_id)
+            except KeyError:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"Underlying camera '{camera_id}' is no longer open"}
+                ))]
+            homography = pf_entry.homography
+            poly = pf_entry.playfield.get_polygon()
+            if poly is not None:
+                playfield_poly = poly
+        except KeyError:
+            # Not a playfield — treat source_id as a camera handle
+            camera_id = source_id
+            try:
+                cap = registry.get(source_id)
+            except KeyError:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"Unknown source_id '{source_id}'"}
+                ))]
+
+        # For real cameras (cam_N handles), open an exclusive capture
+        if camera_id and camera_id.startswith("cam_"):
+            try:
+                camera_index = int(camera_id.split("_", 1)[1])
+            except (ValueError, IndexError):
+                camera_index = None
+
+            if camera_index is not None:
+                try:
+                    registry.close(camera_id)
+                except KeyError:
+                    pass
+
+                exclusive_cap = cv2.VideoCapture(camera_index)
+                if exclusive_cap.isOpened():
+                    cap = exclusive_cap
+                else:
+                    exclusive_cap = None
+                    try:
+                        shared_cap = cv2.VideoCapture(camera_index)
+                        if shared_cap.isOpened():
+                            registry.open(shared_cap, handle=camera_id)
+                            cap = registry.get(camera_id)
+                    except Exception:
+                        pass
+
+        cam = AprilCam(
+            index=camera_index if camera_index is not None else 0,
+            backend=None,
+            speed_alpha=0.3,
+            family=family,
+            proc_width=proc_width,
+            detect_interval=1,
+            use_clahe=False,
+            use_sharpen=False,
+            headless=True,
+            cap=cv2.VideoCapture(),
+            homography=homography,
+            playfield_poly_init=playfield_poly,
+        )
+
+        buf = RingBuffer(maxlen=300)
+        loop = DetectionLoop(source=cap, aprilcam=cam, ring_buffer=buf)
+        loop.start()
+
+        detection_registry[source_id] = DetectionEntry(
+            source_id=source_id,
+            loop=loop,
+            ring_buffer=buf,
+            aprilcam=cam,
+            operations=list(operations),
+        )
+        detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
+        detection_registry[source_id]._camera_index = camera_index  # type: ignore[attr-defined]
+        detection_registry[source_id]._exclusive_cap = exclusive_cap  # type: ignore[attr-defined]
+
+        return [TextContent(type="text", text=json.dumps(
+            {"stream_id": source_id, "operations": operations, "status": "started"}
+        ))]
+    except Exception as exc:
+        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+
+
+@server.tool()
+async def stop_stream(source_id: str) -> list[TextContent]:
+    """Stop a running tag detection stream.
+
+    This is the counterpart to ``stream_tags``.  It wraps the same teardown
+    logic as ``stop_detection``: stops the loop, releases the exclusive
+    capture, and re-opens the shared camera handle.
+
+    Args:
+        source_id: The source identifier passed to ``stream_tags``.
+
+    Returns:
+        On success: ``{"stream_id": "<id>", "status": "stopped"}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    try:
+        entry = detection_registry.pop(source_id, None)
+        if entry is None:
+            return [TextContent(type="text", text=json.dumps(
+                {"error": f"No stream running on '{source_id}'"}
+            ))]
+
+        entry.loop.stop()
+
+        # Release the exclusive capture and re-open the shared camera
+        exclusive_cap = getattr(entry, "_exclusive_cap", None)
+        if exclusive_cap is not None:
+            try:
+                exclusive_cap.release()
+            except Exception:
+                pass
+        camera_id = getattr(entry, "_camera_id", None)
+        camera_index = getattr(entry, "_camera_index", 0)
+        if camera_id is not None:
+            try:
+                import cv2
+                shared_cap = cv2.VideoCapture(camera_index)
+                if shared_cap.isOpened():
+                    registry.open(shared_cap, handle=camera_id)
+            except Exception:
+                pass
+
+        return [TextContent(type="text", text=json.dumps(
+            {"stream_id": source_id, "status": "stopped"}
+        ))]
+    except Exception as exc:
+        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+
+
+@server.tool()
 async def get_tags(source_id: str) -> list[TextContent]:
     """Return the latest tag detections from a running detection loop.
 
@@ -1466,12 +1647,18 @@ async def detect_lines(
             frame = resolve_source(source_id)
         except (KeyError, RuntimeError) as e:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-        from aprilcam.image_processing import process_detect_lines
 
-        lines = process_detect_lines(frame, threshold, min_length, max_gap)
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "lines": lines}
-        ))]
+        # Track frame in registry for pipeline integration
+        entry = frame_registry.add(frame, source_id)
+        try:
+            lines = process_detect_lines(entry.processed, threshold, min_length, max_gap)
+            entry.results["detect_lines"] = lines
+            entry.operations_applied.append("detect_lines")
+            return [TextContent(type="text", text=json.dumps(
+                {"source_id": source_id, "lines": lines}
+            ))]
+        finally:
+            frame_registry.release(entry.frame_id)
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
 
@@ -1502,12 +1689,18 @@ async def detect_circles(
             frame = resolve_source(source_id)
         except (KeyError, RuntimeError) as e:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-        from aprilcam.image_processing import process_detect_circles
 
-        circles = process_detect_circles(frame, min_radius, max_radius, param1, param2)
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "circles": circles}
-        ))]
+        # Track frame in registry for pipeline integration
+        entry = frame_registry.add(frame, source_id)
+        try:
+            circles = process_detect_circles(entry.processed, min_radius, max_radius, param1, param2)
+            entry.results["detect_circles"] = circles
+            entry.operations_applied.append("detect_circles")
+            return [TextContent(type="text", text=json.dumps(
+                {"source_id": source_id, "circles": circles}
+            ))]
+        finally:
+            frame_registry.release(entry.frame_id)
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
 
@@ -1534,12 +1727,18 @@ async def detect_contours(
             frame = resolve_source(source_id)
         except (KeyError, RuntimeError) as e:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-        from aprilcam.image_processing import process_detect_contours
 
-        contours = process_detect_contours(frame, min_area)
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "contours": contours}
-        ))]
+        # Track frame in registry for pipeline integration
+        entry = frame_registry.add(frame, source_id)
+        try:
+            contours = process_detect_contours(entry.processed, min_area)
+            entry.results["detect_contours"] = contours
+            entry.operations_applied.append("detect_contours")
+            return [TextContent(type="text", text=json.dumps(
+                {"source_id": source_id, "contours": contours}
+            ))]
+        finally:
+            frame_registry.release(entry.frame_id)
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
 
@@ -1598,12 +1797,18 @@ async def detect_qr_codes(source_id: str) -> list[TextContent]:
             frame = resolve_source(source_id)
         except (KeyError, RuntimeError) as e:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-        from aprilcam.image_processing import process_detect_qr_codes
 
-        codes = process_detect_qr_codes(frame)
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "qr_codes": codes}
-        ))]
+        # Track frame in registry for pipeline integration
+        entry = frame_registry.add(frame, source_id)
+        try:
+            codes = process_detect_qr_codes(entry.processed)
+            entry.results["detect_qr"] = codes
+            entry.operations_applied.append("detect_qr")
+            return [TextContent(type="text", text=json.dumps(
+                {"source_id": source_id, "qr_codes": codes}
+            ))]
+        finally:
+            frame_registry.release(entry.frame_id)
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
 
