@@ -99,7 +99,11 @@ class AprilCam:
 
         # Cached state
         self.detectors = self._build_detectors()
-        self.playfield = Playfield(proc_width=self.proc_width or 960, detect_inverted=False)
+        self.playfield = Playfield(
+            proc_width=self.proc_width or 960,
+            detect_inverted=False,
+            ema_alpha=self.speed_alpha,
+        )
         self.window = "aprilcam"
         self.display = PlayfieldDisplay(
             self.playfield,
@@ -111,19 +115,17 @@ class AprilCam:
         # Tracking state (initialized by reset_state)
         self._prev_gray: Optional[np.ndarray] = None
         self._tracks: dict[int, np.ndarray] = {}
+        self._track_families: dict[int, str] = {}
         self._tag_models: dict[int, AprilTagModel] = {}
         self._frame_idx: int = 0
-        self._vel_ema: dict[int, float] = {}
-        self._last_seen: dict[int, tuple[float, float, float]] = {}
 
     def reset_state(self) -> None:
         """Reset all tracking state to initial values."""
         self._prev_gray = None
         self._tracks = {}
+        self._track_families = {}
         self._tag_models = {}
         self._frame_idx = 0
-        self._vel_ema: dict[int, float] = {}
-        self._last_seen: dict[int, tuple[float, float, float]] = {}
 
     @staticmethod
     def _get_dict_by_family(name: str):
@@ -166,7 +168,7 @@ class AprilCam:
                 except Exception:
                     p.aprilTagMaxLineFitMse = 20.0
             p.detectInvertedMarker = bool(self.detect_inverted)
-            detectors.append((d, p))
+            detectors.append((d, p, f))
         return detectors
 
     @staticmethod
@@ -181,7 +183,7 @@ class AprilCam:
             out = cv.filter2D(out, -1, k)
         return out
 
-    def detect_apriltags(self, frame_bgr: np.ndarray, scale: float = 1.0) -> List[Tuple[np.ndarray, np.ndarray, int]]:
+    def detect_apriltags(self, frame_bgr: np.ndarray, scale: float = 1.0) -> List[Tuple[np.ndarray, np.ndarray, int, str]]:
         """Detect AprilTags in a BGR frame.
 
         Args:
@@ -189,7 +191,7 @@ class AprilCam:
             scale: Optional downscale factor for speed (<1 downscales).
 
         Returns:
-            A list of (pts[4x2], raw_pts[4x2], id) for each detected tag.
+            A list of (pts[4x2], raw_pts[4x2], id, family) for each detected tag.
         """
         h, w = frame_bgr.shape[:2]
         gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
@@ -199,8 +201,8 @@ class AprilCam:
             gray = cv.resize(gray, (new_w, new_h), interpolation=cv.INTER_AREA)
         gray = self._maybe_preprocess(gray, self.use_clahe, self.use_sharpen)
 
-        detections: List[Tuple[np.ndarray, np.ndarray, int]] = []
-        for d, p in self.detectors:
+        detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
+        for d, p, fam in self.detectors:
             detector = cv.aruco.ArucoDetector(d, p)
             corners, ids, _rej = detector.detectMarkers(gray)
             if ids is None:
@@ -209,7 +211,7 @@ class AprilCam:
                 pts = c.reshape(-1, 2).astype(np.float32)
                 if scale < 1.0:
                     pts = pts / float(scale)
-                detections.append((pts, pts.copy(), int(idv)))
+                detections.append((pts, pts.copy(), int(idv), fam))
         return detections
 
     @staticmethod
@@ -275,7 +277,7 @@ class AprilCam:
         """
         # 2) Convert to gray and perform detection or faster LK tracking
         gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
-        detections: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
         if (self.detect_interval <= 1
                 or self._frame_idx % max(1, self.detect_interval) == 0
                 or self._prev_gray is None
@@ -285,7 +287,8 @@ class AprilCam:
                      if (self.proc_width and self.proc_width > 0 and w > 0)
                      else 1.0)
             detections = self.detect_apriltags(frame_bgr, scale=scale)
-            self._tracks = {tid: pts for (pts, _raw, tid) in detections}
+            self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
+            self._track_families = {tid: fam for (_pts, _raw, tid, fam) in detections}
         else:
             # Track existing tag corners forward with LK; fall back to detection on loss
             new_tracks: dict[int, np.ndarray] = {}
@@ -293,7 +296,8 @@ class AprilCam:
                 new_pts = AprilCam.lk_track(self._prev_gray, gray, pts)
                 if new_pts is not None:
                     new_tracks[tid] = new_pts
-                    detections.append((new_pts, new_pts, tid))
+                    fam = self._track_families.get(tid, "36h11")
+                    detections.append((new_pts, new_pts, tid, fam))
             self._tracks = new_tracks
             if len(detections) == 0:
                 w = frame_bgr.shape[1]
@@ -301,72 +305,53 @@ class AprilCam:
                          if (self.proc_width and self.proc_width > 0 and w > 0)
                          else 1.0)
                 detections = self.detect_apriltags(frame_bgr, scale=scale)
-                self._tracks = {tid: pts for (pts, _raw, tid) in detections}
+                self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
+                self._track_families = {tid: fam for (_pts, _raw, tid, fam) in detections}
 
         # 3) Update Playfield cache (polygon) for cropping/deskew
         self._update_playfield(frame_bgr)
 
         # 4) Keep only detections inside the current playfield polygon
         if detections:
-            in_dets: List[Tuple[np.ndarray, np.ndarray, int]] = []
-            for pts, raw, tid in detections:
+            in_dets: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
+            for pts, raw, tid, fam in detections:
                 if self.playfield.isIn(pts):
-                    in_dets.append((pts, raw, tid))
+                    in_dets.append((pts, raw, tid, fam))
             detections = in_dets
-            self._tracks = {tid: pts for (pts, _raw, tid) in detections}
+            self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
 
         # 5) Update/maintain tag models and playfield flows
-        for pts, _raw, tid in detections:
+        for pts, _raw, tid, fam in detections:
             if tid in self._tag_models:
                 self._tag_models[tid].update(pts, timestamp=timestamp, homography=self.homography)
             else:
                 self._tag_models[tid] = AprilTagModel.from_corners(
                     tid, pts, homography=self.homography,
                     timestamp=timestamp, frame=self._frame_idx,
+                    family=fam,
                 )
             self._tag_models[tid].frame = self._frame_idx
             self.playfield.add_tag(self._tag_models[tid])
 
         # Prune models not seen recently (>1.5s)
-        seen_ids = {tid for _pts, _r, tid in detections}
+        seen_ids = {tid for _pts, _r, tid, _fam in detections}
         for tid in list(self._tag_models.keys()):
             if (tid not in seen_ids
                     and self._tag_models[tid].last_ts is not None
                     and (timestamp - float(self._tag_models[tid].last_ts)) > 1.5):
                 del self._tag_models[tid]
 
-        # Build TagRecord objects with EMA-smoothed velocity
+        # Build TagRecord objects — velocity is now computed by Playfield.add_tag()
         tag_records: List[TagRecord] = []
-        for pts, _raw, tid in detections:
+        flows = self.playfield.get_flows()
+        for pts, _raw, tid, _fam in detections:
             model = self._tag_models.get(tid)
             if model is None:
                 continue
 
-            # Compute EMA-smoothed velocity from _last_seen positions
-            cx, cy = model.center_px
-            vel_px_val: Optional[Tuple[float, float]] = None
-            speed_px_val: Optional[float] = None
-            if tid in self._last_seen:
-                px, py, pt = self._last_seen[tid]
-                dt = max(1e-3, timestamp - pt)
-                dx = (cx - px) / dt
-                dy = (cy - py) / dt
-                inst_speed = math.hypot(dx, dy)
-                prev_ema = self._vel_ema.get(tid)
-                smoothed = (
-                    self.speed_alpha * inst_speed + (1 - self.speed_alpha) * prev_ema
-                    if prev_ema is not None
-                    else inst_speed
-                )
-                self._vel_ema[tid] = smoothed
-                # Dead-band: suppress detector jitter (ArUco corner noise ~20-40 px/s)
-                if smoothed < 50.0:
-                    vel_px_val = (0.0, 0.0)
-                    speed_px_val = 0.0
-                else:
-                    vel_px_val = (dx, dy)
-                    speed_px_val = smoothed
-            self._last_seen[tid] = (cx, cy, timestamp)
+            flow = flows.get(tid)
+            vel_px_val: Optional[Tuple[float, float]] = flow.vel_px if flow else None
+            speed_px_val: Optional[float] = flow.speed_px if flow else None
 
             tr = TagRecord.from_apriltag(
                 model,
@@ -512,7 +497,7 @@ def build_detectors(
     april_min_cluster_pixels: int = 5,
     april_max_line_fit_mse: float = 20.0,
 ):
-    """Return a list of (dictionary, parameters) configured for the requested family/families.
+    """Return a list of (dictionary, parameters, family_name) configured for the requested family/families.
 
     Mirrors AprilCam._build_detectors but exposed at module scope for CLI use.
     """
@@ -544,7 +529,7 @@ def build_detectors(
             except Exception:
                 p.aprilTagMaxLineFitMse = 20.0
         p.detectInvertedMarker = bool(detect_inverted)
-        detectors.append((d, p))
+        detectors.append((d, p, f))
     return detectors
 
 
@@ -557,7 +542,7 @@ def detect_apriltags(
 ):
     """Detect AprilTags in an image using provided detectors.
 
-    Returns a list of tuples: (pts[4x2], raw_pts[4x2], id)
+    Returns a list of tuples: (pts[4x2], raw_pts[4x2], id, family)
     """
     h, w = frame_bgr.shape[:2]
     gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
@@ -567,8 +552,8 @@ def detect_apriltags(
         gray = cv.resize(gray, (new_w, new_h), interpolation=cv.INTER_AREA)
     gray = AprilCam._maybe_preprocess(gray, clahe, sharpen)
 
-    detections: List[Tuple[np.ndarray, np.ndarray, int]] = []
-    for d, p in detectors:
+    detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
+    for d, p, fam in detectors:
         detector = cv.aruco.ArucoDetector(d, p)
         corners, ids, _rej = detector.detectMarkers(gray)
         if ids is None:
@@ -577,5 +562,5 @@ def detect_apriltags(
             pts = c.reshape(-1, 2).astype(np.float32)
             if scale < 1.0:
                 pts = pts / float(scale)
-            detections.append((pts, pts.copy(), int(idv)))
+            detections.append((pts, pts.copy(), int(idv), fam))
     return detections

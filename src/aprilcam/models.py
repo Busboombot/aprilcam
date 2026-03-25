@@ -13,6 +13,7 @@ class AprilTag:
     """Represents a detected AprilTag and its tracked state.
 
     - id: tag ID
+    - family: AprilTag family name (e.g. "36h11", "25h9")
     - corners_px: 4x2 pixel coordinates (order as returned by detector)
     - center_px: pixel center (computed)
     - top_dir_px: unit vector from center toward the top edge midpoint (image coords)
@@ -24,6 +25,7 @@ class AprilTag:
     """
 
     id: int
+    family: str
     corners_px: np.ndarray
     center_px: Tuple[float, float]
     top_dir_px: Tuple[float, float]
@@ -40,6 +42,7 @@ class AprilTag:
         homography: Optional[np.ndarray] = None,
     timestamp: Optional[float] = None,
     frame: int = 0,
+    family: str = "36h11",
     ) -> "AprilTag":
         ptsf = corners_px.astype(np.float32)
         c = ptsf.mean(axis=0)
@@ -64,6 +67,7 @@ class AprilTag:
                 world_xy = (float(Xw[0] / Xw[2]), float(Xw[1] / Xw[2]))
         return AprilTag(
             id=int(tag_id),
+            family=family,
             corners_px=ptsf.copy(),
             center_px=(float(c[0]), float(c[1])),
             top_dir_px=n_unit,
@@ -103,6 +107,7 @@ class AprilTag:
         """Return a deep-ish copy suitable for historical storage in flows."""
         return AprilTag(
             id=int(self.id),
+            family=self.family,
             corners_px=self.corners_px.copy(),
             center_px=(float(self.center_px[0]), float(self.center_px[1])),
             top_dir_px=(float(self.top_dir_px[0]), float(self.top_dir_px[1])),
@@ -118,18 +123,29 @@ class AprilTagFlow:
     """Fixed-size history of AprilTag observations with convenient properties.
 
     Exposes the same attribute interface as AprilTag, returning values from the
-    most recent AprilTag in the deque. Additionally computes vel_px and speed_px
-    from the last two observations when available.
+    most recent AprilTag in the deque. Velocity is set externally by the
+    Playfield via :meth:`set_velocity` (EMA + dead-band smoothing).
     """
 
     def __init__(self, maxlen: int = 5) -> None:
         self._deque: Deque[AprilTag] = deque(maxlen=maxlen)
         self._id: Optional[int] = None
+        self._vel_px: Tuple[float, float] = (0.0, 0.0)
+        self._speed_px: float = 0.0
 
     def add_tag(self, tag: AprilTag) -> None:
         if self._id is None:
             self._id = int(tag.id)
         self._deque.append(tag)
+
+    def set_velocity(self, vel_px: Tuple[float, float], speed_px: float) -> None:
+        """Set the EMA-smoothed velocity for this flow.
+
+        Called by Playfield.add_tag() after computing the EMA + dead-band
+        velocity from successive tag observations.
+        """
+        self._vel_px = vel_px
+        self._speed_px = speed_px
 
     # --- core accessors mirroring AprilTag ---
     @property
@@ -179,21 +195,11 @@ class AprilTagFlow:
         t = self._last()
         return bool(t.in_playfield) if t is not None else False
 
-    # --- derived motion ---
+    # --- derived motion (externally set) ---
     @property
     def vel_px(self) -> Tuple[float, float]:
-        if len(self._deque) < 2:
-            return (0.0, 0.0)
-        a = self._deque[-2]
-        b = self._deque[-1]
-        if a.last_ts is None or b.last_ts is None:
-            return (0.0, 0.0)
-        dt = max(1e-3, float(b.last_ts - a.last_ts))
-        vx = (b.center_px[0] - a.center_px[0]) / dt
-        vy = (b.center_px[1] - a.center_px[1]) / dt
-        return (float(vx), float(vy))
+        return self._vel_px
 
     @property
     def speed_px(self) -> float:
-        vx, vy = self.vel_px
-        return float(math.hypot(vx, vy))
+        return self._speed_px
