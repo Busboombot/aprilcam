@@ -1,11 +1,12 @@
 ---
-id: "002"
-title: "AprilTag family field and detection pipeline update"
-status: todo
-use-cases: [SUC-001]
+id: '002'
+title: AprilTag family field and detection pipeline update
+status: done
+use-cases:
+- SUC-001
 depends-on: []
-github-issue: ""
-todo: ""
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -35,12 +36,12 @@ goal of richer tag metadata in FrameEntry results.
 
 ## Acceptance Criteria
 
-- [ ] `AprilTag` dataclass has a `family: str` field
-- [ ] `AprilTag.from_corners()` accepts and passes through `family` parameter
-- [ ] `AprilCam.detect_apriltags()` populates `family` from detector config
-- [ ] Default value is `"36h11"` for backward compatibility
-- [ ] Existing code that constructs `AprilTag` without `family` still works
-- [ ] Family name appears in tag detection results returned by MCP tools
+- [x] `AprilTag` dataclass has a `family: str` field
+- [x] `AprilTag.from_corners()` accepts and passes through `family` parameter
+- [x] `AprilCam.detect_apriltags()` populates `family` from detector config
+- [x] Default value is `"36h11"` for backward compatibility
+- [x] Existing code that constructs `AprilTag` without `family` still works
+- [x] Family name appears in tag detection results returned by MCP tools
 
 ## Implementation Notes
 

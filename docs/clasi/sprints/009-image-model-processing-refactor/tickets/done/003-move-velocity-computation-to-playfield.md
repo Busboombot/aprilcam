@@ -1,11 +1,12 @@
 ---
-id: "003"
-title: "Move velocity computation to Playfield"
-status: todo
-use-cases: [SUC-003]
+id: '003'
+title: Move velocity computation to Playfield
+status: done
+use-cases:
+- SUC-003
 depends-on: []
-github-issue: ""
-todo: ""
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -45,14 +46,14 @@ After this change:
 
 ## Acceptance Criteria
 
-- [ ] Playfield has configurable EMA alpha and dead-band threshold in `__init__()`
-- [ ] `Playfield.add_tag()` computes velocity using EMA + dead-band algorithm
-- [ ] Velocity values match what AprilCam previously produced (behavioral parity)
-- [ ] `AprilTagFlow.vel_px` and `speed_px` are set by Playfield, not self-computed
-- [ ] `AprilCam` no longer has `_vel_ema` or `_last_seen` state
-- [ ] `AprilCam.process_frame()` returns detections without velocity
-- [ ] `get_tags()` MCP tool returns velocity sourced from Playfield
-- [ ] No velocity-related code remains in AprilCam
+- [x] Playfield has configurable EMA alpha and dead-band threshold in `__init__()`
+- [x] `Playfield.add_tag()` computes velocity using EMA + dead-band algorithm
+- [x] Velocity values match what AprilCam previously produced (behavioral parity)
+- [x] `AprilTagFlow.vel_px` and `speed_px` are set by Playfield, not self-computed
+- [x] `AprilCam` no longer has `_vel_ema` or `_last_seen` state
+- [x] `AprilCam.process_frame()` returns detections without velocity
+- [x] `get_tags()` MCP tool returns velocity sourced from Playfield
+- [x] No velocity-related code remains in AprilCam
 
 ## Implementation Notes
 
