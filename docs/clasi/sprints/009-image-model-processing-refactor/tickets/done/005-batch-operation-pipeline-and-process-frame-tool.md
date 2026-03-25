@@ -1,11 +1,15 @@
 ---
-id: "005"
-title: "Batch operation pipeline and process_frame tool"
-status: todo
-use-cases: [SUC-001, SUC-002]
-depends-on: ["001", "004"]
-github-issue: ""
-todo: ""
+id: '005'
+title: Batch operation pipeline and process_frame tool
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+depends-on:
+- '001'
+- '004'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -50,21 +54,21 @@ runs immediately after capture/load.
 
 ## Acceptance Criteria
 
-- [ ] Operation dispatch maps operation name strings to processing functions
-- [ ] Operations execute in the order specified in the list
-- [ ] `"deskew"` reads from `original`, writes new array to `deskewed`, updates `processed` ref
-- [ ] `"detect_tags"` reads from `processed`, stores results without modifying image
-- [ ] `"detect_aruco"` reads from `processed`, stores results without modifying image
-- [ ] `"detect_lines"` reads from `processed`, stores results
-- [ ] `"detect_circles"` reads from `processed`, stores results
-- [ ] `"detect_contours"` reads from `processed`, stores results
-- [ ] `"detect_qr"` reads from `processed`, stores results
-- [ ] `process_frame` MCP tool returns all results in one response
-- [ ] `operations_applied` list on FrameEntry updated after each operation
-- [ ] `create_frame(source_id, operations=[...])` runs pipeline during creation
-- [ ] `create_frame_from_image(path, operations=[...])` runs pipeline during creation
-- [ ] Unknown operation names return a clear error message
-- [ ] Operations reuse existing functions from `image_processing.py` and `aprilcam.py`
+- [x] Operation dispatch maps operation name strings to processing functions
+- [x] Operations execute in the order specified in the list
+- [x] `"deskew"` reads from `original`, writes new array to `deskewed`, updates `processed` ref
+- [x] `"detect_tags"` reads from `processed`, stores results without modifying image
+- [x] `"detect_aruco"` reads from `processed`, stores results without modifying image
+- [x] `"detect_lines"` reads from `processed`, stores results
+- [x] `"detect_circles"` reads from `processed`, stores results
+- [x] `"detect_contours"` reads from `processed`, stores results
+- [x] `"detect_qr"` reads from `processed`, stores results
+- [x] `process_frame` MCP tool returns all results in one response
+- [x] `operations_applied` list on FrameEntry updated after each operation
+- [x] `create_frame(source_id, operations=[...])` runs pipeline during creation
+- [x] `create_frame_from_image(path, operations=[...])` runs pipeline during creation
+- [x] Unknown operation names return a clear error message
+- [x] Operations reuse existing functions from `image_processing.py` and `aprilcam.py`
 
 ## Implementation Notes
 
