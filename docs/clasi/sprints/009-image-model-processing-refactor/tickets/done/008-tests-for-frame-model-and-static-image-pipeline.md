@@ -1,11 +1,20 @@
 ---
-id: "008"
-title: "Tests for frame model and static image pipeline"
-status: todo
-use-cases: [SUC-001, SUC-004, SUC-005]
-depends-on: ["001", "002", "003", "004", "005", "007"]
-github-issue: ""
-todo: ""
+id: 008
+title: Tests for frame model and static image pipeline
+status: done
+use-cases:
+- SUC-001
+- SUC-004
+- SUC-005
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
+- '007'
+github-issue: ''
+todo: ''
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -59,17 +68,17 @@ Using `tests/data/playfield_cam3.jpg` (or other test images in `tests/data/`):
 
 ## Acceptance Criteria
 
-- [ ] Unit tests pass for FrameEntry slot promotion logic
-- [ ] Unit tests pass for FrameRegistry ring buffer (capacity, eviction, IDs)
-- [ ] Unit tests pass for batch pipeline operation dispatch
-- [ ] Unit tests pass for Playfield velocity EMA + dead-band
-- [ ] Integration test: create_frame_from_image with static test image succeeds
-- [ ] Integration test: process_frame with detect_tags on static image returns detections
-- [ ] Integration test: save_frame writes correct directory structure
-- [ ] Integration test: full pipeline (create + operations) works in one call
-- [ ] Backward compat: existing per-operation tools return same response format
-- [ ] Regression: `uv run pytest` passes with zero failures
-- [ ] AprilTag family field populated in detection results
+- [x] Unit tests pass for FrameEntry slot promotion logic
+- [x] Unit tests pass for FrameRegistry ring buffer (capacity, eviction, IDs)
+- [x] Unit tests pass for batch pipeline operation dispatch
+- [x] Unit tests pass for Playfield velocity EMA + dead-band
+- [x] Integration test: create_frame_from_image with static test image succeeds
+- [x] Integration test: process_frame with detect_tags on static image returns detections
+- [x] Integration test: save_frame writes correct directory structure
+- [x] Integration test: full pipeline (create + operations) works in one call
+- [x] Backward compat: existing per-operation tools return same response format
+- [x] Regression: `uv run pytest` passes with zero failures
+- [x] AprilTag family field populated in detection results
 
 ## Implementation Notes
 
