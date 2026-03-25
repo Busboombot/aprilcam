@@ -1,7 +1,7 @@
 ---
 id: "009"
 title: "Image Model & Processing Refactor"
-status: planning
+status: active
 branch: sprint/009-image-model-processing-refactor
 use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
 ---
@@ -139,4 +139,13 @@ Before tickets can be created, all of the following must be true:
 
 ## Tickets
 
-(To be created after sprint approval.)
+| # | Title | Depends on | Status |
+|---|-------|-----------|--------|
+| 001 | FrameEntry dataclass and FrameRegistry with ring buffer | — | todo |
+| 002 | AprilTag family field and detection pipeline update | — | todo |
+| 003 | Move velocity computation to Playfield | — | todo |
+| 004 | Frame lifecycle MCP tools | 001 | todo |
+| 005 | Batch operation pipeline and process_frame tool | 001, 004 | todo |
+| 006 | stream_tags and detection loop refactor | 001, 003, 005 | todo |
+| 007 | Refactor existing MCP tools as backward-compat wrappers | 004, 005 | todo |
+| 008 | Tests for frame model and static image pipeline | 001-005, 007 | todo |
