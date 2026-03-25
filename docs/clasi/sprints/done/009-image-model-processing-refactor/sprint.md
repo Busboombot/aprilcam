@@ -1,9 +1,14 @@
 ---
-id: "009"
-title: "Image Model & Processing Refactor"
-status: active
+id: 009
+title: Image Model & Processing Refactor
+status: done
 branch: sprint/009-image-model-processing-refactor
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 ---
 
 # Sprint 009: Image Model & Processing Refactor
