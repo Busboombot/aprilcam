@@ -42,6 +42,7 @@ class AprilCam:
         homography: Optional[np.ndarray] = None,
         headless: bool = False,
         deskew_overlay: bool = False,
+        detect_aruco_4x4: bool = False,
         playfield_poly_init: Optional[np.ndarray] = None,
     ) -> None:
         """Initialize the AprilCam controller.
@@ -88,6 +89,7 @@ class AprilCam:
         self.april_min_wb_diff = float(april_min_wb_diff)
         self.april_min_cluster_pixels = int(april_min_cluster_pixels)
         self.april_max_line_fit_mse = float(april_max_line_fit_mse)
+        self.detect_aruco_4x4 = bool(detect_aruco_4x4)
         self.print_tags = bool(print_tags)
         self.cap = cap
         self.homography = homography
@@ -129,18 +131,21 @@ class AprilCam:
 
     @staticmethod
     def _get_dict_by_family(name: str):
-        """Map family string to OpenCV ArUco predefined AprilTag dictionary."""
+        """Map family string to OpenCV ArUco predefined dictionary."""
         m = {
             "16h5": cv.aruco.DICT_APRILTAG_16h5,
             "25h9": cv.aruco.DICT_APRILTAG_25h9,
             "36h10": cv.aruco.DICT_APRILTAG_36h10,
             "36h11": cv.aruco.DICT_APRILTAG_36h11,
+            "aruco_4x4": cv.aruco.DICT_4X4_50,
         }
         return m.get(name, cv.aruco.DICT_APRILTAG_36h11)
 
     def _build_detectors(self):
         """Create per-family ArUco detectors configured with AprilTag params."""
         fams = [self.family] if self.family != "all" else ["16h5", "25h9", "36h10", "36h11"]
+        if self.detect_aruco_4x4:
+            fams.append("aruco_4x4")
         detectors = []
         for f in fams:
             d = cv.aruco.getPredefinedDictionary(self._get_dict_by_family(f))
