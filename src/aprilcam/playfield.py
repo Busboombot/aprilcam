@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict
 
@@ -20,9 +21,13 @@ class Playfield:
     proc_width: int = 960
     detect_inverted: bool = False
     polygon: Optional[np.ndarray] = None  # shape (4,2) float32, UL/UR/LR/LL
+    ema_alpha: float = 0.3
+    deadband_threshold: float = 50.0
 
     _poly: Optional[np.ndarray] = field(default=None, init=False, repr=False)
     _flows: Dict[int, AprilTagFlow] = field(default_factory=dict, init=False, repr=False)
+    _vel_ema: Dict[int, float] = field(default_factory=dict, init=False, repr=False)
+    _last_seen: Dict[int, Tuple[float, float, float]] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
         if self.polygon is not None:
@@ -142,6 +147,9 @@ class Playfield:
     def add_tag(self, tag: AprilTag) -> None:
         """Add/Update a tag into the playfield flows, setting in_playfield.
 
+        Computes EMA-smoothed velocity with dead-band suppression and stores
+        the result on the flow via :meth:`AprilTagFlow.set_velocity`.
+
         If the playfield polygon is unknown, in_playfield defaults to True.
         """
         try:
@@ -154,6 +162,38 @@ class Playfield:
             self._flows[tag.id] = flow
         # Store a snapshot so history isn't mutated by future updates
         flow.add_tag(tag.clone())
+
+        # --- EMA + dead-band velocity computation ---
+        tid = tag.id
+        cx, cy = tag.center_px
+        timestamp = tag.last_ts
+        vel_px_val: Tuple[float, float] = (0.0, 0.0)
+        speed_px_val: float = 0.0
+
+        if timestamp is not None and tid in self._last_seen:
+            px, py, pt = self._last_seen[tid]
+            dt = max(1e-3, timestamp - pt)
+            dx = (cx - px) / dt
+            dy = (cy - py) / dt
+            inst_speed = math.hypot(dx, dy)
+            prev_ema = self._vel_ema.get(tid)
+            smoothed = (
+                self.ema_alpha * inst_speed + (1 - self.ema_alpha) * prev_ema
+                if prev_ema is not None
+                else inst_speed
+            )
+            self._vel_ema[tid] = smoothed
+            if smoothed < self.deadband_threshold:
+                vel_px_val = (0.0, 0.0)
+                speed_px_val = 0.0
+            else:
+                vel_px_val = (dx, dy)
+                speed_px_val = smoothed
+
+        if timestamp is not None:
+            self._last_seen[tid] = (cx, cy, timestamp)
+
+        flow.set_velocity(vel_px_val, speed_px_val)
 
     def get_flows(self) -> Dict[int, AprilTagFlow]:
         return self._flows
