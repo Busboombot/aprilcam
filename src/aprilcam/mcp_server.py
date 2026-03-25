@@ -38,6 +38,13 @@ from aprilcam.homography import (
     calibrate_from_corners,
     detect_aruco_4x4,
 )
+from aprilcam.image_processing import (
+    process_detect_circles,
+    process_detect_contours,
+    process_detect_lines,
+    process_detect_qr_codes,
+)
+from aprilcam.models import AprilTag
 from aprilcam.playfield import Playfield
 
 # ---------------------------------------------------------------------------
@@ -1858,6 +1865,175 @@ class _LiveViewLoopAdapter:
 
 
 # ---------------------------------------------------------------------------
+# Operation pipeline
+# ---------------------------------------------------------------------------
+
+# Canonical set of operations the pipeline understands.
+_KNOWN_OPERATIONS = frozenset({
+    "deskew",
+    "detect_tags",
+    "detect_aruco",
+    "detect_lines",
+    "detect_circles",
+    "detect_contours",
+    "detect_qr",
+})
+
+
+def _detect_tags_on_frame(frame_bgr: np.ndarray, family: str = "36h11") -> list[dict]:
+    """Detect AprilTags on a BGR frame and return JSON-serializable results.
+
+    Uses ``cv2.aruco`` with the AprilTag dictionary corresponding to
+    *family* (default ``"36h11"``).  Each result dict contains ``id``,
+    ``family``, ``center_px``, ``corners_px``, and ``orientation_yaw``.
+    """
+    import cv2
+
+    family_map = {
+        "36h11": cv2.aruco.DICT_APRILTAG_36h11,
+        "25h9": cv2.aruco.DICT_APRILTAG_25h9,
+        "16h5": cv2.aruco.DICT_APRILTAG_16h5,
+    }
+    aruco_dict_id = family_map.get(family, cv2.aruco.DICT_APRILTAG_36h11)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_id)
+    params = cv2.aruco.DetectorParameters()
+    detector = cv2.aruco.ArucoDetector(aruco_dict, params)
+
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    corners, ids, _ = detector.detectMarkers(gray)
+
+    results: list[dict] = []
+    if ids is None or len(ids) == 0:
+        return results
+
+    for c, tid in zip(corners, ids.flatten()):
+        pts = np.array(c, dtype=np.float32).reshape(-1, 2)
+        tag = AprilTag.from_corners(
+            tag_id=int(tid),
+            corners_px=pts,
+            family=family,
+        )
+        results.append({
+            "id": tag.id,
+            "family": tag.family,
+            "center_px": list(tag.center_px),
+            "corners_px": tag.corners_px.tolist(),
+            "orientation_yaw": tag.orientation_yaw,
+        })
+    return results
+
+
+def _detect_aruco_on_frame(frame_bgr: np.ndarray) -> list[dict]:
+    """Detect 4x4 ArUco markers and return JSON-serializable results."""
+    import cv2
+
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    detections = detect_aruco_4x4(gray)
+    results: list[dict] = []
+    for pts, tid in detections:
+        center = pts.mean(axis=0)
+        results.append({
+            "id": int(tid),
+            "center_px": [float(center[0]), float(center[1])],
+            "corners_px": pts.tolist(),
+        })
+    return results
+
+
+def run_operations(entry: FrameEntry, operations: list[str]) -> dict[str, Any]:
+    """Execute a batch of operations on a :class:`FrameEntry` in order.
+
+    Parameters
+    ----------
+    entry:
+        The frame entry whose image slots and results will be mutated.
+    operations:
+        Ordered list of operation names to run.
+
+    Returns
+    -------
+    dict
+        Combined results keyed by operation name.
+
+    Raises
+    ------
+    ValueError
+        If any operation name is not recognised.
+    """
+    unknown = [op for op in operations if op not in _KNOWN_OPERATIONS]
+    if unknown:
+        raise ValueError(
+            f"Unknown operation(s): {', '.join(unknown)}. "
+            f"Known: {', '.join(sorted(_KNOWN_OPERATIONS))}"
+        )
+
+    combined: dict[str, Any] = {}
+
+    for op in operations:
+        if op == "deskew":
+            combined[op] = _run_deskew(entry)
+        elif op == "detect_tags":
+            result = _detect_tags_on_frame(entry.processed)
+            entry.results["detect_tags"] = result
+            entry.apriltags = result
+            combined[op] = result
+        elif op == "detect_aruco":
+            result = _detect_aruco_on_frame(entry.processed)
+            entry.results["detect_aruco"] = result
+            entry.aruco_corners = {d["id"]: d["corners_px"] for d in result}
+            combined[op] = result
+        elif op == "detect_lines":
+            result = process_detect_lines(entry.processed)
+            entry.results["detect_lines"] = result
+            combined[op] = result
+        elif op == "detect_circles":
+            result = process_detect_circles(entry.processed)
+            entry.results["detect_circles"] = result
+            combined[op] = result
+        elif op == "detect_contours":
+            result = process_detect_contours(entry.processed)
+            entry.results["detect_contours"] = result
+            combined[op] = result
+        elif op == "detect_qr":
+            result = process_detect_qr_codes(entry.processed)
+            entry.results["detect_qr"] = result
+            combined[op] = result
+
+        entry.operations_applied.append(op)
+
+    return combined
+
+
+def _run_deskew(entry: FrameEntry) -> dict[str, Any]:
+    """Apply deskew to *entry* using its source's playfield, if available."""
+    source_id = entry.source
+
+    # Try to find a playfield for this source.
+    # For file-based sources, the playfield camera_id is "file:<path>".
+    pf_entry = None
+    try:
+        pf_entry = playfield_registry.get(source_id)
+    except KeyError:
+        pass
+
+    # Also try find_by_camera in case source is a camera handle
+    if pf_entry is None:
+        pf_id = playfield_registry.find_by_camera(source_id)
+        if pf_id is not None:
+            pf_entry = playfield_registry.get(pf_id)
+
+    if pf_entry is None:
+        return {"applied": False, "reason": "no playfield for source"}
+
+    warped = pf_entry.playfield.deskew(entry.original)
+    h, w = warped.shape[:2]
+    entry.deskewed = warped
+    entry.processed = entry.deskewed
+    entry.is_deskewed = True
+    return {"applied": True, "width": w, "height": h}
+
+
+# ---------------------------------------------------------------------------
 # Frame lifecycle tools
 # ---------------------------------------------------------------------------
 
@@ -1870,15 +2046,18 @@ async def create_frame(
     """Capture a frame from a camera or playfield and store it in the frame registry.
 
     The frame is stored with three identical image slots (original, deskewed,
-    processed).  The ``operations`` parameter is accepted but currently ignored
-    — pipeline execution will be added in a future ticket.
+    processed).  If *operations* is provided, the operation pipeline runs
+    immediately after capture and results are included in the response.
 
     Args:
         source_id: A camera or playfield handle (e.g. ``"cam_0"``).
-        operations: Reserved for future pipeline ops; currently ignored.
+        operations: Optional list of pipeline operations to run on the
+            frame immediately after capture (e.g.
+            ``["deskew", "detect_tags"]``).
 
     Returns:
-        On success: ``{"frame_id": "<id>", "source": "<source_id>"}``.
+        On success: ``{"frame_id": "<id>", "source": "<source_id>"}``
+        (plus ``"results"`` when *operations* is provided).
         On error: ``{"error": "<message>"}``.
     """
     try:
@@ -1887,10 +2066,22 @@ async def create_frame(
         return [TextContent(type="text", text=json.dumps({"error": str(exc)}))]
 
     entry = frame_registry.add(raw=frame, source=source_id)
+    response: dict[str, Any] = {
+        "frame_id": entry.frame_id,
+        "source": source_id,
+    }
+
+    if operations:
+        try:
+            results = run_operations(entry, operations)
+            response["results"] = results
+        except ValueError as exc:
+            response["error"] = str(exc)
+
     return [
         TextContent(
             type="text",
-            text=json.dumps({"frame_id": entry.frame_id, "source": source_id}),
+            text=json.dumps(response),
         )
     ]
 
@@ -1902,12 +2093,18 @@ async def create_frame_from_image(
 ) -> list[TextContent]:
     """Load an image file from disk and store it in the frame registry.
 
+    If *operations* is provided, the operation pipeline runs immediately
+    after loading and results are included in the response.
+
     Args:
         image_path: Absolute path to an image file (JPEG, PNG, etc.).
-        operations: Reserved for future pipeline ops; currently ignored.
+        operations: Optional list of pipeline operations to run on the
+            frame immediately after loading (e.g.
+            ``["detect_tags", "detect_lines"]``).
 
     Returns:
-        On success: ``{"frame_id": "<id>", "source": "file:<path>"}``.
+        On success: ``{"frame_id": "<id>", "source": "file:<path>"}``
+        (plus ``"results"`` when *operations* is provided).
         On error: ``{"error": "<message>"}``.
     """
     import os
@@ -1933,10 +2130,72 @@ async def create_frame_from_image(
 
     source = f"file:{image_path}"
     entry = frame_registry.add(raw=img, source=source)
+    response: dict[str, Any] = {
+        "frame_id": entry.frame_id,
+        "source": source,
+    }
+
+    if operations:
+        try:
+            results = run_operations(entry, operations)
+            response["results"] = results
+        except ValueError as exc:
+            response["error"] = str(exc)
+
     return [
         TextContent(
             type="text",
-            text=json.dumps({"frame_id": entry.frame_id, "source": source}),
+            text=json.dumps(response),
+        )
+    ]
+
+
+@server.tool()
+async def process_frame(
+    frame_id: str,
+    operations: list[str],
+) -> list[TextContent]:
+    """Run one or more operations on an existing frame in the registry.
+
+    Operations execute in order on the frame's ``processed`` image slot.
+    Detection operations store structured results without modifying the
+    image; the ``deskew`` operation replaces the ``deskewed`` and
+    ``processed`` slots with a perspective-warped image.
+
+    Supported operations: ``deskew``, ``detect_tags``, ``detect_aruco``,
+    ``detect_lines``, ``detect_circles``, ``detect_contours``,
+    ``detect_qr``.
+
+    Args:
+        frame_id: The frame handle from ``create_frame`` or
+            ``create_frame_from_image``.
+        operations: Ordered list of operation names to execute.
+
+    Returns:
+        On success: ``{"frame_id": "<id>", "results": {<op>: <data>, ...}}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    try:
+        entry = frame_registry.get(frame_id)
+    except KeyError:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({"error": f"Frame '{frame_id}' not found"}),
+            )
+        ]
+
+    try:
+        results = run_operations(entry, operations)
+    except ValueError as exc:
+        return [
+            TextContent(type="text", text=json.dumps({"error": str(exc)}))
+        ]
+
+    return [
+        TextContent(
+            type="text",
+            text=json.dumps({"frame_id": frame_id, "results": results}),
         )
     ]
 
