@@ -1,11 +1,12 @@
 ---
-id: "001"
-title: "Extract shared handler functions from mcp_server.py"
-status: todo
-use-cases: [SUC-010-001]
+id: '001'
+title: Extract shared handler functions from mcp_server.py
+status: in-progress
+use-cases:
+- SUC-010-001
 depends-on: []
-github-issue: ""
-todo: ""
+github-issue: ''
+todo: ''
 ---
 
 # Extract shared handler functions from mcp_server.py
