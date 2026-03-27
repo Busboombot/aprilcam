@@ -18,12 +18,15 @@ import json
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
+import asyncio
+
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from aprilcam.mcp_server import server as _mcp_server
+from aprilcam.mcp_server import detection_registry, server as _mcp_server
 from aprilcam.mcp_server import (
     _handle_list_cameras,
     _handle_open_camera,
@@ -317,6 +320,56 @@ async def _dispatch(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+
+async def ws_tags(websocket: WebSocket) -> None:
+    """Stream tag detections over WebSocket for a given source.
+
+    Connect to ``/ws/tags/{source_id}`` to receive a JSON message per
+    frame containing ``source_id``, ``timestamp``, ``frame_index``, and
+    ``tags``.  Messages are only sent when a new frame is available
+    (based on ``frame_index``).  If no detection loop is running on the
+    requested source, the server sends an error message and closes the
+    connection.
+    """
+    source_id: str = websocket.path_params["source_id"]
+    await websocket.accept()
+
+    entry = detection_registry.get(source_id)
+    if entry is None:
+        await websocket.send_json({
+            "error": f"No detection loop running on source '{source_id}'"
+        })
+        await websocket.close(code=1008)
+        return
+
+    last_frame_index: int = -1
+    try:
+        while True:
+            # Re-check registry in case detection was stopped while connected
+            entry = detection_registry.get(source_id)
+            if entry is None:
+                await websocket.send_json({
+                    "error": f"Detection loop on source '{source_id}' has stopped"
+                })
+                await websocket.close(code=1001)
+                return
+
+            frame = entry.ring_buffer.get_latest()
+            if frame is not None and frame.frame_index != last_frame_index:
+                last_frame_index = frame.frame_index
+                msg = frame.to_dict()
+                msg["source_id"] = source_id
+                await websocket.send_json(msg)
+
+            await asyncio.sleep(0.033)  # ~30 fps
+    except WebSocketDisconnect:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -339,6 +392,7 @@ def create_app() -> Starlette:
     routes = [
         Route("/", _discovery, methods=["GET"]),
         Route("/api/{tool_name}", _dispatch, methods=["POST"]),
+        WebSocketRoute("/ws/tags/{source_id}", ws_tags),
         Mount("/mcp", app=mcp_sse),
     ]
     return Starlette(routes=routes)

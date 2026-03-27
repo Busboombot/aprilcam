@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aprilcam"
-version = "0.20260326.2"
+version = "0.20260327.1"
 description = "MCP server and CLI for camera management, AprilTag/ArUco detection, playfield homography, and image processing"
 authors = [
   { name = "Eric Busboom" }
@@ -36,6 +36,7 @@ dependencies = [
   "python-dotenv>=1.0",
   "mss>=9.0", # for --screen desktop capture on macOS/Windows/Linux
   "mcp>=1.0",
+  "websockets>=12.0",
   "fpdf2>=2.7",
 ]
 
