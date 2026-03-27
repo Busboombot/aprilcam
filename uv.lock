@@ -38,7 +38,7 @@ wheels = [
 
 [[package]]
 name = "aprilcam"
-version = "0.20260326.1"
+version = "0.20260326.2"
 source = { editable = "." }
 dependencies = [
     { name = "fpdf2" },

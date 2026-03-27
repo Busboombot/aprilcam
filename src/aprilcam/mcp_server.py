@@ -323,6 +323,17 @@ async def open_camera(
             else:
                 idx = 0
 
+            # Deterministic handle: cam_N for indexed cameras, screen for screen capture
+            handle = f"cam_{idx}"
+
+            # Close any existing handle BEFORE opening a new VideoCapture
+            # to avoid the old capture holding the device and starving the new one
+            if handle in registry._cameras:
+                try:
+                    registry.close(handle)
+                except Exception:
+                    pass
+
             if backend is not None:
                 be = getattr(cv2, backend, None)
                 if be is None:
@@ -358,17 +369,9 @@ async def open_camera(
                     break
                 time.sleep(0.1)
 
-        # Deterministic handle: cam_N for indexed cameras, screen for screen capture
+        # Deterministic handle for screen capture
         if source == "screen":
             handle = "screen"
-        else:
-            handle = f"cam_{idx}"
-        # If this handle is already open, close the old one first
-        if handle in registry._cameras:
-            try:
-                registry.close(handle)
-            except Exception:
-                pass
         camera_id = registry.open(cap, handle=handle)
         return [
             TextContent(
