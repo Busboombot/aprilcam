@@ -1,11 +1,18 @@
 ---
-id: "005"
-title: "CLI subcommand and integration tests"
-status: todo
-use-cases: [SUC-010-001, SUC-010-002, SUC-010-003, SUC-010-004]
-depends-on: ["002", "003", "004"]
-github-issue: ""
-todo: ""
+id: '005'
+title: CLI subcommand and integration tests
+status: in-progress
+use-cases:
+- SUC-010-001
+- SUC-010-002
+- SUC-010-003
+- SUC-010-004
+depends-on:
+- '002'
+- '003'
+- '004'
+github-issue: ''
+todo: ''
 ---
 
 # CLI subcommand and integration tests
