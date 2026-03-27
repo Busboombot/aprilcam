@@ -345,6 +345,7 @@ def run_live_view(
     use_highpass: bool = True,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    homography: Optional[np.ndarray] = None,
 ) -> None:
     """Run the live view directly (blocking) — for CLI use.
 
@@ -393,5 +394,6 @@ def run_live_view(
         deskew_overlay=deskew,
         print_tags=True,
         cap=cap,
+        homography=homography,
     )
     cam.run()

@@ -51,7 +51,31 @@ def main(argv: list[str] | None = None) -> int:
         "--sharpen", action="store_true",
         help="Apply sharpening filter",
     )
+    parser.add_argument(
+        "--homography", type=str, default=None,
+        help="Path to homography JSON file (default: data/homography.json if it exists)",
+    )
     args = parser.parse_args(argv)
+
+    # Load homography matrix if available
+    import json
+    from pathlib import Path
+    import numpy as np
+
+    homography = None
+    hom_path = None
+    if args.homography:
+        hom_path = Path(args.homography)
+    else:
+        hom_path = Path("data/homography.json")
+
+    if hom_path and hom_path.is_file():
+        try:
+            data = json.loads(hom_path.read_text())
+            homography = np.array(data["homography"], dtype=np.float64)
+            print(f"Loaded homography from {hom_path}")
+        except Exception as e:
+            print(f"Warning: failed to load homography from {hom_path}: {e}")
 
     from aprilcam.liveview import run_live_view
 
@@ -66,5 +90,6 @@ def main(argv: list[str] | None = None) -> int:
         use_highpass=not args.no_highpass,
         use_clahe=args.clahe,
         use_sharpen=args.sharpen,
+        homography=homography,
     )
     return 0

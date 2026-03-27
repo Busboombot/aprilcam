@@ -125,6 +125,12 @@ class AprilCam:
         self._tag_models: dict[int, AprilTagModel] = {}
         self._frame_idx: int = 0
 
+        # EMA state for TUI display smoothing
+        self._ema: dict[int, dict[str, float]] = {}
+        self._ema_alpha: float = 0.05  # smoothing factor (lower = smoother)
+        self._tui_initialized: bool = False
+        self._tui_last_ids: set[int] = set()
+
     def reset_state(self) -> None:
         """Reset all tracking state to initial values."""
         self._prev_gray = None
@@ -132,6 +138,92 @@ class AprilCam:
         self._track_families = {}
         self._tag_models = {}
         self._frame_idx = 0
+        self._ema = {}
+        self._tui_initialized = False
+        self._tui_last_ids = set()
+
+    def _ema_smooth(self, tag_id: int, key: str, value: float) -> float:
+        """Apply exponential moving average to a value for a given tag/key."""
+        if tag_id not in self._ema:
+            self._ema[tag_id] = {}
+        state = self._ema[tag_id]
+        if key not in state:
+            state[key] = value
+        else:
+            alpha = self._ema_alpha
+            state[key] = alpha * value + (1.0 - alpha) * state[key]
+        return state[key]
+
+    def _print_tui(self, tag_records: list, has_world: bool) -> None:
+        """Print a fixed-position TUI table of tag data with EMA smoothing."""
+        import sys
+
+        # Build smoothed rows sorted by tag ID
+        rows = []
+        for tr in sorted(tag_records, key=lambda t: t.id):
+            tag_id = tr.id
+            cx = self._ema_smooth(tag_id, "cx", float(tr.center_px[0]))
+            cy = self._ema_smooth(tag_id, "cy", float(tr.center_px[1]))
+            ori_raw = math.degrees(tr.orientation_yaw)
+            ori = self._ema_smooth(tag_id, "ori", ori_raw)
+            spd_raw = float(tr.speed_px) if tr.speed_px is not None else 0.0
+            spd = self._ema_smooth(tag_id, "spd", spd_raw)
+            vx, vy = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
+            vang_raw = math.degrees(math.atan2(vy, vx)) if (vx != 0.0 or vy != 0.0) else 0.0
+            vang = self._ema_smooth(tag_id, "vang", vang_raw)
+
+            row = {"id": tag_id, "cx": cx, "cy": cy, "ori": ori, "spd": spd, "vang": vang}
+
+            if has_world:
+                H = self.homography
+                u, v = float(tr.center_px[0]), float(tr.center_px[1])
+                vec = np.array([u, v, 1.0], dtype=float)
+                Xw = H @ vec
+                if abs(Xw[2]) > 1e-6:
+                    wx = self._ema_smooth(tag_id, "wx", Xw[0] / Xw[2])
+                    wy = self._ema_smooth(tag_id, "wy", Xw[1] / Xw[2])
+                    row["wx"] = wx
+                    row["wy"] = wy
+
+            rows.append(row)
+
+        current_ids = {r["id"] for r in rows}
+
+        # Prune EMA state for tags no longer visible
+        for old_id in list(self._ema.keys()):
+            if old_id not in current_ids:
+                del self._ema[old_id]
+
+        # Build output lines
+        header = f"{'ID':>4s}  {'CX':>6s}  {'CY':>6s}  {'ORI':>8s}  {'SPEED':>8s}  {'VANG':>8s}"
+        if has_world:
+            header += f"  {'WX':>8s}  {'WY':>8s}"
+
+        sep = "-" * len(header)
+
+        lines = [sep, header, sep]
+        for r in rows:
+            line = f"{r['id']:4d}  {r['cx']:6.1f}  {r['cy']:6.1f}  {r['ori']:+7.1f}°  {r['spd']:7.1f}  {r['vang']:+7.1f}°"
+            if has_world and "wx" in r:
+                line += f"  {r['wx']:7.1f}cm  {r['wy']:7.1f}cm"
+            lines.append(line)
+        lines.append(sep)
+
+        # Calculate how many lines to clear
+        total_lines = len(lines)
+        if self._tui_initialized:
+            # Move cursor up to overwrite previous output
+            # Need to account for previous frame's line count
+            prev_count = 4 + len(self._tui_last_ids)  # header(3) + data rows + footer(1)
+            sys.stdout.write(f"\033[{prev_count}A")
+
+        # Write new content, clearing each line
+        for line in lines:
+            sys.stdout.write(f"\033[2K{line}\n")
+
+        sys.stdout.flush()
+        self._tui_initialized = True
+        self._tui_last_ids = current_ids
 
     @staticmethod
     def _get_dict_by_family(name: str):
@@ -423,29 +515,9 @@ class AprilCam:
                     now = time.monotonic()
                     tag_records = self.process_frame(frame, now)
 
-                    # 6) Optional logging to stdout (velocities from process_frame)
+                    # 6) Optional TUI display (fixed-position, EMA-smoothed)
                     if self.print_tags and tag_records:
-                        lines = []
-                        H = self.homography
-                        for tr in tag_records:
-                            tag_id = tr.id
-                            center = np.array(tr.center_px, dtype=np.float32)
-                            wtxt = ""
-                            if H is not None:
-                                u, v = float(center[0]), float(center[1])
-                                vec = np.array([u, v, 1.0], dtype=float)
-                                Xw = H @ vec
-                                if abs(Xw[2]) > 1e-6:
-                                    Xcm = Xw[0] / Xw[2]
-                                    Ycm = Xw[1] / Xw[2]
-                                    wtxt = f"  WX:{Xcm:7.1f}cm  WY:{Ycm:7.1f}cm"
-                            ori_ang = math.degrees(tr.orientation_yaw)
-                            v = float(tr.speed_px) if tr.speed_px is not None else 0.0
-                            vx, vy = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
-                            vang = math.degrees(math.atan2(vy, vx)) if (vx != 0.0 or vy != 0.0) else 0.0
-                            line = f"ID:{tag_id:4d}  CX:{int(center[0]):4d}  CY:{int(center[1]):4d}  ORI:{ori_ang:+7.1f}\u00b0  V:{v:7.1f} px/s  VANG:{vang:+7.1f}\u00b0{wtxt}"
-                            lines.append(line)
-                        print("\n".join(lines))
+                        self._print_tui(tag_records, has_world=self.homography is not None)
 
                     # 8) Prepare display image and draw overlays
                     display = self.display.update(frame)
