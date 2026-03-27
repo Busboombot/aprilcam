@@ -1,11 +1,13 @@
 ---
-id: "004"
-title: "Add WebSocket tag streaming endpoint"
-status: todo
-use-cases: [SUC-010-004]
-depends-on: ["002"]
-github-issue: ""
-todo: ""
+id: '004'
+title: Add WebSocket tag streaming endpoint
+status: in-progress
+use-cases:
+- SUC-010-004
+depends-on:
+- '002'
+github-issue: ''
+todo: ''
 ---
 
 # Add WebSocket tag streaming endpoint

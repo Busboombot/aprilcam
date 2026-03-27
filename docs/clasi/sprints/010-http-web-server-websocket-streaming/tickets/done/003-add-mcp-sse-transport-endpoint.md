@@ -1,11 +1,13 @@
 ---
-id: "003"
-title: "Add MCP SSE transport endpoint"
-status: todo
-use-cases: [SUC-010-003]
-depends-on: ["002"]
-github-issue: ""
-todo: ""
+id: '003'
+title: Add MCP SSE transport endpoint
+status: in-progress
+use-cases:
+- SUC-010-003
+depends-on:
+- '002'
+github-issue: ''
+todo: ''
 ---
 
 # Add MCP SSE transport endpoint
