@@ -247,51 +247,31 @@ def format_image_output(
 
 
 # ---------------------------------------------------------------------------
-# Tools
+# Core handler functions (business logic, plain Python return values)
 # ---------------------------------------------------------------------------
 
 
-@server.tool()
-async def list_cameras() -> list[TextContent]:
-    """List available cameras by probing indices 0 through 9.
-
-    Returns:
-        A JSON array of camera objects, each with ``index`` (int),
-        ``name`` (str), and ``backend`` (str). Returns an empty
-        array if no cameras are found or an error occurs.
-    """
+def _handle_list_cameras() -> list[dict]:
+    """Core logic for list_cameras — returns a list of camera info dicts."""
     from aprilcam.camutil import list_cameras as _list_cameras
 
     try:
         cams = _list_cameras(max_index=10, quiet=True)
-        result = [
+        return [
             {"index": c.index, "name": c.name, "backend": c.backend}
             for c in cams
         ]
     except Exception:
-        result = []  # empty array, not an error
-    return [TextContent(type="text", text=json.dumps(result))]
+        return []  # empty array, not an error
 
 
-@server.tool()
-async def open_camera(
+def _handle_open_camera(
     index: int | None = None,
     pattern: str | None = None,
     source: str | None = None,
     backend: str | None = None,
-) -> list[TextContent]:
-    """Open a camera by index, name pattern, or screen capture and return a UUID handle.
-
-    Args:
-        index: Camera device index (default 0 if nothing else is specified).
-        pattern: Substring to match against camera names (e.g. ``"FaceTime"``).
-        source: Set to ``"screen"`` to capture the desktop instead of a camera.
-        backend: OpenCV backend constant name (e.g. ``"CAP_AVFOUNDATION"``).
-
-    Returns:
-        On success: ``{"camera_id": "<uuid>"}``.
-        On error: ``{"error": "<message>"}``.
-    """
+) -> dict:
+    """Core logic for open_camera — returns ``{"camera_id": ...}`` or ``{"error": ...}``."""
     try:
         if source == "screen":
             from aprilcam.screencap import ScreenCaptureMSS
@@ -310,14 +290,7 @@ async def open_camera(
                 cams = _list_cameras(max_index=10, quiet=True)
                 idx = select_camera_by_pattern(pattern, cams)
                 if idx is None:
-                    return [
-                        TextContent(
-                            type="text",
-                            text=json.dumps(
-                                {"error": f"No camera matching pattern '{pattern}'"}
-                            ),
-                        )
-                    ]
+                    return {"error": f"No camera matching pattern '{pattern}'"}
             elif index is not None:
                 idx = index
             else:
@@ -337,28 +310,14 @@ async def open_camera(
             if backend is not None:
                 be = getattr(cv2, backend, None)
                 if be is None:
-                    return [
-                        TextContent(
-                            type="text",
-                            text=json.dumps(
-                                {"error": f"Unknown backend '{backend}'"}
-                            ),
-                        )
-                    ]
+                    return {"error": f"Unknown backend '{backend}'"}
                 cap = cv2.VideoCapture(idx, be)
             else:
                 cap = cv2.VideoCapture(idx)
 
             if not cap.isOpened():
                 cap.release()
-                return [
-                    TextContent(
-                        type="text",
-                        text=json.dumps(
-                            {"error": f"Failed to open camera at index {idx}"}
-                        ),
-                    )
-                ]
+                return {"error": f"Failed to open camera at index {idx}"}
 
             # USB cameras need several reads before producing valid frames
             import time
@@ -373,37 +332,33 @@ async def open_camera(
         if source == "screen":
             handle = "screen"
         camera_id = registry.open(cap, handle=handle)
-        return [
-            TextContent(
-                type="text", text=json.dumps({"camera_id": camera_id})
-            )
-        ]
+        return {"camera_id": camera_id}
     except Exception as exc:
-        return [
-            TextContent(type="text", text=json.dumps({"error": str(exc)}))
-        ]
+        return {"error": str(exc)}
 
 
-@server.tool()
-async def capture_frame(
+def _handle_close_camera(camera_id: str) -> dict:
+    """Core logic for close_camera — returns ``{"status": "closed"}`` or ``{"error": ...}``."""
+    try:
+        registry.close(camera_id)
+    except KeyError:
+        return {"error": f"Unknown camera_id '{camera_id}'"}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+    return {"status": "closed"}
+
+
+def _handle_capture_frame(
     camera_id: str,
     format: str = "base64",
     quality: int = 85,
-) -> list[TextContent | ImageContent]:
-    """Capture a single frame from an open camera or playfield.
-
-    If *camera_id* refers to a playfield, the frame is automatically deskewed.
-
-    Args:
-        camera_id: UUID handle from ``open_camera`` or a playfield_id.
-        format: ``"base64"`` (default) returns inline image data;
-            ``"file"`` writes a JPEG to a temp file and returns its path.
-        quality: JPEG encoding quality (0-100, default 85).
+) -> dict:
+    """Core logic for capture_frame — returns image dict or error dict.
 
     Returns:
-        On success (base64): an ``ImageContent`` with inline JPEG data.
-        On success (file): ``{"path": "<temp_file_path>"}``.
-        On error: ``{"error": "<message>"}``.
+        ``{"type": "image", "data": ..., "mime": "image/jpeg"}`` for base64,
+        ``{"type": "file", "path": ...}`` for file format,
+        ``{"type": "error", "error": ...}`` for errors.
     """
     # Check if this is a playfield ID first
     pf_entry = None
@@ -413,24 +368,16 @@ async def capture_frame(
         try:
             cap = registry.get(pf_entry.camera_id)
         except KeyError:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Underlying camera '{pf_entry.camera_id}' is no longer open"}
-            ))]
+            return {"type": "error", "error": f"Underlying camera '{pf_entry.camera_id}' is no longer open"}
     except KeyError:
         # Not a playfield, try camera registry
         try:
             cap = registry.get(camera_id)
         except KeyError:
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps({"error": f"Unknown camera_id '{camera_id}'"}),
-                )
-            ]
+            return {"type": "error", "error": f"Unknown camera_id '{camera_id}'"}
 
     try:
         import cv2
-
         import time
 
         ret, frame = None, None
@@ -440,12 +387,7 @@ async def capture_frame(
                 break
             time.sleep(0.1)
         if not ret:
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps({"error": "Failed to read frame"}),
-                )
-            ]
+            return {"type": "error", "error": "Failed to read frame"}
 
         # Apply deskew if this is a playfield capture
         if pf_entry is not None:
@@ -455,12 +397,7 @@ async def capture_frame(
             ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality]
         )
         if not ok:
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps({"error": "Failed to encode frame"}),
-                )
-            ]
+            return {"type": "error", "error": "Failed to encode frame"}
 
         if format == "file":
             tmp = tempfile.NamedTemporaryFile(
@@ -468,86 +405,26 @@ async def capture_frame(
             )
             tmp.write(buf.tobytes())
             tmp.close()
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps({"path": tmp.name}),
-                )
-            ]
+            return {"type": "file", "path": tmp.name}
 
         # default: base64
         b64 = base64.b64encode(buf.tobytes()).decode("ascii")
-        return [
-            ImageContent(
-                type="image",
-                data=b64,
-                mimeType="image/jpeg",
-            )
-        ]
+        return {"type": "image", "data": b64, "mime": "image/jpeg"}
     except Exception as exc:
-        return [
-            TextContent(type="text", text=json.dumps({"error": str(exc)}))
-        ]
+        return {"type": "error", "error": str(exc)}
 
 
-@server.tool()
-async def close_camera(camera_id: str) -> list[TextContent]:
-    """Close a previously-opened camera and release its resources.
-
-    Args:
-        camera_id: The UUID handle returned by ``open_camera``.
-
-    Returns:
-        On success: ``{"status": "closed"}``.
-        On error: ``{"error": "<message>"}``.
-    """
-    try:
-        registry.close(camera_id)
-    except KeyError:
-        return [
-            TextContent(
-                type="text",
-                text=json.dumps({"error": f"Unknown camera_id '{camera_id}'"}),
-            )
-        ]
-    except Exception as exc:
-        return [
-            TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))
-        ]
-    return [
-        TextContent(type="text", text=json.dumps({"status": "closed"}))
-    ]
-
-
-@server.tool()
-async def create_playfield(
+def _handle_create_playfield(
     camera_id: str,
     max_frames: int = 30,
-) -> list[TextContent]:
-    """Create a playfield from a camera by detecting ArUco corner markers.
-
-    Reads up to *max_frames* frames from the camera, looking for four
-    ArUco 4x4 corner markers (IDs 0-3). Once all four are found, the
-    playfield polygon is established and a playfield_id is returned.
-
-    Args:
-        camera_id: UUID handle from ``open_camera``.
-        max_frames: Maximum number of frames to read while searching
-            for corner markers (default 30).
-
-    Returns:
-        On success: ``{"playfield_id": "<id>", "corners": [[x,y],...], "calibrated": false}``.
-        On partial detection: ``{"error": "...", "missing_corner_ids": [...]}``.
-        On error: ``{"error": "<message>"}``.
-    """
+) -> dict:
+    """Core logic for create_playfield — returns result dict or error dict."""
     try:
         # Validate camera exists
         try:
             cap = registry.get(camera_id)
         except KeyError:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Unknown camera_id '{camera_id}'"}
-            ))]
+            return {"error": f"Unknown camera_id '{camera_id}'"}
 
         # Create playfield and try to detect corners (proc_width=0 disables downscale)
         pf = Playfield(detect_inverted=True, proc_width=0)
@@ -571,10 +448,10 @@ async def create_playfield(
                 dets = detect_aruco_4x4(gray)
                 found_ids = [tid for _, tid in dets if tid in (0, 1, 2, 3)]
                 missing = [i for i in (0, 1, 2, 3) if i not in found_ids]
-            return [TextContent(type="text", text=json.dumps({
+            return {
                 "error": "Failed to detect all 4 corner markers",
                 "missing_corner_ids": missing,
-            }))]
+            }
 
         # Register the playfield
         playfield_id = f"pf_{camera_id}"
@@ -592,13 +469,515 @@ async def create_playfield(
         playfield_registry.register(entry)
 
         corners = poly.tolist()  # UL, UR, LR, LL
-        return [TextContent(type="text", text=json.dumps({
+        return {
             "playfield_id": playfield_id,
             "corners": corners,
             "calibrated": False,
-        }))]
+        }
     except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_get_playfield_info(playfield_id: str) -> dict:
+    """Core logic for get_playfield_info — returns info dict or error dict."""
+    try:
+        try:
+            entry = playfield_registry.get(playfield_id)
+        except KeyError:
+            return {"error": f"Unknown playfield_id '{playfield_id}'"}
+
+        poly = entry.playfield.get_polygon()
+        calibrated = entry.homography is not None
+
+        result: dict = {
+            "playfield_id": entry.playfield_id,
+            "camera_id": entry.camera_id,
+            "corners": poly.tolist() if poly is not None else None,
+            "calibrated": calibrated,
+        }
+
+        if calibrated and entry.field_spec is not None:
+            result["width_cm"] = entry.field_spec.width_cm
+            result["height_cm"] = entry.field_spec.height_cm
+            result["homography"] = entry.homography.tolist()
+
+        return result
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_start_detection(
+    source_id: str,
+    family: str = "36h11",
+    proc_width: int = 0,
+    detect_interval: int = 1,
+    use_clahe: bool = False,
+    use_sharpen: bool = False,
+) -> dict:
+    """Core logic for start_detection — returns status dict or error dict."""
+    try:
+        if source_id in detection_registry:
+            return {"error": f"Detection already running on '{source_id}'"}
+
+        import cv2
+
+        # Resolve source to a capture object and optional playfield data
+        cap = None
+        homography = None
+        playfield_poly = None
+        camera_id: str | None = None  # the registry handle to re-open on stop
+        camera_index: int | None = None  # real device index (if applicable)
+        exclusive_cap = None  # set when we open our own exclusive camera
+
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            camera_id = pf_entry.camera_id
+            try:
+                cap = registry.get(camera_id)
+            except KeyError:
+                return {"error": f"Underlying camera '{camera_id}' is no longer open"}
+            homography = pf_entry.homography
+            poly = pf_entry.playfield.get_polygon()
+            if poly is not None:
+                playfield_poly = poly
+        except KeyError:
+            # Not a playfield — treat source_id as a camera handle
+            camera_id = source_id
+            try:
+                cap = registry.get(source_id)
+            except KeyError:
+                return {"error": f"Unknown source_id '{source_id}'"}
+
+        # For real cameras (cam_N handles), open an exclusive capture to
+        # avoid frame contention with other MCP tools reading the same handle.
+        if camera_id and camera_id.startswith("cam_"):
+            try:
+                camera_index = int(camera_id.split("_", 1)[1])
+            except (ValueError, IndexError):
+                camera_index = None
+
+            if camera_index is not None:
+                # Release the shared camera so the detection loop gets exclusive access
+                try:
+                    registry.close(camera_id)
+                except KeyError:
+                    pass
+
+                exclusive_cap = cv2.VideoCapture(camera_index)
+                if exclusive_cap.isOpened():
+                    cap = exclusive_cap
+                else:
+                    # Re-open shared camera on failure
+                    exclusive_cap = None
+                    try:
+                        shared_cap = cv2.VideoCapture(camera_index)
+                        if shared_cap.isOpened():
+                            registry.open(shared_cap, handle=camera_id)
+                            cap = registry.get(camera_id)
+                    except Exception:
+                        pass
+
+        cam = AprilCam(
+            index=camera_index if camera_index is not None else 0,
+            backend=None,
+            speed_alpha=0.3,
+            family=family,
+            proc_width=proc_width,
+            detect_interval=detect_interval,
+            use_clahe=use_clahe,
+            use_sharpen=use_sharpen,
+            headless=True,
+            cap=cv2.VideoCapture(),
+            homography=homography,
+            playfield_poly_init=playfield_poly,
+        )
+
+        buf = RingBuffer(maxlen=300)
+        loop = DetectionLoop(source=cap, aprilcam=cam, ring_buffer=buf)
+        loop.start()
+
+        detection_registry[source_id] = DetectionEntry(
+            source_id=source_id,
+            loop=loop,
+            ring_buffer=buf,
+            aprilcam=cam,
+        )
+        # Remember state so stop_detection can re-open the shared camera
+        detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
+        detection_registry[source_id]._camera_index = camera_index  # type: ignore[attr-defined]
+        detection_registry[source_id]._exclusive_cap = exclusive_cap  # type: ignore[attr-defined]
+
+        return {"source_id": source_id, "status": "started"}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_stop_detection(source_id: str) -> dict:
+    """Core logic for stop_detection — returns status dict or error dict."""
+    try:
+        entry = detection_registry.pop(source_id, None)
+        if entry is None:
+            return {"error": f"No detection running on '{source_id}'"}
+
+        entry.loop.stop()
+
+        # Release the exclusive capture and re-open the shared camera
+        exclusive_cap = getattr(entry, "_exclusive_cap", None)
+        if exclusive_cap is not None:
+            try:
+                exclusive_cap.release()
+            except Exception:
+                pass
+        camera_id = getattr(entry, "_camera_id", None)
+        camera_index = getattr(entry, "_camera_index", 0)
+        if camera_id is not None:
+            try:
+                import cv2
+                shared_cap = cv2.VideoCapture(camera_index)
+                if shared_cap.isOpened():
+                    registry.open(shared_cap, handle=camera_id)
+            except Exception:
+                pass
+
+        return {"source_id": source_id, "status": "stopped"}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_get_tags(source_id: str) -> dict:
+    """Core logic for get_tags — returns tag data dict or error dict."""
+    try:
+        entry = detection_registry.get(source_id)
+        if entry is None:
+            return {"error": f"No detection running on '{source_id}'"}
+
+        latest = entry.ring_buffer.get_latest()
+        if latest is None:
+            return {"source_id": source_id, "frame": None, "tags": []}
+
+        result = latest.to_dict()
+        result["source_id"] = source_id
+        return result
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_get_tag_history(
+    source_id: str,
+    num_frames: int = 30,
+) -> dict:
+    """Core logic for get_tag_history — returns history dict or error dict."""
+    try:
+        entry = detection_registry.get(source_id)
+        if entry is None:
+            return {"error": f"No detection running on '{source_id}'"}
+
+        records = entry.ring_buffer.get_last_n(num_frames)
+        return {"source_id": source_id, "frames": [r.to_dict() for r in records]}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_get_frame(
+    source_id: str,
+    format: str = "base64",
+    quality: int = 85,
+) -> dict:
+    """Core logic for get_frame — returns image dict or error dict.
+
+    Returns:
+        ``{"type": "image", "data": ..., "mime": "image/jpeg"}`` for base64,
+        ``{"type": "file", "path": ...}`` for file format,
+        ``{"type": "error", "error": ...}`` for errors.
+    """
+    try:
+        frame = resolve_source(source_id)
+    except KeyError as e:
+        return {"type": "error", "error": str(e)}
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
+    try:
+        import cv2
+
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise RuntimeError("Failed to encode frame as JPEG")
+
+        if format == "file":
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.write(buf.tobytes())
+            tmp.close()
+            return {"type": "file", "path": tmp.name}
+
+        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        return {"type": "image", "data": b64, "mime": "image/jpeg"}
+    except Exception as exc:
+        return {"type": "error", "error": f"Unexpected error: {exc}"}
+
+
+def _handle_start_live_view(
+    camera_id: str,
+    deskew: bool = True,
+    family: str = "36h11",
+    proc_width: int = 0,
+    use_clahe: bool = False,
+    use_sharpen: bool = False,
+) -> dict:
+    """Core logic for start_live_view — returns status dict or error dict."""
+    try:
+        # Resolve camera_id to a camera index
+        try:
+            cap = registry.get(camera_id)
+        except KeyError:
+            return {"error": f"Unknown camera_id '{camera_id}'"}
+
+        # Get the camera index from the handle (cam_0 -> 0, cam_1 -> 1, etc.)
+        camera_index = 0
+        if camera_id.startswith("cam_"):
+            try:
+                camera_index = int(camera_id.split("_", 1)[1])
+            except (ValueError, IndexError):
+                pass
+
+        # Close the camera in the registry so the subprocess can open it
+        try:
+            registry.close(camera_id)
+        except Exception:
+            pass
+
+        view_id = f"live_{camera_id}"
+        if view_id in live_view_registry:
+            return {"error": f"Live view already running for '{camera_id}'"}
+
+        from aprilcam.liveview import LiveViewProcess
+        from aprilcam.detection import FrameRecord, TagRecord as _TR, RingBuffer
+
+        buf = RingBuffer(maxlen=300)
+
+        def on_frame(data: dict) -> None:
+            """Feed detection data from the child process into the ring buffer."""
+            try:
+                tags = []
+                for td in data.get("tags", []):
+                    tags.append(_TR(
+                        id=td["id"],
+                        center_px=tuple(td["center_px"]),
+                        corners_px=td["corners_px"],
+                        orientation_yaw=td["orientation_yaw"],
+                        world_xy=tuple(td["world_xy"]) if td.get("world_xy") else None,
+                        in_playfield=td.get("in_playfield", True),
+                        vel_px=tuple(td["vel_px"]) if td.get("vel_px") else None,
+                        speed_px=td.get("speed_px"),
+                        vel_world=tuple(td["vel_world"]) if td.get("vel_world") else None,
+                        speed_world=td.get("speed_world"),
+                        heading_rad=td.get("heading_rad"),
+                        timestamp=td["timestamp"],
+                        frame_index=td["frame_index"],
+                    ))
+                fr = FrameRecord(
+                    timestamp=data["timestamp"],
+                    frame_index=data["frame_index"],
+                    tags=tags,
+                )
+                buf.append(fr)
+            except Exception:
+                pass
+
+        proc = LiveViewProcess(
+            camera_index=camera_index,
+            deskew=deskew,
+            family=family,
+            proc_width=proc_width,
+            use_clahe=use_clahe,
+            use_sharpen=use_sharpen,
+        )
+        proc.start(on_frame=on_frame)
+
+        live_view_registry[view_id] = LiveViewEntry(
+            source_id=view_id,
+            process=proc,
+            ring_buffer=buf,
+        )
+
+        # Also register in detection_registry so get_tags/get_tag_history work
+        detection_registry[view_id] = DetectionEntry(
+            source_id=view_id,
+            loop=_LiveViewLoopAdapter(proc),
+            ring_buffer=buf,
+            aprilcam=AprilCam(index=0, backend=None, speed_alpha=0.3,
+                              family=family, proc_width=proc_width,
+                              headless=True, cap=None),
+        )
+
+        return {"view_id": view_id, "camera_id": camera_id, "status": "started"}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _handle_stop_live_view(view_id: str) -> dict:
+    """Core logic for stop_live_view — returns status dict or error dict."""
+    try:
+        entry = live_view_registry.pop(view_id, None)
+        if entry is None:
+            return {"error": f"No live view running with id '{view_id}'"}
+
+        entry.process.stop()
+
+        # Also remove from detection_registry
+        detection_registry.pop(view_id, None)
+
+        # Re-open the camera so it's available again
+        camera_id = view_id.replace("live_", "", 1)
+        camera_index = 0
+        if camera_id.startswith("cam_"):
+            try:
+                camera_index = int(camera_id.split("_", 1)[1])
+            except (ValueError, IndexError):
+                pass
+        try:
+            import cv2
+            cap = cv2.VideoCapture(camera_index)
+            if cap.isOpened():
+                registry.open(cap, handle=camera_id)
+        except Exception:
+            pass
+
+        return {"view_id": view_id, "status": "stopped"}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
+def _image_result_to_mcp(result: dict) -> list[TextContent | ImageContent]:
+    """Convert a plain image result dict to MCP content items.
+
+    Handles the three result types from image-returning handlers:
+    - ``{"type": "image", "data": ..., "mime": ...}`` -> ``ImageContent``
+    - ``{"type": "file", "path": ...}`` -> ``TextContent`` with JSON path
+    - ``{"type": "error", "error": ...}`` -> ``TextContent`` with JSON error
+    """
+    if result.get("type") == "image":
+        return [ImageContent(
+            type="image",
+            data=result["data"],
+            mimeType=result["mime"],
+        )]
+    elif result.get("type") == "file":
+        return [TextContent(
+            type="text",
+            text=json.dumps({"path": result["path"]}),
+        )]
+    else:
+        # error case
+        return [TextContent(
+            type="text",
+            text=json.dumps({"error": result.get("error", "Unknown error")}),
+        )]
+
+
+# ---------------------------------------------------------------------------
+# Tools (thin MCP wrappers)
+# ---------------------------------------------------------------------------
+
+
+@server.tool()
+async def list_cameras() -> list[TextContent]:
+    """List available cameras by probing indices 0 through 9.
+
+    Returns:
+        A JSON array of camera objects, each with ``index`` (int),
+        ``name`` (str), and ``backend`` (str). Returns an empty
+        array if no cameras are found or an error occurs.
+    """
+    result = _handle_list_cameras()
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def open_camera(
+    index: int | None = None,
+    pattern: str | None = None,
+    source: str | None = None,
+    backend: str | None = None,
+) -> list[TextContent]:
+    """Open a camera by index, name pattern, or screen capture and return a UUID handle.
+
+    Args:
+        index: Camera device index (default 0 if nothing else is specified).
+        pattern: Substring to match against camera names (e.g. ``"FaceTime"``).
+        source: Set to ``"screen"`` to capture the desktop instead of a camera.
+        backend: OpenCV backend constant name (e.g. ``"CAP_AVFOUNDATION"``).
+
+    Returns:
+        On success: ``{"camera_id": "<uuid>"}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_open_camera(index=index, pattern=pattern, source=source, backend=backend)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def capture_frame(
+    camera_id: str,
+    format: str = "base64",
+    quality: int = 85,
+) -> list[TextContent | ImageContent]:
+    """Capture a single frame from an open camera or playfield.
+
+    If *camera_id* refers to a playfield, the frame is automatically deskewed.
+
+    Args:
+        camera_id: UUID handle from ``open_camera`` or a playfield_id.
+        format: ``"base64"`` (default) returns inline image data;
+            ``"file"`` writes a JPEG to a temp file and returns its path.
+        quality: JPEG encoding quality (0-100, default 85).
+
+    Returns:
+        On success (base64): an ``ImageContent`` with inline JPEG data.
+        On success (file): ``{"path": "<temp_file_path>"}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_capture_frame(camera_id, format=format, quality=quality)
+    return _image_result_to_mcp(result)
+
+
+@server.tool()
+async def close_camera(camera_id: str) -> list[TextContent]:
+    """Close a previously-opened camera and release its resources.
+
+    Args:
+        camera_id: The UUID handle returned by ``open_camera``.
+
+    Returns:
+        On success: ``{"status": "closed"}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_close_camera(camera_id)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def create_playfield(
+    camera_id: str,
+    max_frames: int = 30,
+) -> list[TextContent]:
+    """Create a playfield from a camera by detecting ArUco corner markers.
+
+    Reads up to *max_frames* frames from the camera, looking for four
+    ArUco 4x4 corner markers (IDs 0-3). Once all four are found, the
+    playfield polygon is established and a playfield_id is returned.
+
+    Args:
+        camera_id: UUID handle from ``open_camera``.
+        max_frames: Maximum number of frames to read while searching
+            for corner markers (default 30).
+
+    Returns:
+        On success: ``{"playfield_id": "<id>", "corners": [[x,y],...], "calibrated": false}``.
+        On partial detection: ``{"error": "...", "missing_corner_ids": [...]}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_create_playfield(camera_id, max_frames=max_frames)
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 @server.tool()
@@ -808,32 +1187,8 @@ async def get_playfield_info(
         ``height_cm``, and ``homography`` (3x3 matrix as nested list).
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        try:
-            entry = playfield_registry.get(playfield_id)
-        except KeyError:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Unknown playfield_id '{playfield_id}'"}
-            ))]
-
-        poly = entry.playfield.get_polygon()
-        calibrated = entry.homography is not None
-
-        result: dict = {
-            "playfield_id": entry.playfield_id,
-            "camera_id": entry.camera_id,
-            "corners": poly.tolist() if poly is not None else None,
-            "calibrated": calibrated,
-        }
-
-        if calibrated and entry.field_spec is not None:
-            result["width_cm"] = entry.field_spec.width_cm
-            result["height_cm"] = entry.field_spec.height_cm
-            result["homography"] = entry.homography.tolist()
-
-        return [TextContent(type="text", text=json.dumps(result))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_get_playfield_info(playfield_id)
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 # ---------------------------------------------------------------------------
@@ -1158,109 +1513,12 @@ async def start_detection(
         On success: ``{"source_id": "<id>", "status": "started"}``.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        if source_id in detection_registry:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Detection already running on '{source_id}'"}
-            ))]
-
-        import cv2
-
-        # Resolve source to a capture object and optional playfield data
-        cap = None
-        homography = None
-        playfield_poly = None
-        camera_id: str | None = None  # the registry handle to re-open on stop
-        camera_index: int | None = None  # real device index (if applicable)
-        exclusive_cap = None  # set when we open our own exclusive camera
-
-        try:
-            pf_entry = playfield_registry.get(source_id)
-            camera_id = pf_entry.camera_id
-            try:
-                cap = registry.get(camera_id)
-            except KeyError:
-                return [TextContent(type="text", text=json.dumps(
-                    {"error": f"Underlying camera '{camera_id}' is no longer open"}
-                ))]
-            homography = pf_entry.homography
-            poly = pf_entry.playfield.get_polygon()
-            if poly is not None:
-                playfield_poly = poly
-        except KeyError:
-            # Not a playfield — treat source_id as a camera handle
-            camera_id = source_id
-            try:
-                cap = registry.get(source_id)
-            except KeyError:
-                return [TextContent(type="text", text=json.dumps(
-                    {"error": f"Unknown source_id '{source_id}'"}
-                ))]
-
-        # For real cameras (cam_N handles), open an exclusive capture to
-        # avoid frame contention with other MCP tools reading the same handle.
-        if camera_id and camera_id.startswith("cam_"):
-            try:
-                camera_index = int(camera_id.split("_", 1)[1])
-            except (ValueError, IndexError):
-                camera_index = None
-
-            if camera_index is not None:
-                # Release the shared camera so the detection loop gets exclusive access
-                try:
-                    registry.close(camera_id)
-                except KeyError:
-                    pass
-
-                exclusive_cap = cv2.VideoCapture(camera_index)
-                if exclusive_cap.isOpened():
-                    cap = exclusive_cap
-                else:
-                    # Re-open shared camera on failure
-                    exclusive_cap = None
-                    try:
-                        shared_cap = cv2.VideoCapture(camera_index)
-                        if shared_cap.isOpened():
-                            registry.open(shared_cap, handle=camera_id)
-                            cap = registry.get(camera_id)
-                    except Exception:
-                        pass
-
-        cam = AprilCam(
-            index=camera_index if camera_index is not None else 0,
-            backend=None,
-            speed_alpha=0.3,
-            family=family,
-            proc_width=proc_width,
-            detect_interval=detect_interval,
-            use_clahe=use_clahe,
-            use_sharpen=use_sharpen,
-            headless=True,
-            cap=cv2.VideoCapture(),
-            homography=homography,
-            playfield_poly_init=playfield_poly,
-        )
-
-        buf = RingBuffer(maxlen=300)
-        loop = DetectionLoop(source=cap, aprilcam=cam, ring_buffer=buf)
-        loop.start()
-
-        detection_registry[source_id] = DetectionEntry(
-            source_id=source_id,
-            loop=loop,
-            ring_buffer=buf,
-            aprilcam=cam,
-        )
-        # Remember state so stop_detection can re-open the shared camera
-        detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
-        detection_registry[source_id]._camera_index = camera_index  # type: ignore[attr-defined]
-        detection_registry[source_id]._exclusive_cap = exclusive_cap  # type: ignore[attr-defined]
-
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "status": "started"}
-        ))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_start_detection(
+        source_id, family=family, proc_width=proc_width,
+        detect_interval=detect_interval, use_clahe=use_clahe,
+        use_sharpen=use_sharpen,
+    )
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 @server.tool()
@@ -1274,38 +1532,8 @@ async def stop_detection(source_id: str) -> list[TextContent]:
         On success: ``{"source_id": "<id>", "status": "stopped"}``.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        entry = detection_registry.pop(source_id, None)
-        if entry is None:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"No detection running on '{source_id}'"}
-            ))]
-
-        entry.loop.stop()
-
-        # Release the exclusive capture and re-open the shared camera
-        exclusive_cap = getattr(entry, "_exclusive_cap", None)
-        if exclusive_cap is not None:
-            try:
-                exclusive_cap.release()
-            except Exception:
-                pass
-        camera_id = getattr(entry, "_camera_id", None)
-        camera_index = getattr(entry, "_camera_index", 0)
-        if camera_id is not None:
-            try:
-                import cv2
-                shared_cap = cv2.VideoCapture(camera_index)
-                if shared_cap.isOpened():
-                    registry.open(shared_cap, handle=camera_id)
-            except Exception:
-                pass
-
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "status": "stopped"}
-        ))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_stop_detection(source_id)
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 @server.tool()
@@ -1502,24 +1730,8 @@ async def get_tags(source_id: str) -> list[TextContent]:
         processed yet.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        entry = detection_registry.get(source_id)
-        if entry is None:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"No detection running on '{source_id}'"}
-            ))]
-
-        latest = entry.ring_buffer.get_latest()
-        if latest is None:
-            return [TextContent(type="text", text=json.dumps(
-                {"source_id": source_id, "frame": None, "tags": []}
-            ))]
-
-        result = latest.to_dict()
-        result["source_id"] = source_id
-        return [TextContent(type="text", text=json.dumps(result))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_get_tags(source_id)
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 @server.tool()
@@ -1539,19 +1751,8 @@ async def get_tag_history(
         record includes a frame number, timestamp, and per-tag detections.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        entry = detection_registry.get(source_id)
-        if entry is None:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"No detection running on '{source_id}'"}
-            ))]
-
-        records = entry.ring_buffer.get_last_n(num_frames)
-        return [TextContent(type="text", text=json.dumps(
-            {"source_id": source_id, "frames": [r.to_dict() for r in records]}
-        ))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_get_tag_history(source_id, num_frames=num_frames)
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 # ---------------------------------------------------------------------------
@@ -1580,16 +1781,8 @@ async def get_frame(
         On success (file): ``{"path": "<temp_file_path>"}``.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        frame = resolve_source(source_id)
-    except KeyError as e:
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-    except RuntimeError as e:
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-    try:
-        return format_image_output(frame, format, quality)
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_get_frame(source_id, format=format, quality=quality)
+    return _image_result_to_mcp(result)
 
 
 @server.tool()
@@ -1921,100 +2114,11 @@ async def start_live_view(
         On success: ``{"view_id": "<id>", "status": "started"}``.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        # Resolve camera_id to a camera index
-        try:
-            cap = registry.get(camera_id)
-        except KeyError:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Unknown camera_id '{camera_id}'"}
-            ))]
-
-        # Get the camera index from the handle (cam_0 -> 0, cam_1 -> 1, etc.)
-        camera_index = 0
-        if camera_id.startswith("cam_"):
-            try:
-                camera_index = int(camera_id.split("_", 1)[1])
-            except (ValueError, IndexError):
-                pass
-
-        # Close the camera in the registry so the subprocess can open it
-        try:
-            registry.close(camera_id)
-        except Exception:
-            pass
-
-        view_id = f"live_{camera_id}"
-        if view_id in live_view_registry:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Live view already running for '{camera_id}'"}
-            ))]
-
-        from aprilcam.liveview import LiveViewProcess
-        from aprilcam.detection import FrameRecord, TagRecord as _TR, RingBuffer
-
-        buf = RingBuffer(maxlen=300)
-
-        def on_frame(data: dict) -> None:
-            """Feed detection data from the child process into the ring buffer."""
-            try:
-                tags = []
-                for td in data.get("tags", []):
-                    tags.append(_TR(
-                        id=td["id"],
-                        center_px=tuple(td["center_px"]),
-                        corners_px=td["corners_px"],
-                        orientation_yaw=td["orientation_yaw"],
-                        world_xy=tuple(td["world_xy"]) if td.get("world_xy") else None,
-                        in_playfield=td.get("in_playfield", True),
-                        vel_px=tuple(td["vel_px"]) if td.get("vel_px") else None,
-                        speed_px=td.get("speed_px"),
-                        vel_world=tuple(td["vel_world"]) if td.get("vel_world") else None,
-                        speed_world=td.get("speed_world"),
-                        heading_rad=td.get("heading_rad"),
-                        timestamp=td["timestamp"],
-                        frame_index=td["frame_index"],
-                    ))
-                fr = FrameRecord(
-                    timestamp=data["timestamp"],
-                    frame_index=data["frame_index"],
-                    tags=tags,
-                )
-                buf.append(fr)
-            except Exception:
-                pass
-
-        proc = LiveViewProcess(
-            camera_index=camera_index,
-            deskew=deskew,
-            family=family,
-            proc_width=proc_width,
-            use_clahe=use_clahe,
-            use_sharpen=use_sharpen,
-        )
-        proc.start(on_frame=on_frame)
-
-        live_view_registry[view_id] = LiveViewEntry(
-            source_id=view_id,
-            process=proc,
-            ring_buffer=buf,
-        )
-
-        # Also register in detection_registry so get_tags/get_tag_history work
-        detection_registry[view_id] = DetectionEntry(
-            source_id=view_id,
-            loop=_LiveViewLoopAdapter(proc),
-            ring_buffer=buf,
-            aprilcam=AprilCam(index=0, backend=None, speed_alpha=0.3,
-                              family=family, proc_width=proc_width,
-                              headless=True, cap=None),
-        )
-
-        return [TextContent(type="text", text=json.dumps(
-            {"view_id": view_id, "camera_id": camera_id, "status": "started"}
-        ))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_start_live_view(
+        camera_id, deskew=deskew, family=family, proc_width=proc_width,
+        use_clahe=use_clahe, use_sharpen=use_sharpen,
+    )
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 @server.tool()
@@ -2028,39 +2132,8 @@ async def stop_live_view(view_id: str) -> list[TextContent]:
         On success: ``{"view_id": "<id>", "status": "stopped"}``.
         On error: ``{"error": "<message>"}``.
     """
-    try:
-        entry = live_view_registry.pop(view_id, None)
-        if entry is None:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"No live view running with id '{view_id}'"}
-            ))]
-
-        entry.process.stop()
-
-        # Also remove from detection_registry
-        detection_registry.pop(view_id, None)
-
-        # Re-open the camera so it's available again
-        camera_id = view_id.replace("live_", "", 1)
-        camera_index = 0
-        if camera_id.startswith("cam_"):
-            try:
-                camera_index = int(camera_id.split("_", 1)[1])
-            except (ValueError, IndexError):
-                pass
-        try:
-            import cv2
-            cap = cv2.VideoCapture(camera_index)
-            if cap.isOpened():
-                registry.open(cap, handle=camera_id)
-        except Exception:
-            pass
-
-        return [TextContent(type="text", text=json.dumps(
-            {"view_id": view_id, "status": "stopped"}
-        ))]
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
+    result = _handle_stop_live_view(view_id)
+    return [TextContent(type="text", text=json.dumps(result))]
 
 
 class _LiveViewLoopAdapter:
