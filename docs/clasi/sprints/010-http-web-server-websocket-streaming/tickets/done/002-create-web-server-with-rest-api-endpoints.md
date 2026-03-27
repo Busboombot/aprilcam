@@ -1,11 +1,14 @@
 ---
-id: "002"
-title: "Create web server with REST API endpoints"
-status: todo
-use-cases: [SUC-010-001, SUC-010-002]
-depends-on: ["001"]
-github-issue: ""
-todo: ""
+id: '002'
+title: Create web server with REST API endpoints
+status: in-progress
+use-cases:
+- SUC-010-001
+- SUC-010-002
+depends-on:
+- '001'
+github-issue: ''
+todo: ''
 ---
 
 # Create web server with REST API endpoints
