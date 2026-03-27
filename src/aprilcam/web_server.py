@@ -21,8 +21,9 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 
+from aprilcam.mcp_server import server as _mcp_server
 from aprilcam.mcp_server import (
     _handle_list_cameras,
     _handle_open_camera,
@@ -269,7 +270,8 @@ async def _discovery(request: Request) -> JSONResponse:
             "POST JSON to /api/<tool_name> with the documented parameters. "
             "Image endpoints return base64 JSON by default; set format='file' "
             "to receive binary JPEG with Content-Type: image/jpeg. "
-            "Error responses have {\"error\": \"...\"}."
+            "Error responses have {\"error\": \"...\"}. "
+            "MCP clients can connect via SSE at /mcp/sse (all 35+ tools available)."
         ),
         "endpoints": _TOOL_SPECS,
     })
@@ -327,8 +329,16 @@ def create_app() -> Starlette:
         app = create_app()
         # Run with: uvicorn aprilcam.web_server:app
     """
+    # Build the MCP SSE sub-application.  The FastMCP.sse_app() method
+    # returns a standalone Starlette app whose internal routes (``/sse``
+    # for the event stream and ``/messages/`` for POSTs) are relative to
+    # wherever we mount it.  Mounting at ``/mcp`` makes the full paths
+    # ``/mcp/sse`` and ``/mcp/messages/``.
+    mcp_sse = _mcp_server.sse_app(mount_path="/mcp")
+
     routes = [
         Route("/", _discovery, methods=["GET"]),
         Route("/api/{tool_name}", _dispatch, methods=["POST"]),
+        Mount("/mcp", app=mcp_sse),
     ]
     return Starlette(routes=routes)
