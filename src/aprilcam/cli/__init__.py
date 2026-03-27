@@ -28,6 +28,10 @@ SUBCOMMANDS = {
         "help": "Open a live camera view with tag detection overlays",
         "module": "aprilcam.cli.live_cli",
     },
+    "web": {
+        "help": "Start the HTTP/WebSocket server with REST API and MCP SSE",
+        "module": "aprilcam.cli.web_cli",
+    },
 }
 
 
