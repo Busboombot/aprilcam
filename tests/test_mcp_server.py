@@ -142,6 +142,7 @@ class TestOpenCamera:
 
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, MagicMock())
 
         with patch("cv2.VideoCapture", return_value=mock_cap):
             result = _run(open_camera(index=0))

@@ -349,6 +349,15 @@ async def open_camera(
                     )
                 ]
 
+            # USB cameras need several reads before producing valid frames
+            import time
+
+            for _ in range(10):
+                ret, _ = cap.read()
+                if ret:
+                    break
+                time.sleep(0.1)
+
         # Deterministic handle: cam_N for indexed cameras, screen for screen capture
         if source == "screen":
             handle = "screen"
@@ -419,7 +428,14 @@ async def capture_frame(
     try:
         import cv2
 
-        ret, frame = cap.read()
+        import time
+
+        ret, frame = None, None
+        for _attempt in range(5):
+            ret, frame = cap.read()
+            if ret:
+                break
+            time.sleep(0.1)
         if not ret:
             return [
                 TextContent(
