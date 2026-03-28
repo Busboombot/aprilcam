@@ -673,17 +673,17 @@ class AprilCam:
                                         ))
                                 _detected_objects = mapped
 
-                            # Color classify using joint calibration
+                            # Color classify using calibration.json
                             if color_camera is not None and _detected_objects:
                                 try:
                                     from aprilcam.color_classifier import ColorClassifier
-                                    from aprilcam.homography import load_joint_calibration
-                                    from pathlib import Path as _Path
+                                    from aprilcam.homography import load_calibration_for_camera
+                                    from aprilcam.camutil import get_device_name as _gdn
 
-                                    joint_path = _Path("data/joint-calibration.json")
-                                    if joint_path.exists():
-                                        _, color_cal = load_joint_calibration(joint_path)
+                                    cc_dev = _gdn(color_camera)
+                                    color_cal = load_calibration_for_camera(cc_dev)
 
+                                    if color_cal is not None:
                                         cc = cv.VideoCapture(color_camera)
                                         if not cc.isOpened():
                                             print(f"[d] color camera {color_camera} busy")
@@ -694,25 +694,20 @@ class AprilCam:
                                             cc.release()
 
                                             if ret_c and color_frame is not None:
-                                                # Undistort barrel distortion
                                                 color_frame = color_cal.undistort(color_frame)
-
-                                                # Classify with calibrated homography
                                                 classifier = ColorClassifier()
                                                 color_objects = classifier.classify(
                                                     color_frame, color_cal.homography
                                                 )
-
-                                                # Fuse by world coordinates
                                                 fuser = ObjectFuser()
                                                 fuser.update_colors(color_objects)
                                                 _detected_objects = fuser.fuse(_detected_objects)
                                                 n_col = sum(1 for o in _detected_objects if o.color != "unknown")
-                                                print(f"[d] color: {n_col}/{len(_detected_objects)} classified (joint cal, {color_cal.tags_used} tags)")
+                                                print(f"[d] color: {n_col}/{len(_detected_objects)} classified ({cc_dev}, {color_cal.tags_used} tags)")
                                             else:
                                                 print("[d] color camera: no frame")
                                     else:
-                                        print("[d] no joint-calibration.json — run calibrate_joint() first")
+                                        print(f"[d] no calibration for {cc_dev} — run calibrate_joint() first")
                                 except Exception as ce:
                                     print(f"[d] color failed: {ce}")
 

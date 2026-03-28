@@ -41,7 +41,13 @@ def _load_homography_matrix(
     camera_index: int,
     data_dir: str | Path,
 ) -> np.ndarray | None:
-    """Load a 3x3 homography matrix based on the *homography* parameter."""
+    """Load a 3x3 homography matrix based on the *homography* parameter.
+
+    When ``homography="auto"``, tries:
+    1. ``data/calibration.json`` — unified playfield file, lookup by device name
+    2. ``data/homography-<slug>.json`` — legacy per-camera file
+    3. ``data/homography.json`` — legacy global fallback
+    """
     if homography is None:
         return None
 
@@ -49,6 +55,14 @@ def _load_homography_matrix(
 
     if homography == "auto":
         device_name = get_device_name(camera_index)
+
+        # Try unified calibration file first
+        from .homography import load_calibration_for_camera
+        cal = load_calibration_for_camera(device_name, data_path)
+        if cal is not None:
+            return cal.homography
+
+        # Fall back to legacy discovery
         width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
         found = discover_homography(device_name, width, height, data_path)
@@ -62,7 +76,18 @@ def _load_homography_matrix(
         return None
 
     data = json.loads(hpath.read_text())
-    H = np.array(data["homography"], dtype=float)
+    # Handle unified calibration file format
+    if data.get("type") == "playfield" and "cameras" in data:
+        device_name = get_device_name(camera_index)
+        for _key, cam_data in data["cameras"].items():
+            if cam_data.get("device_name") == device_name:
+                H = np.array(cam_data["homography"], dtype=float)
+                if H.shape == (3, 3):
+                    return H
+        return None
+
+    # Legacy single-camera format
+    H = np.array(data.get("homography", []), dtype=float)
     if H.shape != (3, 3):
         return None
     return H

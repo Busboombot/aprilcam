@@ -70,6 +70,34 @@ def homography_path(slug: str, data_dir: str | Path = "data") -> Path:
     return Path(data_dir) / f"homography-{slug}.json"
 
 
+def calibration_path(data_dir: str | Path = "data") -> Path:
+    """Return the path to the unified calibration file."""
+    return Path(data_dir) / "calibration.json"
+
+
+def load_calibration_for_camera(
+    device_name: str,
+    data_dir: str | Path = "data",
+) -> Optional["CameraCalibration"]:
+    """Load calibration for a specific camera from the unified file.
+
+    Looks up by device_name in ``data/calibration.json``.  Returns
+    ``None`` if the file doesn't exist or the camera isn't in it.
+    """
+    cal_file = calibration_path(data_dir)
+    if not cal_file.exists():
+        return None
+    try:
+        data = json.loads(cal_file.read_text())
+        cameras = data.get("cameras", {})
+        for _key, cam_data in cameras.items():
+            if cam_data.get("device_name") == device_name:
+                return CameraCalibration.from_dict(cam_data)
+    except Exception:
+        pass
+    return None
+
+
 def discover_homography(
     device_name: str,
     width: int,
@@ -78,14 +106,32 @@ def discover_homography(
 ) -> Path | None:
     """Find the best homography file for a specific camera.
 
-    Checks for a per-camera file first (``homography-<slug>.json``),
-    then falls back to the global ``homography.json``.  Returns ``None``
-    if neither exists.
+    Checks in order:
+    1. ``data/calibration.json`` (unified playfield calibration)
+    2. ``data/homography-<slug>.json`` (legacy per-camera file)
+    3. ``data/homography.json`` (legacy global fallback)
+
+    Returns the path to the file, or ``None`` if nothing found.
     """
+    # Prefer unified calibration file
+    cal_file = calibration_path(data_dir)
+    if cal_file.exists():
+        try:
+            data = json.loads(cal_file.read_text())
+            cameras = data.get("cameras", {})
+            for _key, cam_data in cameras.items():
+                if cam_data.get("device_name") == device_name:
+                    return cal_file
+        except Exception:
+            pass
+
+    # Legacy per-camera file
     slug = camera_slug(device_name, width, height)
     per_camera = homography_path(slug, data_dir)
     if per_camera.exists():
         return per_camera
+
+    # Legacy global fallback
     fallback = Path(data_dir) / "homography.json"
     if fallback.exists():
         return fallback
@@ -227,6 +273,8 @@ def calibrate_joint(
     field_height_cm: float = 89.0,
     num_frames: int = 30,
     correct_distortion: bool = True,
+    bw_index: int = 3,
+    color_index: int = 2,
 ) -> Tuple[CameraCalibration, CameraCalibration]:
     """Run joint multi-tag calibration on two cameras.
 
@@ -350,14 +398,14 @@ def calibrate_joint(
     from .camutil import get_device_name
 
     bw_cal = CameraCalibration(
-        device_name=get_device_name(int(bw_cap.get(cv.CAP_PROP_POS_FRAMES)) if False else 0),
+        device_name=get_device_name(bw_index),
         resolution=(bw_w, bw_h),
         homography=bw_H,
         tags_used=len(bw_all_px),
         rms_error=bw_rms,
     )
     color_cal = CameraCalibration(
-        device_name="color",
+        device_name=get_device_name(color_index),
         resolution=(color_w, color_h),
         homography=color_H,
         camera_matrix=color_cm,
@@ -380,6 +428,50 @@ def _reprojection_rms(
     return float(np.sqrt(np.mean(np.array(errors) ** 2)))
 
 
+def save_calibration(
+    calibrations: List[CameraCalibration],
+    data_dir: str | Path = "data",
+    field_width_cm: float = 101.0,
+    field_height_cm: float = 89.0,
+) -> Path:
+    """Save calibration for all cameras to ``data/calibration.json``.
+
+    Each camera is keyed by its device_name.  Overwrites any existing
+    file.  Returns the path written.
+    """
+    cameras = {}
+    for cal in calibrations:
+        cameras[cal.device_name] = cal.to_dict()
+
+    data = {
+        "type": "playfield",
+        "field_width_cm": field_width_cm,
+        "field_height_cm": field_height_cm,
+        "cameras": cameras,
+    }
+    path = calibration_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+    return path
+
+
+def load_calibration(
+    data_dir: str | Path = "data",
+) -> Dict[str, CameraCalibration]:
+    """Load all camera calibrations from ``data/calibration.json``.
+
+    Returns:
+        Dict mapping device_name → CameraCalibration.
+    """
+    path = calibration_path(data_dir)
+    data = json.loads(path.read_text())
+    return {
+        name: CameraCalibration.from_dict(cam_data)
+        for name, cam_data in data.get("cameras", {}).items()
+    }
+
+
+# Legacy aliases for backward compatibility
 def save_joint_calibration(
     bw_cal: CameraCalibration,
     color_cal: CameraCalibration,
@@ -387,34 +479,26 @@ def save_joint_calibration(
     field_width_cm: float = 101.0,
     field_height_cm: float = 89.0,
 ) -> None:
-    """Save a joint calibration file."""
-    data = {
-        "type": "joint",
-        "field_width_cm": field_width_cm,
-        "field_height_cm": field_height_cm,
-        "cameras": {
-            "bw": bw_cal.to_dict(),
-            "color": color_cal.to_dict(),
-        },
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
+    """Save calibration (legacy — prefers :func:`save_calibration`)."""
+    save_calibration(
+        [bw_cal, color_cal],
+        data_dir=path.parent,
+        field_width_cm=field_width_cm,
+        field_height_cm=field_height_cm,
+    )
 
 
 def load_joint_calibration(
     path: Path,
 ) -> Tuple[CameraCalibration, CameraCalibration]:
-    """Load a joint calibration file.
-
-    Returns:
-        Tuple of (bw_calibration, color_calibration).
-    """
+    """Load calibration (legacy — prefers :func:`load_calibration`)."""
     data = json.loads(path.read_text())
-    if data.get("type") != "joint":
-        raise ValueError(f"Not a joint calibration file: {path}")
+    cams = list(data.get("cameras", {}).values())
+    if len(cams) < 2:
+        raise ValueError(f"Expected at least 2 cameras in {path}")
     return (
-        CameraCalibration.from_dict(data["cameras"]["bw"]),
-        CameraCalibration.from_dict(data["cameras"]["color"]),
+        CameraCalibration.from_dict(cams[0]),
+        CameraCalibration.from_dict(cams[1]),
     )
 
 
