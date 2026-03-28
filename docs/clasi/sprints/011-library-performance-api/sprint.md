@@ -1,7 +1,7 @@
 ---
 id: "011"
 title: "Library Performance & API"
-status: planning
+status: active
 branch: sprint/011-library-performance-api
 use-cases:
   - SUC-011-001
@@ -111,4 +111,8 @@ Before tickets can be created, all of the following must be true:
 
 ## Tickets
 
-(To be created after sprint approval.)
+- [ ] #001 — Per-camera homography file persistence
+- [ ] #002 — Detection pipeline optimization
+- [ ] #003 — detect_tags generator API (depends: 001, 002)
+- [ ] #004 — Camera contention error reporting
+- [ ] #005 — Public API exports and documentation (depends: 001-004)
