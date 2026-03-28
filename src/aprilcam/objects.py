@@ -53,16 +53,29 @@ class SquareDetector:
     def __init__(
         self,
         min_area: int = 50,
-        max_area: int = 1200,
+        max_area: int = 800,
         threshold: int = 120,
-        tag_margin: float = 3.0,
-        border_margin: int = 30,
+        tag_margin: float = 4.0,
+        border_margin: int = 40,
     ):
         self.min_area = min_area
         self.max_area = max_area
         self.threshold = threshold
         self.tag_margin = tag_margin  # expand tag exclusion zones by this factor
         self.border_margin = border_margin  # pixels inset from playfield edge
+        # Persistent tag positions for exclusion across frames
+        self._known_tag_corners: dict[int, np.ndarray] = {}
+
+    def update_known_tags(self, tag_records: list) -> None:
+        """Update persistent tag corner cache from current detections.
+
+        Call this every frame so that tags which flicker out still
+        have their regions excluded from object detection.
+        """
+        for tr in tag_records:
+            self._known_tag_corners[tr.id] = np.array(
+                tr.corners_px, dtype=np.float32
+            )
 
     def detect(
         self,
@@ -98,14 +111,24 @@ class SquareDetector:
             thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
         )
 
-        # Build expanded tag exclusion masks once.
+        # Build expanded tag exclusion from current + cached corners.
+        all_corners: list[np.ndarray] = list(tag_corners or [])
+        # Merge persistent cache (covers tags not detected this frame)
+        seen_centers = set()
+        for c in all_corners:
+            center = tuple(c.reshape(-1, 2).mean(axis=0).astype(int))
+            seen_centers.add(center)
+        for _tid, cached_c in self._known_tag_corners.items():
+            center = tuple(cached_c.reshape(-1, 2).mean(axis=0).astype(int))
+            if center not in seen_centers:
+                all_corners.append(cached_c)
+
         tag_polys: list[np.ndarray] = []
-        if tag_corners:
-            for corners in tag_corners:
-                pts = corners.reshape(-1, 2).astype(np.float32)
-                center = pts.mean(axis=0)
-                expanded = center + (pts - center) * self.tag_margin
-                tag_polys.append(expanded)
+        for corners in all_corners:
+            pts = corners.reshape(-1, 2).astype(np.float32)
+            center = pts.mean(axis=0)
+            expanded = center + (pts - center) * self.tag_margin
+            tag_polys.append(expanded)
 
         results: list[ObjectRecord] = []
         for cnt in contours:
