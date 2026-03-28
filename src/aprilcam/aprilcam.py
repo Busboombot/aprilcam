@@ -127,6 +127,11 @@ class AprilCam:
 
         # Cached state
         self.detectors = self._build_detectors()
+        # Pre-build ArucoDetector objects once (avoid per-frame construction)
+        self._cached_detectors = [
+            (cv.aruco.ArucoDetector(d, p), fam)
+            for d, p, fam in self.detectors
+        ]
         self.playfield = Playfield(
             proc_width=self.proc_width or 960,
             detect_inverted=False,
@@ -370,8 +375,8 @@ class AprilCam:
         )
 
         detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
-        for d, p, fam in self.detectors:
-            detector = cv.aruco.ArucoDetector(d, p)
+        for det_entry in self._cached_detectors:
+            detector, fam = det_entry
             corners, ids, _rej = detector.detectMarkers(gray)
             if ids is None:
                 continue
