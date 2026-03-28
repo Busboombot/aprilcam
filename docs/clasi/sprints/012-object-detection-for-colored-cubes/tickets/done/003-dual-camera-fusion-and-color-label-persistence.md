@@ -1,7 +1,7 @@
 ---
 id: "003"
 title: "Dual-camera fusion and color label persistence"
-status: todo
+status: done
 use-cases: ["SUC-012-002", "SUC-012-003"]
 depends-on: ["001", "002"]
 github-issue: ""
