@@ -390,6 +390,27 @@ def _build_html_ui() -> str:
   let ws = null;
   let frameCount = 0;
   let fpsTimer = null;
+  var knownTags = {};  // id -> {data, active}
+
+  function renderTagTable() {
+    var ids = Object.keys(knownTags).map(Number).sort(function(a, b) { return a - b; });
+    if (!ids.length) {
+      tagBody.innerHTML = "<tr><td colspan='7'>No data</td></tr>";
+      return;
+    }
+    tagBody.innerHTML = ids.map(function(id) {
+      var entry = knownTags[id];
+      var t = entry.data;
+      var style = entry.active ? "" : " style='opacity:0.4'";
+      var cx = t.center_px ? t.center_px[0].toFixed(1) : "--";
+      var cy = t.center_px ? t.center_px[1].toFixed(1) : "--";
+      var ori = t.orientation_yaw != null ? (t.orientation_yaw * 180 / Math.PI).toFixed(1) + "\u00b0" : "--";
+      var spd = t.speed_px != null ? t.speed_px.toFixed(1) + " px/s" : "--";
+      var wx = t.world_xy ? t.world_xy[0].toFixed(1) : "--";
+      var wy = t.world_xy ? t.world_xy[1].toFixed(1) : "--";
+      return "<tr" + style + "><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td><td>" + spd + "</td><td>" + wx + "</td><td>" + wy + "</td></tr>";
+    }).join("");
+  }
 
   async function api(tool, params) {
     const resp = await fetch("/api/" + tool, {
@@ -496,19 +517,12 @@ def _build_html_ui() -> str:
         const msg = JSON.parse(evt.data);
         if (msg.error) { tagBody.innerHTML = "<tr><td colspan='7'>" + msg.error + "</td></tr>"; return; }
         const tags = msg.tags || [];
-        if (!tags.length) {
-          tagBody.innerHTML = "<tr><td colspan='7'>No tags detected</td></tr>";
-          return;
-        }
-        tagBody.innerHTML = tags.map(function(t) {
-          const cx = t.center_px ? t.center_px[0].toFixed(1) : "--";
-          const cy = t.center_px ? t.center_px[1].toFixed(1) : "--";
-          const ori = t.orientation_yaw != null ? (t.orientation_yaw * 180 / Math.PI).toFixed(1) + "\u00b0" : "--";
-          const spd = t.speed_px != null ? t.speed_px.toFixed(1) + " px/s" : "--";
-          const wx = t.world_xy ? t.world_xy[0].toFixed(1) : "--";
-          const wy = t.world_xy ? t.world_xy[1].toFixed(1) : "--";
-          return "<tr><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td><td>" + spd + "</td><td>" + wx + "</td><td>" + wy + "</td></tr>";
-        }).join("");
+        // Mark all known tags inactive, then re-activate those in this frame
+        Object.keys(knownTags).forEach(function(id) { knownTags[id].active = false; });
+        tags.forEach(function(t) {
+          knownTags[t.id] = { data: t, active: true };
+        });
+        renderTagTable();
       } catch(e) {}
     };
   }
@@ -536,6 +550,7 @@ def _build_html_ui() -> str:
     wsDot.className = "dot";
     wsLabel.textContent = "disconnected";
     srcLabel.textContent = "none";
+    knownTags = {};
     tagBody.innerHTML = "<tr><td colspan='7'>No data</td></tr>";
   }
 
