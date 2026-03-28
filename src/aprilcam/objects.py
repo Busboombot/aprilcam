@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+import threading
+import time
+from dataclasses import dataclass, replace
 from typing import Optional, Tuple
 
 import cv2 as cv
@@ -140,3 +143,96 @@ class SquareDetector:
             )
 
         return results
+
+
+class ObjectFuser:
+    """Fuses B&W object detections with color camera classifications."""
+
+    def __init__(self, match_radius: float = 5.0):
+        self.match_radius = match_radius
+        # Maps quantized (x_cm, y_cm) -> (color_name, timestamp)
+        self._color_map: dict[tuple[float, float], tuple[str, float]] = {}
+
+    @staticmethod
+    def _quantize(x: float, y: float) -> tuple[float, float]:
+        """Round to nearest 0.1 (1mm) for map key."""
+        return (round(x, 1), round(y, 1))
+
+    def update_colors(self, color_objects: list[ObjectRecord]) -> None:
+        """Update color map from color camera detections."""
+        now = time.time()
+        for obj in color_objects:
+            if obj.world_xy is not None and obj.color != "unknown":
+                key = self._quantize(obj.world_xy[0], obj.world_xy[1])
+                self._color_map[key] = (obj.color, now)
+
+    def fuse(self, bw_objects: list[ObjectRecord]) -> list[ObjectRecord]:
+        """Assign color labels to B&W objects from the color map."""
+        result = []
+        for obj in bw_objects:
+            if obj.world_xy is None:
+                result.append(obj)
+                continue
+
+            ox, oy = obj.world_xy
+            best_color = "unknown"
+            best_dist = self.match_radius
+
+            for (kx, ky), (color, _ts) in self._color_map.items():
+                d = math.hypot(kx - ox, ky - oy)
+                if d < best_dist:
+                    best_dist = d
+                    best_color = color
+
+            if best_color != obj.color:
+                obj = replace(obj, color=best_color)
+            result.append(obj)
+        return result
+
+    def clear_stale(self, max_age_seconds: float = 5.0) -> None:
+        """Remove color map entries older than max_age_seconds."""
+        cutoff = time.time() - max_age_seconds
+        stale = [k for k, (_, ts) in self._color_map.items() if ts < cutoff]
+        for k in stale:
+            del self._color_map[k]
+
+
+class ColorCameraThread:
+    """Runs color classification in a background daemon thread."""
+
+    def __init__(self, camera_index, fuser, classifier, homography=None, fps=5.0):
+        self._camera_index = camera_index
+        self._fuser = fuser
+        self._classifier = classifier
+        self._homography = homography
+        self._interval = 1.0 / max(0.1, fps)
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._cap = None
+
+    def start(self):
+        self._cap = cv.VideoCapture(self._camera_index)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                ret, frame = self._cap.read()
+                if ret and frame is not None:
+                    objects = self._classifier.classify(frame, self._homography)
+                    self._fuser.update_colors(objects)
+                    self._fuser.clear_stale()
+            except Exception:
+                pass
+            self._stop_event.wait(self._interval)
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
