@@ -143,6 +143,21 @@ class Playfield:
         masked = cv.bitwise_and(frame_bgr, frame_bgr, mask=mask)
         return cv.warpPerspective(masked, M, (out_w, out_h))
 
+    def get_deskew_matrix(self) -> np.ndarray | None:
+        """Return the 3x3 perspective transform used by :meth:`deskew`, or ``None``."""
+        if self._poly is None:
+            return None
+        UL, UR, LR, LL = self._poly.astype(np.float32)
+        w_top = float(np.linalg.norm(UR - UL))
+        w_bottom = float(np.linalg.norm(LR - LL))
+        h_left = float(np.linalg.norm(LL - UL))
+        h_right = float(np.linalg.norm(LR - UR))
+        out_w = max(10, int(round(max(w_top, w_bottom))))
+        out_h = max(10, int(round(max(h_left, h_right))))
+        src = np.array([UL, UR, LR, LL], dtype=np.float32)
+        dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
+        return cv.getPerspectiveTransform(src, dst)
+
     # --- tag flow integration ---
     def add_tag(self, tag: AprilTag) -> None:
         """Add/Update a tag into the playfield flows, setting in_playfield.

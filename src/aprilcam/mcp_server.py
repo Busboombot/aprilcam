@@ -800,17 +800,17 @@ def _handle_get_frame(
         if det_entry is not None:
             latest = det_entry.ring_buffer.get_latest()
             if latest is not None:
-                homography = None
+                deskew_matrix = None
                 has_homography = False
                 try:
                     pf_entry = playfield_registry.get(source_id)
                     has_homography = True
-                    homography = pf_entry.homography
+                    deskew_matrix = pf_entry.playfield.get_deskew_matrix()
                 except KeyError:
                     pass
                 _draw_tag_overlay(frame, latest.tags,
                                  has_homography=has_homography,
-                                 homography=homography)
+                                 homography=deskew_matrix)
 
     try:
         import cv2
