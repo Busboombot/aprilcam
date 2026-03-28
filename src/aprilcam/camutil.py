@@ -18,6 +18,7 @@ class CameraInfo:
     index: int
     name: str
     backend: Optional[str] = None
+    device_name: Optional[str] = None  # raw OS device name (no backend suffix)
 
 
 def camera_slug(device_name: str, width: int, height: int) -> str:
@@ -156,7 +157,7 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
                         if sys.platform == "darwin" and backend_name == "AVFOUNDATION" and idx in av_names:
                             pretty = av_names.get(idx)
                         name = (pretty or f"Camera {idx}") + (f" ({backend_name})" if backend_name else "")
-                        cameras.append(CameraInfo(index=idx, name=name, backend=backend_name))
+                        cameras.append(CameraInfo(index=idx, name=name, backend=backend_name, device_name=pretty))
                         backend_failures[be] = 0
                         break
                     else:
@@ -164,6 +165,24 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
                 finally:
                     cap.release()
     return cameras
+
+
+def get_device_name(index: int) -> str:
+    """Return the OS-reported device name for a camera index.
+
+    Uses ``list_cameras(detailed_names=True)`` with a full enumeration
+    (max_index=10) so the ffmpeg-to-OpenCV index mapping is consistent
+    regardless of which index is queried. Falls back to
+    ``"camera-{index}"`` if the name cannot be determined.
+    """
+    try:
+        cams = list_cameras(max_index=10, quiet=True, detailed_names=True)
+        for c in cams:
+            if c.index == index and c.device_name:
+                return c.device_name
+    except Exception:
+        pass
+    return f"camera-{index}"
 
 
 def diagnose_camera_failure(index: int) -> dict:

@@ -15,7 +15,7 @@ import cv2 as cv
 import numpy as np
 
 from .aprilcam import AprilCam
-from .camutil import list_cameras, macos_avfoundation_device_names, select_camera_by_pattern
+from .camutil import list_cameras, get_device_name, select_camera_by_pattern
 from .config import AppConfig
 from .detection import TagRecord
 from .homography import discover_homography
@@ -50,8 +50,7 @@ def _load_homography_matrix(
 
     if homography == "auto":
         # Try to discover per-camera homography file
-        av_names = macos_avfoundation_device_names()
-        device_name = av_names.get(camera_index, f"camera-{camera_index}")
+        device_name = get_device_name(camera_index)
         width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
         found = discover_homography(device_name, width, height, data_path)

@@ -119,8 +119,8 @@ def test_detect_tags_auto_homography(monkeypatch, tmp_path):
     mock_cap.read.side_effect = [(True, frame), (False, None)]
 
     monkeypatch.setattr(
-        "aprilcam.stream.macos_avfoundation_device_names",
-        lambda: {0: "test cam"},
+        "aprilcam.stream.get_device_name",
+        lambda idx: "test cam",
     )
     monkeypatch.setattr(
         "aprilcam.stream.discover_homography",

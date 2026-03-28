@@ -114,6 +114,7 @@ class TestListCameras:
         mock_cam.index = 0
         mock_cam.name = "FaceTime"
         mock_cam.backend = "AVFOUNDATION"
+        mock_cam.device_name = "FaceTime"
 
         with patch("aprilcam.camutil.list_cameras", return_value=[mock_cam]):
             result = _run(tool_fn())
@@ -125,6 +126,7 @@ class TestListCameras:
         assert data[0]["index"] == 0
         assert data[0]["name"] == "FaceTime"
         assert data[0]["backend"] == "AVFOUNDATION"
+        assert data[0]["device_name"] == "FaceTime"
 
     def test_returns_empty_array_when_no_cameras(self):
         from aprilcam.mcp_server import list_cameras as tool_fn

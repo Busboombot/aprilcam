@@ -274,9 +274,9 @@ def _handle_list_cameras() -> list[dict]:
     from aprilcam.camutil import list_cameras as _list_cameras
 
     try:
-        cams = _list_cameras(max_index=10, quiet=True)
+        cams = _list_cameras(max_index=10, quiet=True, detailed_names=True)
         return [
-            {"index": c.index, "name": c.name, "backend": c.backend}
+            {"index": c.index, "name": c.name, "backend": c.backend, "device_name": c.device_name}
             for c in cams
         ]
     except Exception:
@@ -587,11 +587,10 @@ def _handle_calibrate_playfield(
                 except (ValueError, IndexError):
                     pass
 
-            from aprilcam.camutil import camera_slug, macos_avfoundation_device_names
+            from aprilcam.camutil import camera_slug, get_device_name
             from aprilcam.homography import homography_path
 
-            av_names = macos_avfoundation_device_names()
-            dev_name = av_names.get(cam_idx, f"camera-{cam_idx}") if cam_idx is not None else None
+            dev_name = get_device_name(cam_idx) if cam_idx is not None else None
 
             if dev_name and cap_w and cap_h:
                 from aprilcam.config import AppConfig
