@@ -162,11 +162,12 @@ _TOOL_SPECS: list[dict[str, Any]] = [
         "name": "get_frame",
         "path": "/api/get_frame",
         "method": "POST",
-        "description": "Capture a raw frame from a camera or playfield (no processing).",
+        "description": "Capture a frame from a camera or playfield, optionally with tag overlays.",
         "parameters": [
             {"name": "source_id", "type": "string", "default": None, "description": "Camera or playfield handle (required)"},
             {"name": "format", "type": "string", "default": "base64", "description": "'base64' (JSON) or 'file' (binary JPEG)"},
             {"name": "quality", "type": "integer", "default": 85, "description": "JPEG quality 1-100"},
+            {"name": "annotate", "type": "boolean", "default": False, "description": "Draw tag overlays (corners, IDs, world coords) on the frame"},
         ],
         "returns": "JSON with base64 data, or binary JPEG (Content-Type: image/jpeg)",
     },
@@ -324,8 +325,8 @@ def _build_html_ui() -> str:
   <div class="panel tags-panel">
     <h2>Detected Tags</h2>
     <table>
-      <thead><tr><th>ID</th><th>Center X</th><th>Center Y</th><th>Orientation</th></tr></thead>
-      <tbody id="tagBody"><tr><td colspan="4">No data</td></tr></tbody>
+      <thead><tr><th>ID</th><th>Center X</th><th>Center Y</th><th>Orientation</th><th>World X</th><th>World Y</th></tr></thead>
+      <tbody id="tagBody"><tr><td colspan="6">No data</td></tr></tbody>
     </table>
   </div>
 </main>
@@ -422,7 +423,7 @@ def _build_html_ui() -> str:
     async function poll() {
       if (!sourceId) return;
       try {
-        const res = await api("get_frame", {source_id: sourceId, format: "base64"});
+        const res = await api("get_frame", {source_id: sourceId, format: "base64", annotate: true});
         if (res.error) {
           frameDot.className = "dot err";
           fpsLabel.textContent = res.error;
@@ -447,17 +448,19 @@ def _build_html_ui() -> str:
     ws.onmessage = function(evt) {
       try {
         const msg = JSON.parse(evt.data);
-        if (msg.error) { tagBody.innerHTML = "<tr><td colspan='4'>" + msg.error + "</td></tr>"; return; }
+        if (msg.error) { tagBody.innerHTML = "<tr><td colspan='6'>" + msg.error + "</td></tr>"; return; }
         const tags = msg.tags || [];
         if (!tags.length) {
-          tagBody.innerHTML = "<tr><td colspan='4'>No tags detected</td></tr>";
+          tagBody.innerHTML = "<tr><td colspan='6'>No tags detected</td></tr>";
           return;
         }
         tagBody.innerHTML = tags.map(function(t) {
           const cx = t.center_px ? t.center_px[0].toFixed(1) : "--";
           const cy = t.center_px ? t.center_px[1].toFixed(1) : "--";
           const ori = t.orientation_yaw != null ? (t.orientation_yaw * 180 / Math.PI).toFixed(1) + "\u00b0" : "--";
-          return "<tr><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td></tr>";
+          const wx = t.world_xy ? t.world_xy[0].toFixed(1) : "--";
+          const wy = t.world_xy ? t.world_xy[1].toFixed(1) : "--";
+          return "<tr><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td><td>" + wx + "</td><td>" + wy + "</td></tr>";
         }).join("");
       } catch(e) {}
     };
@@ -486,7 +489,7 @@ def _build_html_ui() -> str:
     wsDot.className = "dot";
     wsLabel.textContent = "disconnected";
     srcLabel.textContent = "none";
-    tagBody.innerHTML = "<tr><td colspan='4'>No data</td></tr>";
+    tagBody.innerHTML = "<tr><td colspan='6'>No data</td></tr>";
   }
 
   loadCameras();

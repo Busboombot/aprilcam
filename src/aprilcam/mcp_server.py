@@ -201,7 +201,14 @@ def resolve_source(source_id: str) -> np.ndarray:
     # racing with the loop thread for camera reads.
     det_entry = detection_registry.get(source_id)
     if det_entry is not None and det_entry.loop.last_frame is not None:
-        return det_entry.loop.last_frame.copy()
+        frame = det_entry.loop.last_frame.copy()
+        # Apply playfield deskew if this source is a playfield
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            frame = pf_entry.playfield.deskew(frame)
+        except KeyError:
+            pass
+        return frame
 
     # Try playfield first
     try:
@@ -688,12 +695,68 @@ def _handle_get_tag_history(
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _draw_tag_overlay(frame: np.ndarray, tags: list, has_homography: bool = False) -> None:
+    """Draw tag detection overlays directly on *frame* (mutates in place).
+
+    Draws corner outlines, tag IDs, and world coordinates (when
+    *has_homography* is True and ``world_xy`` is present).
+    """
+    import cv2
+    import math
+
+    for tag in tags:
+        corners = tag.corners_px
+        pts = [(int(c[0]), int(c[1])) for c in corners]
+        # Draw corner polygon — green top edge, red other sides
+        cv2.line(frame, pts[0], pts[1], (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(frame, pts[1], pts[2], (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.line(frame, pts[2], pts[3], (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.line(frame, pts[3], pts[0], (0, 0, 255), 2, cv2.LINE_AA)
+
+        # Center dot
+        cx, cy = int(tag.center_px[0]), int(tag.center_px[1])
+        cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
+
+        # ID label
+        id_text = str(tag.id)
+        (tw, th), _ = cv2.getTextSize(id_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        tx, ty = cx - tw // 2, cy + th // 2
+        # Outline for readability
+        cv2.putText(frame, id_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(frame, id_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+
+        # World coordinates label
+        if has_homography and tag.world_xy is not None:
+            wx, wy = tag.world_xy
+            coord_text = f"({wx:.1f}, {wy:.1f})"
+            y_bottom = max(p[1] for p in pts)
+            cv2.putText(frame, coord_text, (cx - 30, y_bottom + 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, coord_text, (cx - 30, y_bottom + 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+
+        # Velocity arrow
+        if tag.vel_px is not None:
+            vx, vy = tag.vel_px
+            norm = math.hypot(vx, vy)
+            if norm > 1e-6:
+                length = int(max(12, min(250, norm * 0.5)))
+                ux, uy = vx / norm, vy / norm
+                end = (int(cx + ux * length), int(cy + uy * length))
+                cv2.arrowedLine(frame, (cx, cy), end, (0, 255, 255), 2, tipLength=0.12)
+
+
 def _handle_get_frame(
     source_id: str,
     format: str = "base64",
     quality: int = 85,
+    annotate: bool = False,
 ) -> dict:
     """Core logic for get_frame — returns image dict or error dict.
+
+    When *annotate* is True and a detection loop is running on the
+    source, draws tag overlays (corners, IDs, world coordinates) on
+    the frame before encoding.
 
     Returns:
         ``{"type": "image", "data": ..., "mime": "image/jpeg"}`` for base64,
@@ -706,6 +769,20 @@ def _handle_get_frame(
         return {"type": "error", "error": str(e)}
     except RuntimeError as e:
         return {"type": "error", "error": str(e)}
+
+    # Draw tag overlays if requested
+    if annotate:
+        det_entry = detection_registry.get(source_id)
+        if det_entry is not None:
+            latest = det_entry.ring_buffer.get_latest()
+            if latest is not None:
+                try:
+                    playfield_registry.get(source_id)
+                    has_homography = True
+                except KeyError:
+                    has_homography = False
+                _draw_tag_overlay(frame, latest.tags, has_homography=has_homography)
+
     try:
         import cv2
 
