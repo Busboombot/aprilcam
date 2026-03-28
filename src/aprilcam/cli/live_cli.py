@@ -78,26 +78,40 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as e:
                 print(f"Warning: failed to load homography from {hom_path}: {e}")
     else:
-        # Auto-discover per-camera homography file
+        # Load from calibration.json (preferred) or legacy per-camera files
         try:
+            from aprilcam.homography import load_calibration_for_camera
             from aprilcam.camutil import get_device_name
-            from aprilcam.homography import discover_homography
-            import cv2 as cv
 
             dev_name = get_device_name(args.camera)
-            # Probe camera resolution
-            cap = cv.VideoCapture(args.camera)
-            if cap.isOpened():
-                w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
-                h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
-                cap.release()
-                found = discover_homography(dev_name, w, h, "data")
-                if found:
-                    data = json.loads(found.read_text())
-                    homography = np.array(data["homography"], dtype=np.float64)
-                    print(f"Loaded homography from {found}")
+            cal = load_calibration_for_camera(dev_name)
+            if cal is not None:
+                homography = cal.homography
+                print(f"Loaded calibration for '{dev_name}'")
             else:
-                cap.release()
+                # Legacy fallback
+                from aprilcam.homography import discover_homography
+                import cv2 as cv
+                cap = cv.VideoCapture(args.camera)
+                if cap.isOpened():
+                    w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+                    h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+                    cap.release()
+                    found = discover_homography(dev_name, w, h, "data")
+                    if found:
+                        data = json.loads(found.read_text())
+                        # Handle unified format
+                        if "cameras" in data:
+                            for _k, cd in data["cameras"].items():
+                                if cd.get("device_name") == dev_name:
+                                    homography = np.array(cd["homography"], dtype=np.float64)
+                                    break
+                        else:
+                            homography = np.array(data["homography"], dtype=np.float64)
+                        if homography is not None:
+                            print(f"Loaded homography from {found}")
+                else:
+                    cap.release()
         except Exception as e:
             print(f"Warning: homography auto-discover failed: {e}")
 
