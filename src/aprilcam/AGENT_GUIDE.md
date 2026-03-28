@@ -87,12 +87,15 @@ for tags in detect_tags(
 
 ```python
 from aprilcam import (
-    AprilCam,          # Core detection engine
-    detect_tags,       # Generator API (recommended)
-    TagRecord,         # Per-tag detection result
-    DetectionLoop,     # Background detection thread
-    AprilTag,          # Tag model with tracking state
-    Playfield,         # Playfield polygon and deskew
+    detect_tags,              # Generator API (recommended)
+    AprilCam,                 # Core detection engine
+    TagRecord,                # Per-tag detection result
+    AprilTag,                 # Tag model with tracking state
+    Playfield,                # Playfield polygon and deskew
+    CameraError,              # Base camera exception
+    CameraInUseError,         # Camera busy (includes PID)
+    CameraNotFoundError,      # Camera index doesn't exist
+    CameraPermissionError,    # Permission denied
 )
 ```
 
@@ -225,9 +228,26 @@ Provides:
 ## Error Handling
 
 - Camera not found → `CameraNotFoundError`
-- Camera in use by another process → `CameraInUseError` (includes PID)
+- Camera in use by another process → `CameraInUseError`
+  - Includes `pid` and `process_name` attributes
+  - Error message includes `kill <PID>` suggestion
+  - On macOS: uses `lsof` to identify blocking process
+  - On Linux: uses `fuser` on `/dev/video*`
 - Permission denied → `CameraPermissionError`
+- All inherit from `CameraError` — catch that for any camera issue
 - MCP tools return `{"error": "message"}` on failure
+
+```python
+from aprilcam import detect_tags, CameraInUseError
+
+try:
+    for tags in detect_tags(camera=0):
+        ...
+except CameraInUseError as e:
+    print(f"Camera busy: {e}")
+    if e.pid:
+        print(f"Kill blocking process: kill {e.pid}")
+```
 
 ## Tips for Agents
 
