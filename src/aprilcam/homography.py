@@ -100,6 +100,324 @@ def compute_homography(pixel_pts: np.ndarray, world_pts_cm: np.ndarray) -> np.nd
     return H
 
 
+# ---------------------------------------------------------------------------
+# Joint multi-tag calibration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CameraCalibration:
+    """Stores everything needed to undistort + homography-transform a frame.
+
+    For cameras without barrel distortion, *camera_matrix* and
+    *dist_coeffs* are ``None`` and ``undistort()`` is a no-op.
+    """
+
+    device_name: str
+    resolution: Tuple[int, int]  # (width, height)
+    homography: np.ndarray  # 3x3 pixel→world
+    camera_matrix: Optional[np.ndarray] = None  # 3x3 intrinsics
+    dist_coeffs: Optional[np.ndarray] = None  # (k1,k2,p1,p2,k3)
+    tags_used: int = 0
+    rms_error: float = 0.0
+
+    def undistort(self, frame: np.ndarray) -> np.ndarray:
+        """Remove barrel distortion if calibration data is available."""
+        if self.camera_matrix is not None and self.dist_coeffs is not None:
+            return cv.undistort(frame, self.camera_matrix, self.dist_coeffs)
+        return frame
+
+    def pixel_to_world(self, u: float, v: float) -> Tuple[float, float]:
+        """Map a pixel coordinate to world (cm) coordinates."""
+        vec = self.homography @ np.array([u, v, 1.0])
+        return (float(vec[0] / vec[2]), float(vec[1] / vec[2]))
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-compatible dict."""
+        d: dict = {
+            "device_name": self.device_name,
+            "resolution": list(self.resolution),
+            "homography": self.homography.tolist(),
+            "tags_used": self.tags_used,
+            "rms_error": self.rms_error,
+        }
+        if self.camera_matrix is not None:
+            d["camera_matrix"] = self.camera_matrix.tolist()
+        if self.dist_coeffs is not None:
+            d["dist_coeffs"] = self.dist_coeffs.tolist()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CameraCalibration":
+        """Deserialize from a JSON-compatible dict."""
+        cm = np.array(d["camera_matrix"], dtype=float) if "camera_matrix" in d else None
+        dc = np.array(d["dist_coeffs"], dtype=float) if "dist_coeffs" in d else None
+        return cls(
+            device_name=d["device_name"],
+            resolution=tuple(d["resolution"]),
+            homography=np.array(d["homography"], dtype=float),
+            camera_matrix=cm,
+            dist_coeffs=dc,
+            tags_used=d.get("tags_used", 0),
+            rms_error=d.get("rms_error", 0.0),
+        )
+
+
+def detect_all_tags(
+    cap: cv.VideoCapture,
+    num_frames: int = 30,
+) -> Dict[int, np.ndarray]:
+    """Detect AprilTags and ArUco 4x4 markers, return averaged centers.
+
+    Accumulates detections over *num_frames* and averages pixel positions
+    for stability.  ArUco 4x4 IDs are stored as negative numbers
+    (-1, -2, -3, -4 for IDs 0-3) to avoid collision with AprilTag IDs.
+
+    Returns:
+        Dict mapping tag_id → (cx, cy) averaged pixel center.
+    """
+    d36 = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_APRILTAG_36H11)
+    p36 = cv.aruco.DetectorParameters()
+    det36 = cv.aruco.ArucoDetector(d36, p36)
+
+    d4 = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
+    p4 = cv.aruco.DetectorParameters()
+    det4 = cv.aruco.ArucoDetector(d4, p4)
+
+    accum: Dict[int, List[np.ndarray]] = {}
+
+    for _ in range(num_frames):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+        corners36, ids36, _ = det36.detectMarkers(gray)
+        if ids36 is not None:
+            for c, tid in zip(corners36, ids36.flatten()):
+                center = c.reshape(-1, 2).mean(axis=0)
+                accum.setdefault(int(tid), []).append(center)
+
+        corners4, ids4, _ = det4.detectMarkers(gray)
+        if ids4 is not None:
+            for c, tid in zip(corners4, ids4.flatten()):
+                center = c.reshape(-1, 2).mean(axis=0)
+                # Negative IDs for ArUco 4x4 to avoid collision
+                accum.setdefault(-(int(tid) + 1), []).append(center)
+
+    result: Dict[int, np.ndarray] = {}
+    for tid, pts_list in accum.items():
+        result[tid] = np.array(pts_list).mean(axis=0)
+    return result
+
+
+# ArUco 4x4 corner world positions (cm).
+# Stored as negative IDs: -1=ArUco0=UL, -2=ArUco1=UR, -3=ArUco2=LL, -4=ArUco3=LR.
+ARUCO_CORNER_WORLD: Dict[int, Tuple[float, float]] = {
+    -1: (0.0, 0.0),      # ArUco 0 = upper-left
+    -2: (101.0, 0.0),     # ArUco 1 = upper-right
+    -3: (0.0, 89.0),      # ArUco 2 = lower-left
+    -4: (101.0, 89.0),    # ArUco 3 = lower-right
+}
+
+
+def calibrate_joint(
+    bw_cap: cv.VideoCapture,
+    color_cap: cv.VideoCapture,
+    field_width_cm: float = 101.0,
+    field_height_cm: float = 89.0,
+    num_frames: int = 30,
+    correct_distortion: bool = True,
+) -> Tuple[CameraCalibration, CameraCalibration]:
+    """Run joint multi-tag calibration on two cameras.
+
+    Uses ArUco 4x4 corner markers (known world positions) and AprilTags
+    (world positions computed from the B&W camera's homography) as
+    shared reference points.  When *correct_distortion* is True and
+    enough points are available (>=6), estimates lens distortion
+    coefficients for the color camera.
+
+    Args:
+        bw_cap: Open VideoCapture for the B&W (primary) camera.
+        color_cap: Open VideoCapture for the color (secondary) camera.
+        field_width_cm: Playfield width between ArUco corners in cm.
+        field_height_cm: Playfield height between ArUco corners in cm.
+        num_frames: Frames to accumulate for tag detection.
+        correct_distortion: Attempt barrel distortion correction on color.
+
+    Returns:
+        Tuple of (bw_calibration, color_calibration).
+    """
+    # Update corner world positions with actual field dimensions
+    corner_world = {
+        -1: (0.0, 0.0),
+        -2: (field_width_cm, 0.0),
+        -3: (0.0, field_height_cm),
+        -4: (field_width_cm, field_height_cm),
+    }
+
+    # Step 1: Detect tags on both cameras
+    bw_tags = detect_all_tags(bw_cap, num_frames)
+    color_tags = detect_all_tags(color_cap, num_frames)
+
+    bw_w = int(bw_cap.get(cv.CAP_PROP_FRAME_WIDTH))
+    bw_h = int(bw_cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+    color_w = int(color_cap.get(cv.CAP_PROP_FRAME_WIDTH))
+    color_h = int(color_cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+
+    # Step 2: B&W camera homography from ArUco corners
+    bw_corner_pixels = []
+    bw_corner_world = []
+    for neg_id, world_xy in corner_world.items():
+        if neg_id in bw_tags:
+            bw_corner_pixels.append(bw_tags[neg_id])
+            bw_corner_world.append(world_xy)
+
+    if len(bw_corner_pixels) < 4:
+        raise RuntimeError(
+            f"B&W camera: only {len(bw_corner_pixels)} ArUco corners found, need 4"
+        )
+
+    bw_pixel_pts = np.array(bw_corner_pixels, dtype=np.float32)
+    bw_world_pts = np.array(bw_corner_world, dtype=np.float32)
+    bw_H = compute_homography(bw_pixel_pts, bw_world_pts)
+
+    # Step 3: Compute world positions for ALL AprilTags using B&W homography
+    tag_world_positions: Dict[int, Tuple[float, float]] = dict(corner_world)
+    for tid, px in bw_tags.items():
+        if tid > 0:  # AprilTag (positive ID)
+            vec = bw_H @ np.array([px[0], px[1], 1.0])
+            tag_world_positions[tid] = (float(vec[0] / vec[2]), float(vec[1] / vec[2]))
+
+    # Step 4: Build color camera correspondences from shared tags
+    color_pixel_pts = []
+    color_world_pts = []
+    for tid, world_xy in tag_world_positions.items():
+        if tid in color_tags:
+            color_pixel_pts.append(color_tags[tid])
+            color_world_pts.append(world_xy)
+
+    n_color_pts = len(color_pixel_pts)
+    if n_color_pts < 4:
+        raise RuntimeError(
+            f"Color camera: only {n_color_pts} shared tags found, need >= 4"
+        )
+
+    color_px = np.array(color_pixel_pts, dtype=np.float32)
+    color_wp = np.array(color_world_pts, dtype=np.float32)
+
+    # Step 5: Color camera calibration
+    color_cm = None
+    color_dc = None
+    color_rms = 0.0
+
+    if correct_distortion and n_color_pts >= 6:
+        # Use cv.calibrateCamera for distortion + intrinsics.
+        # It needs 3D object points (add z=0 for planar).
+        obj_pts_3d = np.zeros((n_color_pts, 1, 3), dtype=np.float32)
+        obj_pts_3d[:, 0, :2] = color_wp
+        img_pts = color_px.reshape(n_color_pts, 1, 2)
+
+        color_rms, color_cm, color_dc, _rvecs, _tvecs = cv.calibrateCamera(
+            [obj_pts_3d], [img_pts], (color_w, color_h), None, None
+        )
+        color_dc = color_dc.flatten()
+
+        # Undistort the pixel points and recompute homography
+        undist_pts = cv.undistortPoints(
+            color_px.reshape(-1, 1, 2), color_cm, color_dc, P=color_cm
+        ).reshape(-1, 2)
+        color_H = compute_homography(undist_pts, color_wp)
+    else:
+        # Not enough points for distortion — plain homography
+        color_H = compute_homography(color_px, color_wp)
+
+    # Compute B&W RMS error
+    bw_all_px = []
+    bw_all_wp = []
+    for tid, world_xy in tag_world_positions.items():
+        if tid in bw_tags:
+            bw_all_px.append(bw_tags[tid])
+            bw_all_wp.append(world_xy)
+    if len(bw_all_px) > 4:
+        # Recompute B&W homography with ALL points for better accuracy
+        bw_all_pixel = np.array(bw_all_px, dtype=np.float32)
+        bw_all_world = np.array(bw_all_wp, dtype=np.float32)
+        bw_H = compute_homography(bw_all_pixel, bw_all_world)
+
+    # Compute RMS reprojection errors
+    bw_rms = _reprojection_rms(bw_H, bw_all_pixel, bw_all_world)
+
+    from .camutil import get_device_name
+
+    bw_cal = CameraCalibration(
+        device_name=get_device_name(int(bw_cap.get(cv.CAP_PROP_POS_FRAMES)) if False else 0),
+        resolution=(bw_w, bw_h),
+        homography=bw_H,
+        tags_used=len(bw_all_px),
+        rms_error=bw_rms,
+    )
+    color_cal = CameraCalibration(
+        device_name="color",
+        resolution=(color_w, color_h),
+        homography=color_H,
+        camera_matrix=color_cm,
+        dist_coeffs=color_dc,
+        tags_used=n_color_pts,
+        rms_error=color_rms,
+    )
+    return bw_cal, color_cal
+
+
+def _reprojection_rms(
+    H: np.ndarray, pixel_pts: np.ndarray, world_pts: np.ndarray
+) -> float:
+    """Compute RMS reprojection error for a homography."""
+    errors = []
+    for px, wp in zip(pixel_pts, world_pts):
+        vec = H @ np.array([px[0], px[1], 1.0])
+        pred = np.array([vec[0] / vec[2], vec[1] / vec[2]])
+        errors.append(np.linalg.norm(pred - wp))
+    return float(np.sqrt(np.mean(np.array(errors) ** 2)))
+
+
+def save_joint_calibration(
+    bw_cal: CameraCalibration,
+    color_cal: CameraCalibration,
+    path: Path,
+    field_width_cm: float = 101.0,
+    field_height_cm: float = 89.0,
+) -> None:
+    """Save a joint calibration file."""
+    data = {
+        "type": "joint",
+        "field_width_cm": field_width_cm,
+        "field_height_cm": field_height_cm,
+        "cameras": {
+            "bw": bw_cal.to_dict(),
+            "color": color_cal.to_dict(),
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+
+
+def load_joint_calibration(
+    path: Path,
+) -> Tuple[CameraCalibration, CameraCalibration]:
+    """Load a joint calibration file.
+
+    Returns:
+        Tuple of (bw_calibration, color_calibration).
+    """
+    data = json.loads(path.read_text())
+    if data.get("type") != "joint":
+        raise ValueError(f"Not a joint calibration file: {path}")
+    return (
+        CameraCalibration.from_dict(data["cameras"]["bw"]),
+        CameraCalibration.from_dict(data["cameras"]["color"]),
+    )
+
+
 def calibrate_from_corners(
     pixel_corners: Dict[str, Tuple[float, float]],
     field_spec: FieldSpec,
