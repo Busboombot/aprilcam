@@ -552,8 +552,13 @@ class AprilCam:
         self._prev_gray = gray
         return tag_records
 
-    def run(self) -> None:
+    def run(self, color_camera: Optional[int] = None) -> None:
         """Main capture/detect/track loop with display and overlays.
+
+        Args:
+            color_camera: Optional camera index for a color camera.
+                When provided and 'd' is pressed, the color camera is
+                used to classify object colors via HSV thresholding.
 
         Key bindings:
             q / Esc — quit
@@ -624,13 +629,37 @@ class AprilCam:
                         paused = not paused
                         continue
                     if key == ord('d'):
-                        # One-shot object detection on current frame
+                        # One-shot object detection + optional color classification
                         try:
-                            from aprilcam.objects import SquareDetector
+                            from aprilcam.objects import SquareDetector, ObjectFuser
                             det = SquareDetector()
                             det_frame = display if display is not None else frame
                             det_gray = cv.cvtColor(det_frame, cv.COLOR_BGR2GRAY)
                             _detected_objects = det.detect(det_gray)
+
+                            # Color classify if color camera is available
+                            if color_camera is not None and _detected_objects:
+                                try:
+                                    from aprilcam.color_classifier import ColorClassifier
+                                    cc = cv.VideoCapture(color_camera)
+                                    if cc.isOpened():
+                                        for _ in range(3):
+                                            cc.read()  # warm up
+                                        ret_c, color_frame = cc.read()
+                                        cc.release()
+                                        if ret_c:
+                                            classifier = ColorClassifier()
+                                            color_objects = classifier.classify(color_frame, self.homography)
+                                            fuser = ObjectFuser()
+                                            fuser.update_colors(color_objects)
+                                            _detected_objects = fuser.fuse(_detected_objects)
+                                            n_colored = sum(1 for o in _detected_objects if o.color != "unknown")
+                                            print(f"Color classified {n_colored}/{len(_detected_objects)} objects")
+                                    else:
+                                        print(f"Warning: could not open color camera {color_camera}")
+                                except Exception as ce:
+                                    print(f"Color classification failed: {ce}")
+
                             n = len(_detected_objects)
                             print(f"Detected {n} object{'s' if n != 1 else ''} — press [c] to clear")
                         except Exception as e:

@@ -346,15 +346,15 @@ def run_live_view(
     use_clahe: bool = False,
     use_sharpen: bool = False,
     homography: Optional[np.ndarray] = None,
+    color_camera: Optional[int] = None,
 ) -> None:
     """Run the live view directly (blocking) — for CLI use.
-
-    This runs the detection + display loop on the current process's
-    main thread, which is the simplest path for ``aprilcam live``.
 
     Args:
         video_path: If provided, play this video file instead of a camera.
         loop: If True and video_path is set, loop the video continuously.
+        color_camera: Optional camera index for color classification
+            when the user presses 'd' for object detection.
     """
     from aprilcam.aprilcam import AprilCam
 
@@ -397,4 +397,4 @@ def run_live_view(
         homography=homography,
     )
 
-    cam.run()
+    cam.run(color_camera=color_camera)
