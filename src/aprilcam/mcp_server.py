@@ -845,8 +845,17 @@ def _handle_get_objects(source_id: str) -> dict:
         except KeyError:
             pass
 
+        # Get playfield polygon for containment filtering.
+        pf_poly = None
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            pf_poly = pf_entry.playfield.get_polygon()
+        except (KeyError, AttributeError):
+            pass
+
         objects = detector.detect(
-            gray, homography=homography, tag_corners=tag_corners
+            gray, homography=homography, tag_corners=tag_corners,
+            playfield_polygon=pf_poly,
         )
 
         return {
@@ -1043,9 +1052,17 @@ def _handle_get_frame(
             except KeyError:
                 pass
 
+            pf_poly_ann = None
+            try:
+                pf_entry_ann = playfield_registry.get(source_id)
+                pf_poly_ann = pf_entry_ann.playfield.get_polygon()
+            except (KeyError, AttributeError):
+                pass
+
             objects = detector.detect(
                 gray_ann, homography=homography,
                 tag_corners=tag_corners_for_exclude,
+                playfield_polygon=pf_poly_ann,
             )
             _draw_object_overlay(frame, objects)
         except Exception:

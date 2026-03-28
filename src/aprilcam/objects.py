@@ -43,11 +43,24 @@ class FrameResult(list):
 
 
 class SquareDetector:
-    """Detect square-ish contours in a grayscale image."""
+    """Detect square-ish bright contours on a dark playfield.
 
-    def __init__(self, min_area: int = 200, max_area: int = 5000):
+    Uses simple binary thresholding (not adaptive) because the playfield
+    is a known dark surface with bright objects.  Filters by area, aspect
+    ratio, solidity, and optional playfield polygon containment.
+    """
+
+    def __init__(
+        self,
+        min_area: int = 50,
+        max_area: int = 3000,
+        threshold: int = 100,
+        tag_margin: float = 1.5,
+    ):
         self.min_area = min_area
         self.max_area = max_area
+        self.threshold = threshold
+        self.tag_margin = tag_margin  # expand tag exclusion zones by this factor
 
     def detect(
         self,
@@ -56,6 +69,7 @@ class SquareDetector:
         tag_corners: list[np.ndarray] | None = None,
         exclusion_point: Tuple[float, float] | None = None,
         exclusion_radius: float = 50,
+        playfield_polygon: np.ndarray | None = None,
     ) -> list[ObjectRecord]:
         """Detect square objects in a grayscale image.
 
@@ -64,23 +78,32 @@ class SquareDetector:
             homography: Optional 3x3 homography matrix for world coords.
             tag_corners: List of Nx2 arrays of tag corner polygons to exclude.
             exclusion_point: Optional (x, y) point; detections within
-                exclusion_radius of this point are excluded.
-            exclusion_radius: Radius around exclusion_point to exclude.
+                *exclusion_radius* of this point are excluded.
+            exclusion_radius: Radius around *exclusion_point* to exclude.
+            playfield_polygon: Optional Nx2 polygon; detections outside
+                this polygon are discarded.
 
         Returns:
-            List of ObjectRecord for each detected square-like contour.
+            List of :class:`ObjectRecord` for each detected square-like
+            contour.
         """
-        thresh = cv.adaptiveThreshold(
-            gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2
-        )
-        contours_a, _ = cv.findContours(
+        # Simple binary threshold — bright objects on dark playfield.
+        _, thresh = cv.threshold(gray, self.threshold, 255, cv.THRESH_BINARY)
+        # Light morphological open to remove specks.
+        kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
+        thresh = cv.morphologyEx(thresh, cv.MORPH_OPEN, kernel)
+        contours, _ = cv.findContours(
             thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
         )
-        # Also search the inverse to catch bright objects on dark backgrounds.
-        contours_b, _ = cv.findContours(
-            cv.bitwise_not(thresh), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
-        )
-        contours = list(contours_a) + list(contours_b)
+
+        # Build expanded tag exclusion masks once.
+        tag_polys: list[np.ndarray] = []
+        if tag_corners:
+            for corners in tag_corners:
+                pts = corners.reshape(-1, 2).astype(np.float32)
+                center = pts.mean(axis=0)
+                expanded = center + (pts - center) * self.tag_margin
+                tag_polys.append(expanded)
 
         results: list[ObjectRecord] = []
         for cnt in contours:
@@ -104,12 +127,18 @@ class SquareDetector:
             cx = x + w / 2.0
             cy = y + h / 2.0
 
-            # Exclude centers inside tag corner polygons.
-            if tag_corners:
+            # Only keep detections inside the playfield polygon.
+            if playfield_polygon is not None:
+                pf = playfield_polygon.reshape(-1, 1, 2).astype(np.float32)
+                if cv.pointPolygonTest(pf, (cx, cy), False) < 0:
+                    continue
+
+            # Exclude centers inside expanded tag corner polygons.
+            if tag_polys:
                 inside_tag = False
-                for corners in tag_corners:
-                    poly = corners.reshape(-1, 1, 2).astype(np.float32)
-                    if cv.pointPolygonTest(poly, (cx, cy), False) >= 0:
+                for poly in tag_polys:
+                    p = poly.reshape(-1, 1, 2).astype(np.float32)
+                    if cv.pointPolygonTest(p, (cx, cy), False) >= 0:
                         inside_tag = True
                         break
                 if inside_tag:
@@ -119,13 +148,14 @@ class SquareDetector:
             if exclusion_point is not None:
                 dx = cx - exclusion_point[0]
                 dy = cy - exclusion_point[1]
-                if (dx * dx + dy * dy) ** 0.5 <= exclusion_radius:
+                if math.hypot(dx, dy) <= exclusion_radius:
                     continue
 
             world_xy: Tuple[float, float] | None = None
             if homography is not None:
                 pt = homography @ np.array([cx, cy, 1.0])
-                world_xy = (float(pt[0] / pt[2]), float(pt[1] / pt[2]))
+                if abs(pt[2]) > 1e-9:
+                    world_xy = (float(pt[0] / pt[2]), float(pt[1] / pt[2]))
 
             results.append(
                 ObjectRecord(

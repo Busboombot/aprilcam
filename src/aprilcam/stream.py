@@ -160,8 +160,10 @@ def detect_tags(
                     for t in tag_records
                 ]
                 gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                pf_poly = cam.playfield.get_polygon() if hasattr(cam, 'playfield') else None
                 objects = square_detector.detect(
-                    gray, homography=H, tag_corners=tag_corners
+                    gray, homography=H, tag_corners=tag_corners,
+                    playfield_polygon=pf_poly,
                 )
                 objects = fuser.fuse(objects)
 
