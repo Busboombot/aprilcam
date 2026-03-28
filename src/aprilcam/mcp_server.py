@@ -695,8 +695,25 @@ def _handle_get_tag_history(
         return {"error": f"Unexpected error: {exc}"}
 
 
-def _draw_tag_overlay(frame: np.ndarray, tags: list, has_homography: bool = False) -> None:
+def _warp_points(points: list, homography: np.ndarray) -> list:
+    """Transform a list of [x, y] points through a homography matrix."""
+    import cv2
+    pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    warped = cv2.perspectiveTransform(pts, homography)
+    return warped.reshape(-1, 2).tolist()
+
+
+def _draw_tag_overlay(
+    frame: np.ndarray,
+    tags: list,
+    has_homography: bool = False,
+    homography: np.ndarray | None = None,
+) -> None:
     """Draw tag detection overlays directly on *frame* (mutates in place).
+
+    When *homography* is provided, tag coordinates (which are in raw
+    camera space) are transformed through the homography so they align
+    with the deskewed image.
 
     Draws corner outlines, tag IDs, and world coordinates (when
     *has_homography* is True and ``world_xy`` is present).
@@ -706,6 +723,13 @@ def _draw_tag_overlay(frame: np.ndarray, tags: list, has_homography: bool = Fals
 
     for tag in tags:
         corners = tag.corners_px
+        center = list(tag.center_px)
+
+        # Transform coordinates if we have a homography (raw -> deskewed)
+        if homography is not None:
+            corners = _warp_points(corners, homography)
+            center = _warp_points([center], homography)[0]
+
         pts = [(int(c[0]), int(c[1])) for c in corners]
         # Draw corner polygon — green top edge, red other sides
         cv2.line(frame, pts[0], pts[1], (0, 255, 0), 2, cv2.LINE_AA)
@@ -714,7 +738,7 @@ def _draw_tag_overlay(frame: np.ndarray, tags: list, has_homography: bool = Fals
         cv2.line(frame, pts[3], pts[0], (0, 0, 255), 2, cv2.LINE_AA)
 
         # Center dot
-        cx, cy = int(tag.center_px[0]), int(tag.center_px[1])
+        cx, cy = int(center[0]), int(center[1])
         cv2.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
 
         # ID label
@@ -742,8 +766,8 @@ def _draw_tag_overlay(frame: np.ndarray, tags: list, has_homography: bool = Fals
             if norm > 1e-6:
                 length = int(max(12, min(250, norm * 0.5)))
                 ux, uy = vx / norm, vy / norm
-                end = (int(cx + ux * length), int(cy + uy * length))
-                cv2.arrowedLine(frame, (cx, cy), end, (0, 255, 255), 2, tipLength=0.12)
+                end_pt = (int(cx + ux * length), int(cy + uy * length))
+                cv2.arrowedLine(frame, (cx, cy), end_pt, (0, 255, 255), 2, tipLength=0.12)
 
 
 def _handle_get_frame(
@@ -776,12 +800,17 @@ def _handle_get_frame(
         if det_entry is not None:
             latest = det_entry.ring_buffer.get_latest()
             if latest is not None:
+                homography = None
+                has_homography = False
                 try:
-                    playfield_registry.get(source_id)
+                    pf_entry = playfield_registry.get(source_id)
                     has_homography = True
+                    homography = pf_entry.homography
                 except KeyError:
-                    has_homography = False
-                _draw_tag_overlay(frame, latest.tags, has_homography=has_homography)
+                    pass
+                _draw_tag_overlay(frame, latest.tags,
+                                 has_homography=has_homography,
+                                 homography=homography)
 
     try:
         import cv2
