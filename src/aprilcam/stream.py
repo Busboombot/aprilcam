@@ -19,6 +19,7 @@ from .camutil import list_cameras, get_device_name, select_camera_by_pattern
 from .config import AppConfig
 from .detection import TagRecord
 from .homography import discover_homography
+from .objects import FrameResult, ObjectFuser, SquareDetector
 
 
 def _resolve_camera_index(camera: int | str) -> int:
@@ -76,7 +77,9 @@ def detect_tags(
     family: str = "36h11",
     data_dir: str | Path = "data",
     proc_width: int = 0,
-) -> Generator[list[TagRecord], None, None]:
+    detect_objects: bool = False,
+    color_camera: int | str | None = None,
+) -> Generator[FrameResult, None, None]:
     """Open a camera, auto-load homography, and yield tag records per frame.
 
     Args:
@@ -86,13 +89,19 @@ def detect_tags(
         family: AprilTag family (default ``"36h11"``).
         data_dir: Directory containing homography files.
         proc_width: Processing width in pixels (0 = native resolution).
+        detect_objects: If ``True``, run square object detection each frame.
+        color_camera: Camera index or pattern for a secondary color camera.
+            When provided alongside ``detect_objects=True``, a background
+            thread classifies object colors from the color camera feed.
 
     Yields:
-        ``list[TagRecord]`` per frame -- each record includes tag ID, pixel
-        center, world coordinates (if calibrated), orientation, velocity.
+        :class:`~aprilcam.objects.FrameResult` per frame.  The result is
+        backward-compatible with ``list[TagRecord]`` (supports iteration,
+        ``len()``, and indexing over tags).
     """
     index = _resolve_camera_index(camera)
     cap = cv.VideoCapture(index)
+    color_thread = None
 
     try:
         if not cap.isOpened():
@@ -113,12 +122,58 @@ def detect_tags(
         )
         cam.reset_state()
 
+        # Set up object detection pipeline when requested.
+        square_detector: SquareDetector | None = None
+        fuser: ObjectFuser | None = None
+        if detect_objects:
+            square_detector = SquareDetector()
+            fuser = ObjectFuser()
+
+            if color_camera is not None:
+                from .color_classifier import ColorClassifier
+                from .objects import ColorCameraThread
+
+                color_index = _resolve_camera_index(color_camera)
+                color_H = _load_homography_matrix(
+                    homography, cap, color_index, data_dir
+                )
+                classifier = ColorClassifier()
+                color_thread = ColorCameraThread(
+                    camera_index=color_index,
+                    fuser=fuser,
+                    classifier=classifier,
+                    homography=color_H,
+                )
+                color_thread.start()
+
+        frame_index = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             tag_records = cam.process_frame(frame, time.monotonic())
-            yield tag_records
+
+            objects = []
+            if square_detector is not None and fuser is not None:
+                tag_corners = [
+                    np.array(t.corners_px, dtype=np.float32)
+                    for t in tag_records
+                ]
+                gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                objects = square_detector.detect(
+                    gray, homography=H, tag_corners=tag_corners
+                )
+                objects = fuser.fuse(objects)
+
+            yield FrameResult(
+                tags=tag_records,
+                objects=objects,
+                timestamp=time.monotonic(),
+                frame_index=frame_index,
+            )
+            frame_index += 1
     finally:
+        if color_thread is not None:
+            color_thread.stop()
         if cap.isOpened():
             cap.release()

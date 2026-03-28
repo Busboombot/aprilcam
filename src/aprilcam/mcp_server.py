@@ -810,6 +810,64 @@ def _handle_get_tag_history(
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _handle_get_objects(source_id: str) -> dict:
+    """Core logic for get_objects — returns detected non-tag objects or error."""
+    try:
+        import cv2 as cv
+        from aprilcam.objects import SquareDetector
+
+        det_entry = detection_registry.get(source_id)
+        if det_entry is None:
+            return {"error": f"No detection loop on '{source_id}'"}
+
+        frame = det_entry.loop.last_frame
+        if frame is None:
+            return {"error": "No frames captured yet"}
+
+        detector = SquareDetector()
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+        # Get tag corners for exclusion from the latest ring buffer entry.
+        latest = det_entry.ring_buffer.get_latest()
+        tag_corners = []
+        if latest:
+            for tag in latest.tags:
+                tag_corners.append(
+                    np.array(tag.corners_px, dtype=np.float32)
+                )
+
+        # Get homography if this source is a playfield.
+        homography = None
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            if pf_entry.homography is not None:
+                homography = pf_entry.homography
+        except KeyError:
+            pass
+
+        objects = detector.detect(
+            gray, homography=homography, tag_corners=tag_corners
+        )
+
+        return {
+            "source_id": source_id,
+            "objects": [
+                {
+                    "center_px": list(o.center_px),
+                    "world_xy": list(o.world_xy) if o.world_xy else None,
+                    "color": o.color,
+                    "bbox": list(o.bbox),
+                    "area_px": o.area_px,
+                    "object_type": o.object_type,
+                    "confidence": o.confidence,
+                }
+                for o in objects
+            ],
+        }
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
 def _warp_points(points: list, homography: np.ndarray) -> list:
     """Transform a list of [x, y] points through a homography matrix."""
     import cv2
@@ -1983,6 +2041,27 @@ async def get_tag_history(
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_tag_history(source_id, num_frames=num_frames)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def get_objects(source_id: str) -> list[TextContent]:
+    """Return detected non-tag objects from a running detection loop.
+
+    Runs square-contour detection on the latest frame, excluding regions
+    covered by known AprilTag / ArUco markers.  World coordinates are
+    included when the source has a calibrated playfield homography.
+
+    Args:
+        source_id: The camera UUID or playfield_id passed to ``start_detection``.
+
+    Returns:
+        On success: ``{"source_id": "<id>", "objects": [...]}``.
+        Each object includes ``center_px``, ``world_xy``, ``color``,
+        ``bbox``, ``area_px``, ``object_type``, and ``confidence``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_get_objects(source_id)
     return [TextContent(type="text", text=json.dumps(result))]
 
 

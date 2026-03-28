@@ -25,27 +25,21 @@ class ObjectRecord:
     confidence: float = 1.0
 
 
-class FrameResult:
+class FrameResult(list):
     """Result of processing a single frame.
 
-    Backward-compatible with list[TagRecord]: iterating, len(), and
-    indexing all delegate to the tags list.
+    Subclasses ``list`` so that ``isinstance(result, list)`` is ``True``
+    and all standard list operations (iteration, ``len()``, indexing)
+    work directly on the tags.  Extra attributes expose object detections
+    and frame metadata.
     """
 
     def __init__(self, tags, objects=None, timestamp=0.0, frame_index=0):
+        super().__init__(tags)
         self.tags = tags
         self.objects = objects or []
         self.timestamp = timestamp
         self.frame_index = frame_index
-
-    def __iter__(self):
-        return iter(self.tags)
-
-    def __len__(self):
-        return len(self.tags)
-
-    def __getitem__(self, idx):
-        return self.tags[idx]
 
 
 class SquareDetector:
