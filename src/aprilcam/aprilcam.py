@@ -585,6 +585,26 @@ class AprilCam:
         from aprilcam.objects import SquareDetector as _SD
         _sq_detector = _SD()
 
+        # Open color camera at startup if specified (avoids USB contention on each 'd')
+        _color_cap = None
+        _color_cal = None
+        if color_camera is not None:
+            _color_cap = cv.VideoCapture(color_camera)
+            if not _color_cap.isOpened():
+                print(f"Warning: color camera {color_camera} failed to open")
+                _color_cap = None
+            else:
+                # Load calibration
+                try:
+                    from aprilcam.homography import load_calibration
+                    all_cals = load_calibration()
+                    for _name, _cal in all_cals.items():
+                        if _cal.dist_coeffs is not None or _cal.resolution[0] > 1280:
+                            _color_cal = _cal
+                            break
+                except Exception:
+                    pass
+
         if not self.headless:
             print("Keys: [q]uit  [space]pause  [d]etect objects  [c]lear objects")
 
@@ -679,66 +699,29 @@ class AprilCam:
                                         ))
                                 _detected_objects = mapped
 
-                            # Color classify using calibration.json
-                            if color_camera is not None and _detected_objects:
+                            # Color classify using pre-opened color camera
+                            if _color_cap is not None and _color_cal is not None and _detected_objects:
                                 try:
                                     from aprilcam.color_classifier import ColorClassifier
-                                    from aprilcam.homography import load_calibration
-                                    import json as _json
-                                    from pathlib import Path as _Path
 
-                                    # Load ALL calibrations — avoid get_device_name probe
-                                    cal_path = _Path("data/calibration.json")
-                                    if not cal_path.exists():
-                                        print("[d] no data/calibration.json")
-                                    else:
-                                        all_cals = load_calibration()
-                                        # Find color camera by resolution match
-                                        color_cal = None
-                                        for name, cal in all_cals.items():
-                                            if cal.dist_coeffs is not None or cal.resolution[0] > 1280:
-                                                color_cal = cal
-                                                print(f"[d] using calibration for '{name}' {cal.resolution}")
-                                                break
-
-                                        if color_cal is None:
-                                            print("[d] no color camera calibration found")
-                                        else:
-                                            cc = cv.VideoCapture(color_camera)
-                                            if not cc.isOpened():
-                                                print(f"[d] color camera {color_camera} won't open")
-                                            else:
-                                                # Slow camera — read a few frames
-                                                got_frame = False
-                                                for attempt in range(5):
-                                                    ret_c, color_frame = cc.read()
-                                                    if ret_c and color_frame is not None:
-                                                        got_frame = True
-                                                        break
-                                                cc.release()
-
-                                                if not got_frame:
-                                                    print("[d] color camera: no valid frame")
-                                                else:
-                                                    color_frame = color_cal.undistort(color_frame)
-                                                    classifier = ColorClassifier()
-                                                    color_objects = classifier.classify(
-                                                        color_frame, color_cal.homography
-                                                    )
-                                                    # Filter to playfield
-                                                    in_field = [o for o in color_objects
-                                                                if o.world_xy and -5 <= o.world_xy[0] <= 106 and -5 <= o.world_xy[1] <= 94]
-                                                    print(f"[d] color: {len(color_objects)} total, {len(in_field)} in playfield")
-
-                                                    fuser = ObjectFuser()
-                                                    fuser.update_colors(in_field)
-                                                    _detected_objects = fuser.fuse(_detected_objects)
-                                                    n_col = sum(1 for o in _detected_objects if o.color != "unknown")
-                                                    print(f"[d] fused: {n_col}/{len(_detected_objects)} colored")
-                                except Exception as ce:
-                                    import traceback
-                                    print(f"[d] color failed: {ce}")
-                                    traceback.print_exc()
+                                    ret_c, color_frame = _color_cap.read()
+                                    if ret_c and color_frame is not None:
+                                        color_frame = _color_cal.undistort(color_frame)
+                                        classifier = ColorClassifier()
+                                        color_objects = classifier.classify(
+                                            color_frame, _color_cal.homography
+                                        )
+                                        in_field = [o for o in color_objects
+                                                    if o.world_xy and -5 <= o.world_xy[0] <= 106 and -5 <= o.world_xy[1] <= 94]
+                                        fuser = ObjectFuser()
+                                        fuser.update_colors(in_field)
+                                        _detected_objects = fuser.fuse(_detected_objects)
+                                        n_col = sum(1 for o in _detected_objects if o.color != "unknown")
+                                        n = len(_detected_objects)
+                                        # Brief status without flooding TUI
+                                        print(f"\r[d] {n} objects, {n_col} colored, {len(in_field)} color detections", end="", flush=True)
+                                except Exception:
+                                    pass  # don't spam TUI with errors
 
                             n = len(_detected_objects)
                             print(f"[d] {n} object{'s' if n != 1 else ''} — press [c] to clear")
@@ -753,6 +736,11 @@ class AprilCam:
                     time.sleep(0.001)
         finally:
             # Cleanup resources
+            try:
+                if _color_cap is not None:
+                    _color_cap.release()
+            except Exception:
+                pass
             try:
                 if self.cap is not None:
                     self.cap.release()
