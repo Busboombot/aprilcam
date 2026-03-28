@@ -1,7 +1,7 @@
 ---
 id: "001"
 title: "ObjectRecord, FrameResult dataclasses and square detection"
-status: todo
+status: done
 use-cases: ["SUC-012-001"]
 depends-on: []
 github-issue: ""
