@@ -23,15 +23,19 @@ class Playfield:
     polygon: Optional[np.ndarray] = None  # shape (4,2) float32, UL/UR/LR/LL
     ema_alpha: float = 0.3
     deadband_threshold: float = 50.0
+    corner_detect_interval: int = 30
 
     _poly: Optional[np.ndarray] = field(default=None, init=False, repr=False)
     _flows: Dict[int, AprilTagFlow] = field(default_factory=dict, init=False, repr=False)
     _vel_ema: Dict[int, float] = field(default_factory=dict, init=False, repr=False)
     _last_seen: Dict[int, Tuple[float, float, float]] = field(default_factory=dict, init=False, repr=False)
+    _aruco_detector: Optional[cv.aruco.ArucoDetector] = field(default=None, init=False, repr=False)
+    _corner_frame_count: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self):
         if self.polygon is not None:
             self._poly = np.asarray(self.polygon, dtype=np.float32).reshape(4, 2)
+        self._aruco_detector = self._build_aruco4_detector()
 
     def _build_aruco4_detector(self):
         d = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
@@ -39,9 +43,10 @@ class Playfield:
         p.detectInvertedMarker = bool(self.detect_inverted)
         return cv.aruco.ArucoDetector(d, p)
 
-    def _detect_corners(self, frame_bgr: np.ndarray) -> Dict[int, Tuple[float, float]]:
+    def _detect_corners(self, frame_bgr: np.ndarray, gray: Optional[np.ndarray] = None) -> Dict[int, Tuple[float, float]]:
         h, w = frame_bgr.shape[:2]
-        gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
+        if gray is None:
+            gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
         if self.proc_width and w > 0 and self.proc_width < w:
             scale = float(self.proc_width) / float(w)
             new_w = max(1, int(w * scale))
@@ -50,7 +55,9 @@ class Playfield:
         else:
             scale = 1.0
 
-        detector = self._build_aruco4_detector()
+        if self._aruco_detector is None:
+            self._aruco_detector = self._build_aruco4_detector()
+        detector = self._aruco_detector
         corners, ids, _ = detector.detectMarkers(gray)
         out: Dict[int, Tuple[float, float]] = {}
         if ids is None:
@@ -81,8 +88,15 @@ class Playfield:
         LL, LR = bot[0], bot[1]
         return np.array([UL, UR, LR, LL], dtype=np.float32)
 
-    def update(self, frame_bgr: np.ndarray) -> None:
-        cmap = self._detect_corners(frame_bgr)
+    def update(self, frame_bgr: np.ndarray, gray: Optional[np.ndarray] = None) -> None:
+        self._corner_frame_count += 1
+        # Throttle corner re-detection: only run every N frames
+        # Always detect on the first frame (count == 1) or when no polygon exists
+        if (self._poly is not None
+                and self.corner_detect_interval > 1
+                and (self._corner_frame_count - 1) % self.corner_detect_interval != 0):
+            return
+        cmap = self._detect_corners(frame_bgr, gray=gray)
         poly = self._order_poly(cmap)
         if poly is not None:
             if self._poly is None:

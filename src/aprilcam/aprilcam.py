@@ -11,7 +11,8 @@ import numpy as np
 from .config import AppConfig
 from .detection import TagRecord
 from .iohelpers import get_data_dir
-from .camutil import list_cameras as _list_cameras, select_camera_by_pattern
+from .camutil import list_cameras as _list_cameras, select_camera_by_pattern, diagnose_camera_failure
+from .errors import CameraError, CameraNotFoundError, CameraInUseError
 from .playfield import Playfield
 from .models import AprilTag as AprilTagModel
 from .display import PlayfieldDisplay
@@ -302,18 +303,21 @@ class AprilCam:
             out = cv.filter2D(out, -1, k)
         return out
 
-    def detect_apriltags(self, frame_bgr: np.ndarray, scale: float = 1.0) -> List[Tuple[np.ndarray, np.ndarray, int, str]]:
+    def detect_apriltags(self, frame_bgr: np.ndarray, scale: float = 1.0, gray: Optional[np.ndarray] = None) -> List[Tuple[np.ndarray, np.ndarray, int, str]]:
         """Detect AprilTags in a BGR frame.
 
         Args:
             frame_bgr: Input color frame in BGR order.
             scale: Optional downscale factor for speed (<1 downscales).
+            gray: Optional pre-computed grayscale image. If None, computed
+                from *frame_bgr* internally.
 
         Returns:
             A list of (pts[4x2], raw_pts[4x2], id, family) for each detected tag.
         """
         h, w = frame_bgr.shape[:2]
-        gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
+        if gray is None:
+            gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
         if scale < 1.0:
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
@@ -356,21 +360,35 @@ class AprilCam:
         if self.cap is None:
             self.cap = cv.VideoCapture(int(self.index), 0 if self.backend is None else int(self.backend))
         if not self.cap or not self.cap.isOpened():
-            print("Failed to open camera.")
-            return None
+            diag = diagnose_camera_failure(int(self.index))
+            if not diag.get("exists", True):
+                raise CameraNotFoundError(
+                    f"Camera at index {self.index} does not exist."
+                )
+            blocking = diag.get("blocking_processes", [])
+            if blocking:
+                proc = blocking[0]
+                raise CameraInUseError(
+                    f"Camera {self.index} is in use by process "
+                    f"'{proc['name']}' (PID {proc['pid']}). "
+                    f"Kill it with: kill {proc['pid']}",
+                    pid=proc["pid"],
+                    process_name=proc["name"],
+                )
+            raise CameraError(f"Failed to open camera {self.index}")
         if self.cap_width:
             self.cap.set(cv.CAP_PROP_FRAME_WIDTH, int(self.cap_width))
         if self.cap_height:
             self.cap.set(cv.CAP_PROP_FRAME_HEIGHT, int(self.cap_height))
         return self.cap
 
-    def _update_playfield(self, frame: np.ndarray) -> None:
+    def _update_playfield(self, frame: np.ndarray, gray: Optional[np.ndarray] = None) -> None:
         """Update cached playfield polygon via Playfield.
 
         Deskew is handled by PlayfieldDisplay; this only updates geometry.
         """
         try:
-            self.playfield.update(frame)
+            self.playfield.update(frame, gray=gray)
             poly = self.playfield.get_polygon()
             if poly is not None:
                 self.play_poly = poly.astype(np.float32)
@@ -408,7 +426,7 @@ class AprilCam:
             scale = (min(1.0, float(self.proc_width) / float(w))
                      if (self.proc_width and self.proc_width > 0 and w > 0)
                      else 1.0)
-            detections = self.detect_apriltags(frame_bgr, scale=scale)
+            detections = self.detect_apriltags(frame_bgr, scale=scale, gray=gray)
             self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
             self._track_families = {tid: fam for (_pts, _raw, tid, fam) in detections}
         else:
@@ -426,12 +444,12 @@ class AprilCam:
                 scale = (min(1.0, float(self.proc_width) / float(w))
                          if (self.proc_width and self.proc_width > 0 and w > 0)
                          else 1.0)
-                detections = self.detect_apriltags(frame_bgr, scale=scale)
+                detections = self.detect_apriltags(frame_bgr, scale=scale, gray=gray)
                 self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
                 self._track_families = {tid: fam for (_pts, _raw, tid, fam) in detections}
 
         # 3) Update Playfield cache (polygon) for cropping/deskew
-        self._update_playfield(frame_bgr)
+        self._update_playfield(frame_bgr, gray=gray)
 
         # 4) Keep only detections inside the current playfield polygon
         if detections:
