@@ -53,7 +53,7 @@ class AprilCam:
         quad_sigma: float = 0.0,
         corner_refine: str = "subpix",
         detect_inverted: bool = True,
-        detect_interval: int = 1,
+        detect_interval: int = 3,
         use_clahe: bool = False,
         use_sharpen: bool = False,
         use_highpass: bool = True,
