@@ -55,14 +55,6 @@ def main(argv: list[str] | None = None) -> int:
         "--homography", type=str, default=None,
         help="Path to homography JSON file (default: data/homography.json if it exists)",
     )
-    parser.add_argument(
-        "-d", "--detect-objects", action="store_true",
-        help="Enable square object detection on each frame",
-    )
-    parser.add_argument(
-        "--color-camera", type=int, default=None,
-        help="Camera index for color classification (requires --detect-objects)",
-    )
     args = parser.parse_args(argv)
 
     # Load homography matrix if available
@@ -99,7 +91,5 @@ def main(argv: list[str] | None = None) -> int:
         use_clahe=args.clahe,
         use_sharpen=args.sharpen,
         homography=homography,
-        detect_objects=args.detect_objects,
-        color_camera=args.color_camera,
     )
     return 0

@@ -5,7 +5,7 @@ from aprilcam.detection import TagRecord
 from aprilcam.aprilcam import AprilCam
 from aprilcam.models import AprilTag
 from aprilcam.playfield import Playfield
-from aprilcam.objects import ObjectRecord, FrameResult
+from aprilcam.objects import ObjectRecord
 from aprilcam.errors import (
     CameraError,
     CameraInUseError,
@@ -22,7 +22,6 @@ __all__ = [
     "AprilTag",
     "Playfield",
     "ObjectRecord",
-    "FrameResult",
     "CameraError",
     "CameraInUseError",
     "CameraNotFoundError",

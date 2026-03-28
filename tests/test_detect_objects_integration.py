@@ -1,4 +1,4 @@
-"""Tests for detect_tags object detection integration."""
+"""Tests for object detection components and detect_tags backward compat."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from aprilcam.objects import FrameResult, ObjectRecord
+from aprilcam.objects import FrameResult, ObjectRecord, SquareDetector
 from aprilcam.stream import detect_tags
 
 
@@ -21,8 +21,8 @@ def _make_mock_cap(frames):
     return mock_cap
 
 
-def test_detect_tags_yields_frame_result():
-    """Default detect_tags yields FrameResult (backward-compat wrapper)."""
+def test_detect_tags_yields_tag_lists():
+    """detect_tags yields plain list[TagRecord] per frame."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cap = _make_mock_cap([frame, frame])
 
@@ -31,43 +31,11 @@ def test_detect_tags_yields_frame_result():
 
     assert len(results) == 2
     for r in results:
-        assert isinstance(r, FrameResult)
-        # Tags list (likely empty on a blank frame)
-        assert isinstance(r.tags, list)
-        # Objects list should be empty when detect_objects=False
-        assert r.objects == []
+        assert isinstance(r, list)
 
 
-def test_detect_tags_with_objects():
-    """detect_tags with detect_objects=True detects squares in the frame."""
-    # Create a black frame with a white square (should be detected).
-    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    # Draw a filled white square at (300, 200) with size 30x30.
-    frame[200:230, 300:330, :] = 255
-
-    mock_cap = _make_mock_cap([frame])
-
-    with patch("aprilcam.stream.cv.VideoCapture", return_value=mock_cap):
-        results = list(
-            detect_tags(
-                camera=0,
-                homography=None,
-                proc_width=0,
-                detect_objects=True,
-            )
-        )
-
-    assert len(results) == 1
-    r = results[0]
-    assert isinstance(r, FrameResult)
-    # The white square should be detected as an object.
-    assert len(r.objects) > 0
-    for obj in r.objects:
-        assert isinstance(obj, ObjectRecord)
-
-
-def test_backward_compat_iteration():
-    """for tags in detect_tags(...): for tag in tags: -- still works."""
+def test_detect_tags_iteration():
+    """for tags in detect_tags(...): for tag in tags: -- works."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cap = _make_mock_cap([frame, frame, frame])
 
@@ -75,12 +43,23 @@ def test_backward_compat_iteration():
         gen = detect_tags(camera=0, homography=None, proc_width=0)
         count = 0
         for tags in gen:
-            # FrameResult iterates over tags (list of TagRecord)
             for _tag in tags:
-                pass  # would run if tags were detected
+                pass
             count += 1
 
     assert count == 3
+
+
+def test_square_detector_on_synthetic():
+    """SquareDetector finds a white square on a black image."""
+    frame = np.zeros((480, 640), dtype=np.uint8)
+    frame[200:230, 300:330] = 255  # 30x30 white square
+
+    det = SquareDetector(min_area=50, max_area=2000, threshold=100)
+    objects = det.detect(frame)
+    assert len(objects) > 0
+    for obj in objects:
+        assert isinstance(obj, ObjectRecord)
 
 
 def test_frame_result_len_and_index():

@@ -18,6 +18,27 @@ from .models import AprilTag as AprilTagModel
 from .display import PlayfieldDisplay
 
 
+_OBJECT_COLOR_BGR = {
+    "red": (0, 0, 255), "green": (0, 200, 0), "blue": (255, 0, 0),
+    "yellow": (0, 255, 255), "orange": (0, 165, 255),
+    "purple": (255, 0, 255), "unknown": (200, 200, 200),
+}
+
+
+def _draw_object_boxes(frame: np.ndarray, objects: list) -> None:
+    """Draw persistent object detection overlays on a frame."""
+    for obj in objects:
+        x, y, w, h = obj.bbox
+        bgr = _OBJECT_COLOR_BGR.get(obj.color, (200, 200, 200))
+        cv.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
+        cv.putText(frame, obj.color, (x, y - 5),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.5, bgr, 1, cv.LINE_AA)
+        if obj.world_xy:
+            coord = f"({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})"
+            cv.putText(frame, coord, (x, y + h + 15),
+                       cv.FONT_HERSHEY_SIMPLEX, 0.4, bgr, 1, cv.LINE_AA)
+
+
 class AprilCam:
     def __init__(
         self,
@@ -532,7 +553,14 @@ class AprilCam:
         return tag_records
 
     def run(self) -> None:
-        """Main capture/detect/track loop with display and overlays."""
+        """Main capture/detect/track loop with display and overlays.
+
+        Key bindings:
+            q / Esc — quit
+            Space   — pause / resume
+            d       — run one-shot object detection, draw results (persists)
+            c       — clear object detection overlays
+        """
         cap = self._init_capture()
         if cap is None:
             return
@@ -541,6 +569,11 @@ class AprilCam:
         self.reset_state()
         paused = False
         last_display: Optional[np.ndarray] = None
+        # Persistent object overlays (list of ObjectRecord or None)
+        _detected_objects: list | None = None
+
+        if not self.headless:
+            print("Keys: [q]uit  [space]pause  [d]etect objects  [c]lear objects")
 
         try:
             while True:
@@ -563,6 +596,11 @@ class AprilCam:
                     flows = self.playfield.get_flows()
                     tags_for_overlay = list(flows.values())
                     self.display.draw_overlays(display if display is not None else frame, tags_for_overlay, homography=self.homography)
+
+                    # Draw persistent object overlays if any
+                    if _detected_objects:
+                        _draw_object_boxes(display if display is not None else frame, _detected_objects)
+
                     last_display = display.copy()
                 else:
                     # Paused branch: reuse last display buffer and show a pause overlay
@@ -585,6 +623,20 @@ class AprilCam:
                     if key == ord(' '):
                         paused = not paused
                         continue
+                    if key == ord('d'):
+                        # One-shot object detection on current frame
+                        try:
+                            from aprilcam.objects import SquareDetector
+                            det = SquareDetector()
+                            det_frame = display if display is not None else frame
+                            det_gray = cv.cvtColor(det_frame, cv.COLOR_BGR2GRAY)
+                            _detected_objects = det.detect(det_gray)
+                            n = len(_detected_objects)
+                            print(f"Detected {n} object{'s' if n != 1 else ''} — press [c] to clear")
+                        except Exception as e:
+                            print(f"Object detection failed: {e}")
+                    if key == ord('c'):
+                        _detected_objects = None
                 else:
                     # Headless: small sleep to avoid tight loop
                     time.sleep(0.001)

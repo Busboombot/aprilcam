@@ -16,10 +16,8 @@ import numpy as np
 
 from .aprilcam import AprilCam
 from .camutil import list_cameras, get_device_name, select_camera_by_pattern
-from .config import AppConfig
 from .detection import TagRecord
 from .homography import discover_homography
-from .objects import FrameResult, ObjectFuser, SquareDetector
 
 
 def _resolve_camera_index(camera: int | str) -> int:
@@ -50,7 +48,6 @@ def _load_homography_matrix(
     data_path = Path(data_dir)
 
     if homography == "auto":
-        # Try to discover per-camera homography file
         device_name = get_device_name(camera_index)
         width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
@@ -77,9 +74,7 @@ def detect_tags(
     family: str = "36h11",
     data_dir: str | Path = "data",
     proc_width: int = 0,
-    detect_objects: bool = False,
-    color_camera: int | str | None = None,
-) -> Generator[FrameResult, None, None]:
+) -> Generator[list[TagRecord], None, None]:
     """Open a camera, auto-load homography, and yield tag records per frame.
 
     Args:
@@ -89,19 +84,13 @@ def detect_tags(
         family: AprilTag family (default ``"36h11"``).
         data_dir: Directory containing homography files.
         proc_width: Processing width in pixels (0 = native resolution).
-        detect_objects: If ``True``, run square object detection each frame.
-        color_camera: Camera index or pattern for a secondary color camera.
-            When provided alongside ``detect_objects=True``, a background
-            thread classifies object colors from the color camera feed.
 
     Yields:
-        :class:`~aprilcam.objects.FrameResult` per frame.  The result is
-        backward-compatible with ``list[TagRecord]`` (supports iteration,
-        ``len()``, and indexing over tags).
+        ``list[TagRecord]`` per frame — each record includes tag ID, pixel
+        center, world coordinates (if calibrated), orientation, velocity.
     """
     index = _resolve_camera_index(camera)
     cap = cv.VideoCapture(index)
-    color_thread = None
 
     try:
         if not cap.isOpened():
@@ -122,60 +111,11 @@ def detect_tags(
         )
         cam.reset_state()
 
-        # Set up object detection pipeline when requested.
-        square_detector: SquareDetector | None = None
-        fuser: ObjectFuser | None = None
-        if detect_objects:
-            square_detector = SquareDetector()
-            fuser = ObjectFuser()
-
-            if color_camera is not None:
-                from .color_classifier import ColorClassifier
-                from .objects import ColorCameraThread
-
-                color_index = _resolve_camera_index(color_camera)
-                color_H = _load_homography_matrix(
-                    homography, cap, color_index, data_dir
-                )
-                classifier = ColorClassifier()
-                color_thread = ColorCameraThread(
-                    camera_index=color_index,
-                    fuser=fuser,
-                    classifier=classifier,
-                    homography=color_H,
-                )
-                color_thread.start()
-
-        frame_index = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            tag_records = cam.process_frame(frame, time.monotonic())
-
-            objects = []
-            if square_detector is not None and fuser is not None:
-                tag_corners = [
-                    np.array(t.corners_px, dtype=np.float32)
-                    for t in tag_records
-                ]
-                gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                pf_poly = cam.playfield.get_polygon() if hasattr(cam, 'playfield') else None
-                objects = square_detector.detect(
-                    gray, homography=H, tag_corners=tag_corners,
-                    playfield_polygon=pf_poly,
-                )
-                objects = fuser.fuse(objects)
-
-            yield FrameResult(
-                tags=tag_records,
-                objects=objects,
-                timestamp=time.monotonic(),
-                frame_index=frame_index,
-            )
-            frame_index += 1
+            yield cam.process_frame(frame, time.monotonic())
     finally:
-        if color_thread is not None:
-            color_thread.stop()
         if cap.isOpened():
             cap.release()
