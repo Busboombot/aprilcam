@@ -1,13 +1,13 @@
 ---
-id: "011"
-title: "Library Performance & API"
-status: active
+id: '011'
+title: Library Performance & API
+status: done
 branch: sprint/011-library-performance-api
 use-cases:
-  - SUC-011-001
-  - SUC-011-002
-  - SUC-011-003
-  - SUC-011-004
+- SUC-011-001
+- SUC-011-002
+- SUC-011-003
+- SUC-011-004
 ---
 
 # Sprint 011: Library Performance & API
