@@ -346,6 +346,8 @@ def run_live_view(
     use_clahe: bool = False,
     use_sharpen: bool = False,
     homography: Optional[np.ndarray] = None,
+    detect_objects: bool = False,
+    color_camera: Optional[int] = None,
 ) -> None:
     """Run the live view directly (blocking) — for CLI use.
 
@@ -355,6 +357,8 @@ def run_live_view(
     Args:
         video_path: If provided, play this video file instead of a camera.
         loop: If True and video_path is set, loop the video continuously.
+        detect_objects: If True, run square object detection each frame.
+        color_camera: Camera index for color classification (requires detect_objects).
     """
     from aprilcam.aprilcam import AprilCam
 
@@ -396,4 +400,134 @@ def run_live_view(
         cap=cap,
         homography=homography,
     )
-    cam.run()
+
+    if not detect_objects:
+        cam.run()
+        return
+
+    # --- Object detection mode: inline loop with overlays ---
+    from aprilcam.objects import SquareDetector, ObjectFuser, ColorCameraThread
+    from aprilcam.color_classifier import ColorClassifier
+
+    square_detector = SquareDetector()
+    fuser = ObjectFuser()
+    color_thread = None
+
+    if color_camera is not None:
+        # Try to load homography for the color camera
+        import json as _json
+        from pathlib import Path as _Path
+
+        color_H = None
+        color_hom_path = _Path(f"data/homography_camera{color_camera}.json")
+        if not color_hom_path.is_file():
+            color_hom_path = _Path("data/homography.json")
+        if color_hom_path.is_file():
+            try:
+                _data = _json.loads(color_hom_path.read_text())
+                color_H = np.array(_data["homography"], dtype=np.float64)
+                print(f"Color camera: loaded homography from {color_hom_path}")
+            except Exception as e:
+                print(f"Warning: failed to load color camera homography: {e}")
+
+        classifier = ColorClassifier()
+        color_thread = ColorCameraThread(
+            color_camera, fuser, classifier, homography=color_H,
+        )
+        color_thread.start()
+        print(f"Color camera thread started on camera {color_camera}")
+
+    # Color name to BGR for drawing
+    COLOR_BGR = {
+        "red": (0, 0, 255), "green": (0, 200, 0), "blue": (255, 0, 0),
+        "yellow": (0, 255, 255), "orange": (0, 165, 255),
+        "purple": (255, 0, 255), "unknown": (200, 200, 200),
+    }
+
+    cam.reset_state()
+    paused = False
+    last_display: Optional[np.ndarray] = None
+
+    try:
+        while True:
+            if not paused:
+                ok, frame = cap.read()
+                if not ok:
+                    print("Camera read failed.")
+                    break
+
+                now = time.monotonic()
+                tag_records = cam.process_frame(frame, now)
+
+                if cam.print_tags and tag_records:
+                    cam._print_tui(tag_records, has_world=cam.homography is not None)
+
+                # Prepare display and draw tag overlays
+                display_frame = cam.display.update(frame)
+                flows = cam.playfield.get_flows()
+                tags_for_overlay = list(flows.values())
+                cam.display.draw_overlays(
+                    display_frame if display_frame is not None else frame,
+                    tags_for_overlay,
+                    homography=cam.homography,
+                )
+
+                # Object detection
+                gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                tag_corners = [
+                    np.array(tr.corners_px, dtype=np.float32)
+                    for tr in tag_records
+                ]
+                objects = square_detector.detect(
+                    gray, homography=cam.homography, tag_corners=tag_corners,
+                )
+                objects = fuser.fuse(objects)
+
+                # Draw object overlays on the display frame
+                draw_target = display_frame if display_frame is not None else frame
+                for obj in objects:
+                    x, y, w, h = obj.bbox
+                    bgr = COLOR_BGR.get(obj.color, (200, 200, 200))
+                    cv.rectangle(draw_target, (x, y), (x + w, y + h), bgr, 2)
+                    label = obj.color
+                    cv.putText(
+                        draw_target, label, (x, y - 5),
+                        cv.FONT_HERSHEY_SIMPLEX, 0.5, bgr, 1, cv.LINE_AA,
+                    )
+                    if obj.world_xy:
+                        coord = f"({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})"
+                        cv.putText(
+                            draw_target, coord, (x, y + h + 15),
+                            cv.FONT_HERSHEY_SIMPLEX, 0.4, bgr, 1, cv.LINE_AA,
+                        )
+
+                last_display = draw_target.copy()
+            else:
+                if last_display is None:
+                    ok, frame = cap.read()
+                    if not ok:
+                        print("Camera read failed.")
+                        break
+                    last_display = frame.copy()
+                display_frame = last_display.copy()
+                cam.display.pause(display_frame)
+
+            target = display_frame if not paused else display_frame
+            cam.display.show(target)
+            key = cv.waitKey(1) & 0xFF
+            if key in (27, ord("q")):
+                break
+            if key == ord(" "):
+                paused = not paused
+                continue
+    finally:
+        if color_thread is not None:
+            color_thread.stop()
+        try:
+            cap.release()
+        except Exception:
+            pass
+        try:
+            cv.destroyAllWindows()
+        except Exception:
+            pass
