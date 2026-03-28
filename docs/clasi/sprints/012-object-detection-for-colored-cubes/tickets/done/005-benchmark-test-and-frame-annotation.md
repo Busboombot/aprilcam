@@ -1,7 +1,7 @@
 ---
 id: "005"
 title: "Benchmark test and frame annotation"
-status: todo
+status: done
 use-cases: ["SUC-012-001"]
 depends-on: ["004"]
 github-issue: ""
