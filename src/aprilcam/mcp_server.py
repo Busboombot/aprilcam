@@ -44,6 +44,7 @@ from aprilcam.image_processing import (
     process_detect_lines,
     process_detect_qr_codes,
 )
+from aprilcam.errors import CameraError, CameraNotFoundError, CameraInUseError
 from aprilcam.models import AprilTag
 from aprilcam.playfield import Playfield
 
@@ -334,6 +335,21 @@ def _handle_open_camera(
 
             if not cap.isOpened():
                 cap.release()
+                from aprilcam.camutil import diagnose_camera_failure
+
+                diag = diagnose_camera_failure(idx)
+                if not diag.get("exists", True):
+                    return {"error": f"Camera at index {idx} does not exist."}
+                blocking = diag.get("blocking_processes", [])
+                if blocking:
+                    proc = blocking[0]
+                    return {
+                        "error": (
+                            f"Camera {idx} is in use by process "
+                            f"'{proc['name']}' (PID {proc['pid']}). "
+                            f"Kill it with: kill {proc['pid']}"
+                        )
+                    }
                 return {"error": f"Failed to open camera at index {idx}"}
 
             # USB cameras need several reads before producing valid frames

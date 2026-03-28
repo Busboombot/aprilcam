@@ -166,6 +166,125 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
     return cameras
 
 
+def diagnose_camera_failure(index: int) -> dict:
+    """Diagnose why a camera failed to open.
+
+    Returns ``{"exists": bool, "blocking_processes": [{"pid": int, "name": str}, ...]}``
+    On unsupported platforms or diagnostic failure, assumes camera exists and returns
+    an empty blocking list.
+    """
+    result: dict = {"exists": True, "blocking_processes": []}
+
+    if sys.platform == "darwin":
+        result = _diagnose_macos(index)
+    elif sys.platform.startswith("linux"):
+        result = _diagnose_linux(index)
+    # else: unsupported platform — return defaults
+
+    return result
+
+
+def _diagnose_macos(index: int) -> dict:
+    """macOS camera diagnostics using AVFoundation device list and lsof."""
+    result: dict = {"exists": True, "blocking_processes": []}
+
+    # Check if camera index exists via AVFoundation device names
+    try:
+        av_names = _macos_avfoundation_device_names()
+        if av_names and index not in av_names:
+            result["exists"] = False
+            return result
+    except Exception:
+        pass
+
+    # Try to find processes using camera devices via lsof
+    try:
+        proc = subprocess.run(
+            ["lsof"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        blocking = []
+        for line in proc.stdout.splitlines():
+            lower = line.lower()
+            if any(kw in lower for kw in ("vdc", "applecamera", "isight", "camera", "avfoundation")):
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[0]
+                    try:
+                        pid = int(parts[1])
+                    except (ValueError, IndexError):
+                        continue
+                    # Avoid duplicates
+                    if not any(b["pid"] == pid for b in blocking):
+                        blocking.append({"pid": pid, "name": name})
+        result["blocking_processes"] = blocking
+    except Exception:
+        pass
+
+    return result
+
+
+def _diagnose_linux(index: int) -> dict:
+    """Linux camera diagnostics using /dev/video* and fuser."""
+    result: dict = {"exists": True, "blocking_processes": []}
+    dev_path = f"/dev/video{index}"
+
+    if not os.path.exists(dev_path):
+        result["exists"] = False
+        return result
+
+    # Use fuser to find PIDs holding the device
+    try:
+        proc = subprocess.run(
+            ["fuser", dev_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        # fuser outputs PIDs to stdout (or stderr depending on version)
+        pid_text = (proc.stdout + " " + proc.stderr).strip()
+        pids = []
+        for token in pid_text.replace(dev_path + ":", "").split():
+            token = token.strip().rstrip("m").rstrip("e").rstrip("f")
+            try:
+                pids.append(int(token))
+            except ValueError:
+                continue
+
+        blocking = []
+        for pid in pids:
+            name = _get_process_name(pid)
+            blocking.append({"pid": pid, "name": name})
+        result["blocking_processes"] = blocking
+    except Exception:
+        pass
+
+    return result
+
+
+def _get_process_name(pid: int) -> str:
+    """Get the command name for a PID via ps."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        name = proc.stdout.strip()
+        return name if name else f"PID {pid}"
+    except Exception:
+        return f"PID {pid}"
+
+
 def select_camera_by_pattern(pattern: Optional[str], cameras: List[CameraInfo]) -> Optional[int]:
     if not pattern:
         return None
