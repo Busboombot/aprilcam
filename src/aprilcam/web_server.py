@@ -242,7 +242,7 @@ def _image_or_json(result: dict) -> Response:
     rtype = result.get("type")
 
     if rtype == "error":
-        return _error_response(result.get("error", "Unknown error"), 500)
+        return _error_response(result.get("error", "Unknown error"), 400)
 
     if rtype == "file":
         path = result["path"]
@@ -736,12 +736,11 @@ def create_app() -> Starlette:
         app = create_app()
         # Run with: uvicorn aprilcam.web_server:app
     """
-    # Build the MCP SSE sub-application.  The FastMCP.sse_app() method
-    # returns a standalone Starlette app whose internal routes (``/sse``
-    # for the event stream and ``/messages/`` for POSTs) are relative to
-    # wherever we mount it.  Mounting at ``/mcp`` makes the full paths
-    # ``/mcp/sse`` and ``/mcp/messages/``.
-    mcp_sse = _mcp_server.sse_app(mount_path="/mcp")
+    # Build the MCP SSE sub-application.  Do NOT pass mount_path here —
+    # the Mount("/mcp", ...) below sets ASGI root_path, which the SSE
+    # transport uses to build the client POST URL.  Passing mount_path
+    # to sse_app() would double-prefix it (e.g. /mcp/mcp/messages/).
+    mcp_sse = _mcp_server.sse_app()
 
     routes = [
         Route("/", _discovery, methods=["GET"]),

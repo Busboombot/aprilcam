@@ -82,12 +82,17 @@ class Playfield:
         return np.array([UL, UR, LR, LL], dtype=np.float32)
 
     def update(self, frame_bgr: np.ndarray) -> None:
-        if self._poly is not None:
-            return
         cmap = self._detect_corners(frame_bgr)
         poly = self._order_poly(cmap)
         if poly is not None:
-            self._poly = poly
+            if self._poly is None:
+                self._poly = poly
+            else:
+                # EMA smooth toward new detection to avoid jitter
+                self._poly = (
+                    self.ema_alpha * poly
+                    + (1 - self.ema_alpha) * self._poly
+                ).astype(np.float32)
 
     def get_polygon(self) -> Optional[np.ndarray]:
         return self._poly.copy() if self._poly is not None else None
