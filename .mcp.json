@@ -11,6 +11,10 @@
       "args": [
         "mcp"
       ]
+    },
+    "aprilcam-http": {
+      "type": "sse",
+      "url": "http://localhost:17439/mcp/sse"
     }
   }
 }
