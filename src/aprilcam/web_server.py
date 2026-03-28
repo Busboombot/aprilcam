@@ -331,8 +331,7 @@ def _build_html_ui() -> str:
     <span class="field-label">W</span><input type="number" id="fieldWidth" value="102" step="0.1" title="Playfield width in cm">
     <span class="field-label">H</span><input type="number" id="fieldHeight" value="89" step="0.1" title="Playfield height in cm">
     <span class="field-label">cm</span>
-    <button id="startBtn" disabled>Start</button>
-    <button id="stopBtn" disabled>Stop</button>
+    <button id="startBtn" disabled>View</button>
   </div>
 </header>
 <main>
@@ -382,7 +381,6 @@ def _build_html_ui() -> str:
 (function(){
   const cameraSelect = document.getElementById("cameraSelect");
   const startBtn = document.getElementById("startBtn");
-  const stopBtn = document.getElementById("stopBtn");
   const liveImg = document.getElementById("liveImg");
   const tagBody = document.getElementById("tagBody");
   const frameDot = document.getElementById("frameDot");
@@ -391,13 +389,14 @@ def _build_html_ui() -> str:
   const wsLabel = document.getElementById("wsLabel");
   const srcLabel = document.getElementById("srcLabel");
 
-  let cameraId = null;
-  let sourceId = null;
+  let sourceId = null;   // currently viewed source (camera or playfield)
   let frameTimer = null;
   let ws = null;
   let frameCount = 0;
   let fpsTimer = null;
   var knownTags = {};  // id -> {data, active}
+  // Track server-side resources — these persist across UI switches
+  var activeSources = {};  // cameraIndex -> {cameraId, sourceId, calibrated}
 
   function renderTagTable() {
     var ids = Object.keys(knownTags).map(Number).sort(function(a, b) { return a - b; });
@@ -451,49 +450,63 @@ def _build_html_ui() -> str:
 
   startBtn.addEventListener("click", async function() {
     startBtn.disabled = true;
-    cameraSelect.disabled = true;
     const idx = parseInt(cameraSelect.value, 10);
     try {
-      const openRes = await api("open_camera", {index: idx});
-      if (openRes.error) { alert("Open camera error: " + openRes.error); reset(); return; }
-      cameraId = openRes.camera_id;
-      sourceId = cameraId;
+      // Stop current UI streams (but don't tear down server resources)
+      disconnectUI();
 
-      // Try to create a playfield (deskew via ArUco corner markers).
-      // If it succeeds, calibrate with the field dimensions and use
-      // the playfield_id as the source for deskewed + world-coord frames.
+      // Check if this camera is already set up
+      var entry = activeSources[idx];
+      if (entry) {
+        // Already open — just switch the UI to this source
+        sourceId = entry.sourceId;
+        srcLabel.textContent = entry.label;
+        knownTags = {};
+        startFramePolling();
+        connectWebSocket();
+        startBtn.disabled = false;
+        return;
+      }
+
+      // First time — open camera, create playfield, calibrate, start detection
+      srcLabel.textContent = "opening camera...";
+      const openRes = await api("open_camera", {index: idx});
+      if (openRes.error) { alert("Open camera error: " + openRes.error); startBtn.disabled = false; return; }
+      var camId = openRes.camera_id;
+      var srcId = camId;
+      var label = camId;
+
       srcLabel.textContent = "detecting corners...";
-      const pfRes = await api("create_playfield", {camera_id: cameraId});
+      const pfRes = await api("create_playfield", {camera_id: camId});
       if (pfRes.playfield_id) {
-        sourceId = pfRes.playfield_id;
-        // Calibrate with real-world dimensions for world coordinates
+        srcId = pfRes.playfield_id;
         var fw = parseFloat(document.getElementById("fieldWidth").value) || 102;
         var fh = parseFloat(document.getElementById("fieldHeight").value) || 89;
         srcLabel.textContent = "calibrating...";
         var calRes = await api("calibrate_playfield", {
-          playfield_id: sourceId, width: fw, height: fh, units: "cm"
+          playfield_id: srcId, width: fw, height: fh, units: "cm"
         });
         if (calRes.calibrated) {
-          srcLabel.textContent = sourceId + " (" + calRes.width_cm + "x" + calRes.height_cm + " cm)";
+          label = srcId + " (" + calRes.width_cm + "x" + calRes.height_cm + " cm)";
         } else {
-          srcLabel.textContent = sourceId + " (deskewed, no calibration)";
+          label = srcId + " (deskewed, no calibration)";
         }
       } else {
-        srcLabel.textContent = sourceId + " (no playfield)";
+        label = srcId + " (no playfield)";
       }
 
-      const detRes = await api("start_detection", {source_id: sourceId});
-      if (detRes.error) { alert("Start detection error: " + detRes.error); reset(); return; }
+      const detRes = await api("start_detection", {source_id: srcId});
+      if (detRes.error) { alert("Start detection error: " + detRes.error); startBtn.disabled = false; return; }
 
-      stopBtn.disabled = false;
+      // Remember this source so switching back is instant
+      activeSources[idx] = { cameraId: camId, sourceId: srcId, label: label };
+      sourceId = srcId;
+      srcLabel.textContent = label;
+      knownTags = {};
       startFramePolling();
       connectWebSocket();
-    } catch(e) { alert("Error: " + e.message); reset(); }
-  });
-
-  stopBtn.addEventListener("click", async function() {
-    await cleanup();
-    reset();
+      startBtn.disabled = false;
+    } catch(e) { alert("Error: " + e.message); startBtn.disabled = false; }
   });
 
   function startFramePolling() {
@@ -544,31 +557,16 @@ def _build_html_ui() -> str:
     };
   }
 
-  async function cleanup() {
+  function disconnectUI() {
+    // Stop local polling/WebSocket only — server resources stay alive
     if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
     if (fpsTimer) { clearInterval(fpsTimer); fpsTimer = null; }
     if (ws) { ws.close(); ws = null; }
-    if (sourceId) {
-      try { await api("stop_detection", {source_id: sourceId}); } catch(e) {}
-    }
-    if (cameraId) {
-      try { await api("close_camera", {camera_id: cameraId}); } catch(e) {}
-    }
     sourceId = null;
-    cameraId = null;
-  }
-
-  function reset() {
-    cameraSelect.disabled = false;
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
     frameDot.className = "dot";
     fpsLabel.textContent = "--";
     wsDot.className = "dot";
     wsLabel.textContent = "disconnected";
-    srcLabel.textContent = "none";
-    knownTags = {};
-    tagBody.innerHTML = "<tr><td colspan='7'>No data</td></tr>";
   }
 
   // --- Connection URLs with click-to-copy ---
