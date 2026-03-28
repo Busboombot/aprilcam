@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--homography", type=str, default=None,
-        help="Path to homography JSON file (default: data/homography.json if it exists)",
+        help="Path to homography JSON file (default: auto-discover from data/)",
     )
     parser.add_argument(
         "--color-camera", type=int, default=None,
@@ -61,25 +61,45 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Load homography matrix if available
     import json
     from pathlib import Path
     import numpy as np
 
     homography = None
-    hom_path = None
-    if args.homography:
-        hom_path = Path(args.homography)
-    else:
-        hom_path = Path("data/homography.json")
 
-    if hom_path and hom_path.is_file():
+    if args.homography:
+        # Explicit path
+        hom_path = Path(args.homography)
+        if hom_path.is_file():
+            try:
+                data = json.loads(hom_path.read_text())
+                homography = np.array(data["homography"], dtype=np.float64)
+                print(f"Loaded homography from {hom_path}")
+            except Exception as e:
+                print(f"Warning: failed to load homography from {hom_path}: {e}")
+    else:
+        # Auto-discover per-camera homography file
         try:
-            data = json.loads(hom_path.read_text())
-            homography = np.array(data["homography"], dtype=np.float64)
-            print(f"Loaded homography from {hom_path}")
+            from aprilcam.camutil import get_device_name
+            from aprilcam.homography import discover_homography
+            import cv2 as cv
+
+            dev_name = get_device_name(args.camera)
+            # Probe camera resolution
+            cap = cv.VideoCapture(args.camera)
+            if cap.isOpened():
+                w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+                h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
+                found = discover_homography(dev_name, w, h, "data")
+                if found:
+                    data = json.loads(found.read_text())
+                    homography = np.array(data["homography"], dtype=np.float64)
+                    print(f"Loaded homography from {found}")
+            else:
+                cap.release()
         except Exception as e:
-            print(f"Warning: failed to load homography from {hom_path}: {e}")
+            print(f"Warning: homography auto-discover failed: {e}")
 
     from aprilcam.liveview import run_live_view
 

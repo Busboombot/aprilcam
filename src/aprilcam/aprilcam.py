@@ -629,72 +629,80 @@ class AprilCam:
                         paused = not paused
                         continue
                     if key == ord('d'):
-                        # One-shot object detection + optional color classification
+                        # One-shot object detection + color classification
                         try:
                             from aprilcam.objects import SquareDetector, ObjectFuser
+                            from dataclasses import replace as _replace
+
                             det = SquareDetector()
 
-                            # Always detect on the raw frame with playfield + tag exclusion
-                            raw_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                            tag_corners = [
-                                np.array(t.corners_px, dtype=np.float32)
-                                for t in tag_records
-                            ] if tag_records else []
-                            pf_poly = self.playfield.get_polygon()
+                            # Detect squares on deskewed display (already cropped to playfield)
+                            det_img = display if display is not None else frame
+                            det_gray = cv.cvtColor(det_img, cv.COLOR_BGR2GRAY)
+
+                            # On raw frame, use playfield + tag exclusion
+                            tag_corners = []
+                            pf_poly = None
+                            if display is None or display.shape == frame.shape:
+                                tag_corners = [
+                                    np.array(t.corners_px, dtype=np.float32)
+                                    for t in tag_records
+                                ] if tag_records else []
+                                pf_poly = self.playfield.get_polygon()
+
                             _detected_objects = det.detect(
-                                raw_gray,
+                                det_gray,
                                 homography=self.homography,
                                 tag_corners=tag_corners,
                                 playfield_polygon=pf_poly,
                             )
 
-                            # If deskewed, map bounding boxes to display coords
-                            if display is not None and display.shape != frame.shape:
-                                deskew_M = self.playfield.get_deskew_matrix()
-                                if deskew_M is not None:
-                                    from dataclasses import replace as _replace
-                                    mapped = []
-                                    for obj in _detected_objects:
-                                        cx, cy = obj.center_px
-                                        pt = deskew_M @ np.array([cx, cy, 1.0])
-                                        if abs(pt[2]) > 1e-9:
-                                            ncx = pt[0] / pt[2]
-                                            ncy = pt[1] / pt[2]
-                                            # Scale bbox proportionally
-                                            sx = display.shape[1] / frame.shape[1]
-                                            sy = display.shape[0] / frame.shape[0]
-                                            x, y, w, h = obj.bbox
-                                            nx = int(ncx - w * sx / 2)
-                                            ny = int(ncy - h * sy / 2)
-                                            nw = int(w * sx)
-                                            nh = int(h * sy)
-                                            mapped.append(_replace(
-                                                obj,
-                                                center_px=(float(ncx), float(ncy)),
-                                                bbox=(nx, ny, nw, nh),
-                                            ))
-                                        else:
-                                            mapped.append(obj)
-                                    _detected_objects = mapped
-
-                            # Color classify if color camera is available
+                            # Color classify via color camera
                             if color_camera is not None and _detected_objects:
                                 try:
                                     from aprilcam.color_classifier import ColorClassifier
+                                    from aprilcam.playfield import Playfield as _Playfield
+                                    from aprilcam.camutil import get_device_name
+                                    from aprilcam.homography import discover_homography
+                                    import json as _json
+
                                     cc = cv.VideoCapture(color_camera)
                                     if cc.isOpened():
+                                        # Load color camera homography
+                                        cc_w = int(cc.get(cv.CAP_PROP_FRAME_WIDTH))
+                                        cc_h = int(cc.get(cv.CAP_PROP_FRAME_HEIGHT))
+                                        cc_dev = get_device_name(color_camera)
+                                        cc_hom_path = discover_homography(cc_dev, cc_w, cc_h, "data")
+                                        cc_H = None
+                                        if cc_hom_path:
+                                            cc_data = _json.loads(cc_hom_path.read_text())
+                                            cc_H = np.array(cc_data["homography"], dtype=float)
+
+                                        # Grab color frame and deskew it
                                         for _ in range(3):
-                                            cc.read()  # warm up
+                                            cc.read()
                                         ret_c, color_frame = cc.read()
                                         cc.release()
+
                                         if ret_c:
+                                            # Deskew color frame via its own ArUco corners
+                                            cc_pf = _Playfield(proc_width=960)
+                                            cc_pf.update(color_frame)
+                                            if cc_pf.get_polygon() is not None:
+                                                color_deskewed = cc_pf.deskew(color_frame)
+                                            else:
+                                                color_deskewed = color_frame
+
+                                            # Classify colors with homography for world coords
                                             classifier = ColorClassifier()
-                                            color_objects = classifier.classify(color_frame, self.homography)
+                                            color_objects = classifier.classify(color_deskewed, cc_H)
+
+                                            # Fuse: match B&W world_xy to color world_xy
                                             fuser = ObjectFuser()
                                             fuser.update_colors(color_objects)
                                             _detected_objects = fuser.fuse(_detected_objects)
                                             n_colored = sum(1 for o in _detected_objects if o.color != "unknown")
-                                            print(f"Color classified {n_colored}/{len(_detected_objects)} objects")
+                                            print(f"Color: {n_colored}/{len(_detected_objects)} classified from {cc_dev}")
                                     else:
                                         print(f"Warning: could not open color camera {color_camera}")
                                 except Exception as ce:
