@@ -1,7 +1,7 @@
 ---
 id: "005"
 title: "Public API exports and documentation"
-status: todo
+status: done
 use-cases: [SUC-011-004]
 depends-on: ["001", "002", "003", "004"]
 github-issue: ""

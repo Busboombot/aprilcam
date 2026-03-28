@@ -622,8 +622,9 @@ def _handle_calibrate_playfield(
                 }
                 pc_path.write_text(json.dumps(cal_data, indent=2))
                 per_camera_path = str(pc_path)
-        except Exception:
-            pass  # best-effort persistence
+        except Exception as _persist_exc:
+            import logging
+            logging.getLogger("aprilcam").warning("Failed to persist homography: %s", _persist_exc)
 
         result = {
             "playfield_id": playfield_id,

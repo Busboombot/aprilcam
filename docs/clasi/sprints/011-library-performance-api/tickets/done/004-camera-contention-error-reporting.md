@@ -1,7 +1,7 @@
 ---
 id: "004"
 title: "Camera contention error reporting"
-status: todo
+status: done
 use-cases: [SUC-011-003]
 depends-on: []
 github-issue: ""

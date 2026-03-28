@@ -1,7 +1,7 @@
 ---
 id: "003"
 title: "detect_tags generator API"
-status: todo
+status: done
 use-cases: [SUC-011-001]
 depends-on: ["001", "002"]
 github-issue: ""

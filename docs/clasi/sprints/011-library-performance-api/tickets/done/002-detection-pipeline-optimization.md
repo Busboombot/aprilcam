@@ -1,7 +1,7 @@
 ---
 id: "002"
 title: "Detection pipeline optimization"
-status: todo
+status: done
 use-cases: [SUC-011-001]
 depends-on: []
 github-issue: ""
