@@ -1,7 +1,7 @@
 ---
 id: "006"
 title: "Object detection overlays in aprilcam live command"
-status: todo
+status: done
 use-cases: ["SUC-012-001"]
 depends-on: ["004"]
 github-issue: ""
