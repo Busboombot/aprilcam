@@ -1,7 +1,7 @@
 ---
 id: "002"
 title: "HSV color classifier with configurable color ranges"
-status: todo
+status: done
 use-cases: ["SUC-012-001"]
 depends-on: []
 github-issue: ""
