@@ -52,10 +52,10 @@ class SquareDetector:
 
     def __init__(
         self,
-        min_area: int = 50,
-        max_area: int = 800,
+        min_area: int = 100,
+        max_area: int = 600,
         threshold: int = 120,
-        tag_margin: float = 4.0,
+        tag_margin: float = 1.8,
         border_margin: int = 40,
     ):
         self.min_area = min_area
