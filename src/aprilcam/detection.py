@@ -35,6 +35,7 @@ class TagRecord:
     heading_rad: float | None
     timestamp: float
     frame_index: int
+    age: float = 0.0  # seconds since last detected (0 = seen this frame)
 
     def to_dict(self) -> dict:
         """Return a plain dict with all JSON-serializable values."""
@@ -52,6 +53,7 @@ class TagRecord:
             "heading_rad": self.heading_rad,
             "timestamp": self.timestamp,
             "frame_index": self.frame_index,
+            "age": self.age,
         }
 
     @classmethod
@@ -66,6 +68,7 @@ class TagRecord:
         heading_rad: float | None = None,
         timestamp: float,
         frame_index: int,
+        age: float = 0.0,
     ) -> TagRecord:
         """Create a TagRecord from an existing AprilTag model instance.
 
@@ -89,6 +92,7 @@ class TagRecord:
             heading_rad=heading_rad,
             timestamp=timestamp,
             frame_index=frame_index,
+            age=age,
         )
 
 

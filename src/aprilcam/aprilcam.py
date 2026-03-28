@@ -520,15 +520,16 @@ class AprilCam:
             self._tag_models[tid].frame = self._frame_idx
             self.playfield.add_tag(self._tag_models[tid])
 
-        # Prune models not seen recently (>1.5s)
+        # Prune models not seen for >1 second
         seen_ids = {tid for _pts, _r, tid, _fam in detections}
+        stale_cutoff = 1.0  # seconds
         for tid in list(self._tag_models.keys()):
             if (tid not in seen_ids
                     and self._tag_models[tid].last_ts is not None
-                    and (timestamp - float(self._tag_models[tid].last_ts)) > 1.5):
+                    and (timestamp - float(self._tag_models[tid].last_ts)) > stale_cutoff):
                 del self._tag_models[tid]
 
-        # Build TagRecord objects — velocity is now computed by Playfield.add_tag()
+        # Build TagRecord objects for CURRENT detections (age=0)
         tag_records: List[TagRecord] = []
         flows = self.playfield.get_flows()
         for pts, _raw, tid, _fam in detections:
@@ -549,8 +550,29 @@ class AprilCam:
                 heading_rad=None,
                 timestamp=timestamp,
                 frame_index=self._frame_idx,
+                age=0.0,
             )
             tag_records.append(tr)
+
+        # Add STALE tags (not seen this frame but seen within stale_cutoff)
+        for tid, model in self._tag_models.items():
+            if tid not in seen_ids and model.last_ts is not None:
+                age = timestamp - float(model.last_ts)
+                flow = flows.get(tid)
+                vel_px_val = flow.vel_px if flow else None
+                speed_px_val = flow.speed_px if flow else None
+                tr = TagRecord.from_apriltag(
+                    model,
+                    vel_px=vel_px_val,
+                    speed_px=speed_px_val,
+                    vel_world=None,
+                    speed_world=None,
+                    heading_rad=None,
+                    timestamp=timestamp,
+                    frame_index=self._frame_idx,
+                    age=age,
+                )
+                tag_records.append(tr)
 
         # Bookkeeping
         self._frame_idx += 1

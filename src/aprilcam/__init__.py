@@ -1,6 +1,6 @@
 from pathlib import Path as _Path
 
-from aprilcam.stream import detect_tags
+from aprilcam.stream import detect_tags, detect_objects
 from aprilcam.detection import TagRecord
 from aprilcam.aprilcam import AprilCam
 from aprilcam.models import AprilTag
@@ -17,6 +17,7 @@ __all__ = [
     "__version__",
     "help",
     "detect_tags",
+    "detect_objects",
     "TagRecord",
     "AprilCam",
     "AprilTag",

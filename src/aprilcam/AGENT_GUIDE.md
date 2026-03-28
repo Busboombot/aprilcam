@@ -9,11 +9,33 @@ homography, and image processing on robotics playfields.
 ```python
 from aprilcam import detect_tags
 
-for tags in detect_tags(camera=0):
+for tags in detect_tags(camera=3):
     for t in tags:
-        print(f"Tag {t.id} at pixel ({t.center_px[0]:.0f}, {t.center_px[1]:.0f})")
-        if t.world_xy:
-            print(f"  world ({t.world_xy[0]:.1f}, {t.world_xy[1]:.1f}) cm")
+        # age=0.0 means seen this frame; age>0 means stale (last seen age seconds ago)
+        status = "live" if t.age == 0 else f"stale {t.age:.2f}s"
+        print(f"Tag {t.id} [{status}] at ({t.center_px[0]:.0f}, {t.center_px[1]:.0f})")
+```
+
+### Tags + Objects (dual camera)
+
+```python
+from aprilcam import detect_tags
+
+for tags in detect_tags(camera=3, detect_objects=True, color_camera=2):
+    for t in tags:
+        print(f"Tag {t.id} world=({t.world_xy[0]:.1f}, {t.world_xy[1]:.1f})")
+    for obj in tags.objects:  # .objects attribute on the tag list
+        print(f"  {obj.color} cube at ({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})")
+```
+
+### One-shot Object Detection
+
+```python
+from aprilcam import detect_objects
+
+objects = detect_objects(camera=3, color_camera=2)
+for obj in objects:
+    print(f"{obj.color} at ({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})")
 ```
 
 ## Quick Start (MCP)
@@ -48,7 +70,12 @@ Then call `list_cameras` → `open_camera` → `start_detection` → `get_tags`.
 - **TagRecord** fields: `id`, `center_px`, `corners_px`,
   `orientation_yaw`, `world_xy` (if calibrated), `vel_px`,
   `speed_px`, `vel_world`, `speed_world`, `heading_rad`,
-  `in_playfield`, `timestamp`, `frame_index`.
+  `in_playfield`, `timestamp`, `frame_index`, `age`.
+- **`age`**: 0.0 if the tag was detected this frame. If the tag was
+  seen recently but not this frame, `age` is the seconds since last
+  detection. Tags are returned for up to ~1 second after they
+  disappear, then pruned. This gives callers a stable tag set
+  without flickering.
 - Velocities are EMA-smoothed with dead-band suppression.
 
 ### Homography Files
@@ -131,9 +158,11 @@ for tags in detect_tags(
 
 ```python
 from aprilcam import (
-    detect_tags,              # Generator API (recommended)
+    detect_tags,              # Generator: yields tags per frame (with age)
+    detect_objects,           # One-shot: returns colored cubes
     AprilCam,                 # Core detection engine
-    TagRecord,                # Per-tag detection result
+    TagRecord,                # Per-tag detection result (has .age field)
+    ObjectRecord,             # Per-object detection result (has .color field)
     AprilTag,                 # Tag model with tracking state
     Playfield,                # Playfield polygon and deskew
     CameraError,              # Base camera exception
