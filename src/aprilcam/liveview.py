@@ -472,19 +472,26 @@ def run_live_view(
                     homography=cam.homography,
                 )
 
-                # Object detection
-                gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                # Object detection — run on the display frame if deskewed,
+                # otherwise on the raw frame.  When deskewed the coordinate
+                # systems match; when raw we need the playfield polygon.
+                det_frame = display_frame if display_frame is not None else frame
+                det_gray = cv.cvtColor(det_frame, cv.COLOR_BGR2GRAY)
                 tag_corners = [
                     np.array(tr.corners_px, dtype=np.float32)
                     for tr in tag_records
                 ]
+                pf_poly = cam.playfield.get_polygon() if not deskew else None
                 objects = square_detector.detect(
-                    gray, homography=cam.homography, tag_corners=tag_corners,
+                    det_gray,
+                    homography=cam.homography if not deskew else None,
+                    tag_corners=tag_corners if not deskew else [],
+                    playfield_polygon=pf_poly,
                 )
                 objects = fuser.fuse(objects)
 
                 # Draw object overlays on the display frame
-                draw_target = display_frame if display_frame is not None else frame
+                draw_target = det_frame
                 for obj in objects:
                     x, y, w, h = obj.bbox
                     bgr = COLOR_BGR.get(obj.color, (200, 200, 200))

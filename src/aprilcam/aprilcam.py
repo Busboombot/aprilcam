@@ -156,13 +156,23 @@ class AprilCam:
         return state[key]
 
     def _print_tui(self, tag_records: list, has_world: bool) -> None:
-        """Print a fixed-position TUI table of tag data with EMA smoothing."""
+        """Print a fixed-position TUI table of tag data with EMA smoothing.
+
+        Tags that disappear from the frame are kept in the table but
+        shown dimmed (ANSI dim) so the row count stays stable.
+        """
         import sys
 
-        # Build smoothed rows sorted by tag ID
-        rows = []
-        for tr in sorted(tag_records, key=lambda t: t.id):
+        DIM = "\033[2m"
+        RESET = "\033[0m"
+
+        current_ids: set[int] = set()
+
+        # Build smoothed rows for visible tags
+        rows: dict[int, dict] = {}
+        for tr in tag_records:
             tag_id = tr.id
+            current_ids.add(tag_id)
             cx = self._ema_smooth(tag_id, "cx", float(tr.center_px[0]))
             cy = self._ema_smooth(tag_id, "cy", float(tr.center_px[1]))
             ori_raw = math.degrees(tr.orientation_yaw)
@@ -173,7 +183,7 @@ class AprilCam:
             vang_raw = math.degrees(math.atan2(vy, vx)) if (vx != 0.0 or vy != 0.0) else 0.0
             vang = self._ema_smooth(tag_id, "vang", vang_raw)
 
-            row = {"id": tag_id, "cx": cx, "cy": cy, "ori": ori, "spd": spd, "vang": vang}
+            row = {"id": tag_id, "cx": cx, "cy": cy, "ori": ori, "spd": spd, "vang": vang, "visible": True}
 
             if has_world:
                 H = self.homography
@@ -186,14 +196,27 @@ class AprilCam:
                     row["wx"] = wx
                     row["wy"] = wy
 
-            rows.append(row)
+            rows[tag_id] = row
 
-        current_ids = {r["id"] for r in rows}
-
-        # Prune EMA state for tags no longer visible
-        for old_id in list(self._ema.keys()):
+        # Add dimmed rows for previously-seen tags that are now missing
+        for old_id, ema_data in self._ema.items():
             if old_id not in current_ids:
-                del self._ema[old_id]
+                row = {
+                    "id": old_id,
+                    "cx": ema_data.get("cx", 0),
+                    "cy": ema_data.get("cy", 0),
+                    "ori": ema_data.get("ori", 0),
+                    "spd": 0.0,
+                    "vang": 0.0,
+                    "visible": False,
+                }
+                if "wx" in ema_data:
+                    row["wx"] = ema_data["wx"]
+                if "wy" in ema_data:
+                    row["wy"] = ema_data["wy"]
+                rows[old_id] = row
+
+        sorted_rows = sorted(rows.values(), key=lambda r: r["id"])
 
         # Build output lines
         header = f"{'ID':>4s}  {'CX':>6s}  {'CY':>6s}  {'ORI':>8s}  {'SPEED':>8s}  {'VANG':>8s}"
@@ -203,28 +226,26 @@ class AprilCam:
         sep = "-" * len(header)
 
         lines = [sep, header, sep]
-        for r in rows:
+        for r in sorted_rows:
             line = f"{r['id']:4d}  {r['cx']:6.1f}  {r['cy']:6.1f}  {r['ori']:+7.1f}°  {r['spd']:7.1f}  {r['vang']:+7.1f}°"
             if has_world and "wx" in r:
                 line += f"  {r['wx']:7.1f}cm  {r['wy']:7.1f}cm"
+            if not r["visible"]:
+                line = DIM + line + RESET
             lines.append(line)
         lines.append(sep)
 
         # Calculate how many lines to clear
-        total_lines = len(lines)
         if self._tui_initialized:
-            # Move cursor up to overwrite previous output
-            # Need to account for previous frame's line count
-            prev_count = 4 + len(self._tui_last_ids)  # header(3) + data rows + footer(1)
+            prev_count = 4 + len(self._tui_last_ids)
             sys.stdout.write(f"\033[{prev_count}A")
 
-        # Write new content, clearing each line
         for line in lines:
             sys.stdout.write(f"\033[2K{line}\n")
 
         sys.stdout.flush()
         self._tui_initialized = True
-        self._tui_last_ids = current_ids
+        self._tui_last_ids = set(rows.keys())
 
     @staticmethod
     def _get_dict_by_family(name: str):
