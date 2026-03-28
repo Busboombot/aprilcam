@@ -108,8 +108,6 @@ def detect_tags(
             cap=cap,
             homography=H,
             headless=True,
-            use_highpass=False,
-            use_clahe=True,
         )
         cam.reset_state()
 
