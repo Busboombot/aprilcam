@@ -633,9 +633,49 @@ class AprilCam:
                         try:
                             from aprilcam.objects import SquareDetector, ObjectFuser
                             det = SquareDetector()
-                            det_frame = display if display is not None else frame
-                            det_gray = cv.cvtColor(det_frame, cv.COLOR_BGR2GRAY)
-                            _detected_objects = det.detect(det_gray)
+
+                            # Always detect on the raw frame with playfield + tag exclusion
+                            raw_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                            tag_corners = [
+                                np.array(t.corners_px, dtype=np.float32)
+                                for t in tag_records
+                            ] if tag_records else []
+                            pf_poly = self.playfield.get_polygon()
+                            _detected_objects = det.detect(
+                                raw_gray,
+                                homography=self.homography,
+                                tag_corners=tag_corners,
+                                playfield_polygon=pf_poly,
+                            )
+
+                            # If deskewed, map bounding boxes to display coords
+                            if display is not None and display.shape != frame.shape:
+                                deskew_M = self.playfield.get_deskew_matrix()
+                                if deskew_M is not None:
+                                    from dataclasses import replace as _replace
+                                    mapped = []
+                                    for obj in _detected_objects:
+                                        cx, cy = obj.center_px
+                                        pt = deskew_M @ np.array([cx, cy, 1.0])
+                                        if abs(pt[2]) > 1e-9:
+                                            ncx = pt[0] / pt[2]
+                                            ncy = pt[1] / pt[2]
+                                            # Scale bbox proportionally
+                                            sx = display.shape[1] / frame.shape[1]
+                                            sy = display.shape[0] / frame.shape[0]
+                                            x, y, w, h = obj.bbox
+                                            nx = int(ncx - w * sx / 2)
+                                            ny = int(ncy - h * sy / 2)
+                                            nw = int(w * sx)
+                                            nh = int(h * sy)
+                                            mapped.append(_replace(
+                                                obj,
+                                                center_px=(float(ncx), float(ncy)),
+                                                bbox=(nx, ny, nw, nh),
+                                            ))
+                                        else:
+                                            mapped.append(obj)
+                                    _detected_objects = mapped
 
                             # Color classify if color camera is available
                             if color_camera is not None and _detected_objects:
