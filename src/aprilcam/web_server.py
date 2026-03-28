@@ -423,12 +423,15 @@ def _build_html_ui() -> str:
       if (!sourceId) return;
       try {
         const res = await api("get_frame", {source_id: sourceId, format: "base64"});
-        if (res.data) {
+        if (res.error) {
+          frameDot.className = "dot err";
+          fpsLabel.textContent = res.error;
+        } else if (res.data) {
           liveImg.src = "data:image/jpeg;base64," + res.data;
           frameCount++;
           frameDot.className = "dot ok";
         }
-      } catch(e) { frameDot.className = "dot err"; }
+      } catch(e) { frameDot.className = "dot err"; fpsLabel.textContent = e.message; }
       if (sourceId) frameTimer = setTimeout(poll, 500);
     }
     poll();
@@ -451,10 +454,10 @@ def _build_html_ui() -> str:
           return;
         }
         tagBody.innerHTML = tags.map(function(t) {
-          const cx = t.center ? t.center[0].toFixed(1) : "--";
-          const cy = t.center ? t.center[1].toFixed(1) : "--";
-          const ori = t.orientation_deg != null ? t.orientation_deg.toFixed(1) + "\u00b0" : "--";
-          return "<tr><td>" + t.tag_id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td></tr>";
+          const cx = t.center_px ? t.center_px[0].toFixed(1) : "--";
+          const cy = t.center_px ? t.center_px[1].toFixed(1) : "--";
+          const ori = t.orientation_yaw != null ? (t.orientation_yaw * 180 / Math.PI).toFixed(1) + "\u00b0" : "--";
+          return "<tr><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td></tr>";
         }).join("");
       } catch(e) {}
     };
