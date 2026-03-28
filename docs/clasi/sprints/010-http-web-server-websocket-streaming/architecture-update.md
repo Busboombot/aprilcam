@@ -1,6 +1,6 @@
 ---
 sprint: "010"
-status: draft
+status: done
 ---
 
 # Architecture Update -- Sprint 010: HTTP Web Server & WebSocket Streaming

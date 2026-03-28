@@ -1,6 +1,6 @@
 ---
 sprint: "010"
-status: draft
+status: done
 ---
 
 # Use Cases — Sprint 010: HTTP Web Server & WebSocket Streaming
