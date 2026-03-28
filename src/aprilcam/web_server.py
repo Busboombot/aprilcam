@@ -306,6 +306,17 @@ def _build_html_ui() -> str:
          background: #555; margin-top: 3px; }
   .dot.ok { background: #0f0; }
   .dot.err { background: #f33; }
+  .urls-panel { flex-basis: 100%; }
+  .urls-panel h2 { font-size: 1rem; margin-bottom: 0.5rem; color: #0af; }
+  .url-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;
+             font-size: 0.85rem; }
+  .url-label { color: #8af; min-width: 110px; }
+  .url-link { color: #e0e0e0; cursor: pointer; padding: 0.2rem 0.5rem;
+              background: #0d1b2a; border: 1px solid #334; border-radius: 4px;
+              font-family: monospace; font-size: 0.82rem; }
+  .url-link:hover { background: #1b2838; border-color: #0af; }
+  .url-copied { color: #0f0; font-size: 0.75rem; opacity: 0; transition: opacity 0.2s; }
+  .url-copied.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -328,6 +339,29 @@ def _build_html_ui() -> str:
       <thead><tr><th>ID</th><th>Center X</th><th>Center Y</th><th>Orientation</th><th>Speed</th><th>World X</th><th>World Y</th></tr></thead>
       <tbody id="tagBody"><tr><td colspan="7">No data</td></tr></tbody>
     </table>
+  </div>
+  <div class="panel urls-panel">
+    <h2>Connection URLs</h2>
+    <div class="url-row">
+      <span class="url-label">MCP SSE:</span>
+      <span class="url-link" id="urlMcp"></span>
+      <span class="url-copied" id="copiedMcp">copied!</span>
+    </div>
+    <div class="url-row">
+      <span class="url-label">REST API:</span>
+      <span class="url-link" id="urlApi"></span>
+      <span class="url-copied" id="copiedApi">copied!</span>
+    </div>
+    <div class="url-row">
+      <span class="url-label">WebSocket:</span>
+      <span class="url-link" id="urlWs"></span>
+      <span class="url-copied" id="copiedWs">copied!</span>
+    </div>
+    <div class="url-row">
+      <span class="url-label">API Discovery:</span>
+      <span class="url-link" id="urlDiscovery"></span>
+      <span class="url-copied" id="copiedDiscovery">copied!</span>
+    </div>
   </div>
 </main>
 <footer>
@@ -504,6 +538,28 @@ def _build_html_ui() -> str:
     srcLabel.textContent = "none";
     tagBody.innerHTML = "<tr><td colspan='7'>No data</td></tr>";
   }
+
+  // --- Connection URLs with click-to-copy ---
+  var base = location.protocol + "//" + location.host;
+  var wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  var urls = {
+    Mcp: base + "/mcp/sse",
+    Api: base + "/api/",
+    Ws: wsProto + "//" + location.host + "/ws/tags/<source_id>",
+    Discovery: base + "/"
+  };
+  Object.keys(urls).forEach(function(key) {
+    var el = document.getElementById("url" + key);
+    var copied = document.getElementById("copied" + key);
+    if (!el) return;
+    el.textContent = urls[key];
+    el.addEventListener("click", function() {
+      navigator.clipboard.writeText(urls[key]).then(function() {
+        copied.classList.add("show");
+        setTimeout(function() { copied.classList.remove("show"); }, 1200);
+      });
+    });
+  });
 
   loadCameras();
 })();
