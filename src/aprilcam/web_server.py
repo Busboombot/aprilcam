@@ -33,6 +33,7 @@ from aprilcam.mcp_server import (
     _handle_close_camera,
     _handle_capture_frame,
     _handle_create_playfield,
+    _handle_calibrate_playfield,
     _handle_get_playfield_info,
     _handle_start_detection,
     _handle_stop_detection,
@@ -205,6 +206,7 @@ _HANDLERS: dict[str, Any] = {
     "close_camera": _handle_close_camera,
     "capture_frame": _handle_capture_frame,
     "create_playfield": _handle_create_playfield,
+    "calibrate_playfield": _handle_calibrate_playfield,
     "get_playfield_info": _handle_get_playfield_info,
     "start_detection": _handle_start_detection,
     "stop_detection": _handle_stop_detection,
@@ -285,8 +287,10 @@ def _build_html_ui() -> str:
            align-items: center; justify-content: space-between; }
   header h1 { font-size: 1.25rem; color: #0af; }
   .controls { display: flex; gap: 0.75rem; align-items: center; }
-  select, button { padding: 0.4rem 0.75rem; border: 1px solid #334; border-radius: 4px;
-                   background: #0d1b2a; color: #e0e0e0; font-size: 0.9rem; cursor: pointer; }
+  select, button, input { padding: 0.4rem 0.75rem; border: 1px solid #334; border-radius: 4px;
+                          background: #0d1b2a; color: #e0e0e0; font-size: 0.9rem; cursor: pointer; }
+  input[type=number] { width: 5em; cursor: text; }
+  .field-label { font-size: 0.8rem; color: #8af; }
   button:hover { background: #1b2838; }
   button:disabled { opacity: 0.4; cursor: default; }
   main { flex: 1; display: flex; flex-wrap: wrap; padding: 1rem; gap: 1rem; }
@@ -324,6 +328,9 @@ def _build_html_ui() -> str:
   <h1>AprilCam Live</h1>
   <div class="controls">
     <select id="cameraSelect" disabled><option>Loading cameras...</option></select>
+    <span class="field-label">W</span><input type="number" id="fieldWidth" value="102" step="0.1" title="Playfield width in cm">
+    <span class="field-label">H</span><input type="number" id="fieldHeight" value="89" step="0.1" title="Playfield height in cm">
+    <span class="field-label">cm</span>
     <button id="startBtn" disabled>Start</button>
     <button id="stopBtn" disabled>Stop</button>
   </div>
@@ -453,14 +460,24 @@ def _build_html_ui() -> str:
       sourceId = cameraId;
 
       // Try to create a playfield (deskew via ArUco corner markers).
-      // If it succeeds, use the playfield_id as the source so frames
-      // are homography-corrected. If it fails (no corners found),
-      // fall back to the raw camera.
+      // If it succeeds, calibrate with the field dimensions and use
+      // the playfield_id as the source for deskewed + world-coord frames.
       srcLabel.textContent = "detecting corners...";
       const pfRes = await api("create_playfield", {camera_id: cameraId});
       if (pfRes.playfield_id) {
         sourceId = pfRes.playfield_id;
-        srcLabel.textContent = sourceId + " (deskewed)";
+        // Calibrate with real-world dimensions for world coordinates
+        var fw = parseFloat(document.getElementById("fieldWidth").value) || 102;
+        var fh = parseFloat(document.getElementById("fieldHeight").value) || 89;
+        srcLabel.textContent = "calibrating...";
+        var calRes = await api("calibrate_playfield", {
+          playfield_id: sourceId, width: fw, height: fh, units: "cm"
+        });
+        if (calRes.calibrated) {
+          srcLabel.textContent = sourceId + " (" + calRes.width_cm + "x" + calRes.height_cm + " cm)";
+        } else {
+          srcLabel.textContent = sourceId + " (deskewed, no calibration)";
+        }
       } else {
         srcLabel.textContent = sourceId + " (no playfield)";
       }

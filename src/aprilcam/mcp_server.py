@@ -523,6 +523,47 @@ def _handle_get_playfield_info(playfield_id: str) -> dict:
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _handle_calibrate_playfield(
+    playfield_id: str,
+    width: float,
+    height: float,
+    units: str = "cm",
+) -> dict:
+    """Core logic for calibrate_playfield — returns result dict or error dict."""
+    try:
+        try:
+            entry = playfield_registry.get(playfield_id)
+        except KeyError:
+            return {"error": f"Unknown playfield_id '{playfield_id}'"}
+
+        poly = entry.playfield.get_polygon()
+        if poly is None:
+            return {"error": "Playfield has no polygon (detection not complete)"}
+
+        pixel_corners = {
+            "upper_left": (float(poly[0][0]), float(poly[0][1])),
+            "upper_right": (float(poly[1][0]), float(poly[1][1])),
+            "lower_right": (float(poly[2][0]), float(poly[2][1])),
+            "lower_left": (float(poly[3][0]), float(poly[3][1])),
+        }
+
+        field_spec = FieldSpec(width_in=width, height_in=height, units=units)
+
+        H, _, _ = calibrate_from_corners(pixel_corners, field_spec)
+
+        entry.field_spec = field_spec
+        entry.homography = H
+
+        return {
+            "playfield_id": playfield_id,
+            "calibrated": True,
+            "width_cm": field_spec.width_cm,
+            "height_cm": field_spec.height_cm,
+        }
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
 def _handle_start_detection(
     source_id: str,
     family: str = "36h11",
