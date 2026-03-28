@@ -1,13 +1,13 @@
 ---
-id: "010"
-title: "HTTP Web Server & WebSocket Streaming"
-status: active
+id: '010'
+title: HTTP Web Server & WebSocket Streaming
+status: done
 branch: sprint/010-http-web-server-websocket-streaming
 use-cases:
-  - SUC-010-001
-  - SUC-010-002
-  - SUC-010-003
-  - SUC-010-004
+- SUC-010-001
+- SUC-010-002
+- SUC-010-003
+- SUC-010-004
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
