@@ -53,14 +53,16 @@ class SquareDetector:
     def __init__(
         self,
         min_area: int = 50,
-        max_area: int = 3000,
-        threshold: int = 100,
-        tag_margin: float = 1.5,
+        max_area: int = 1200,
+        threshold: int = 120,
+        tag_margin: float = 3.0,
+        border_margin: int = 30,
     ):
         self.min_area = min_area
         self.max_area = max_area
         self.threshold = threshold
         self.tag_margin = tag_margin  # expand tag exclusion zones by this factor
+        self.border_margin = border_margin  # pixels inset from playfield edge
 
     def detect(
         self,
@@ -127,10 +129,18 @@ class SquareDetector:
             cx = x + w / 2.0
             cy = y + h / 2.0
 
-            # Only keep detections inside the playfield polygon.
+            # Only keep detections inside the playfield polygon,
+            # inset by border_margin to exclude edge markers.
             if playfield_polygon is not None:
-                pf = playfield_polygon.reshape(-1, 1, 2).astype(np.float32)
-                if cv.pointPolygonTest(pf, (cx, cy), False) < 0:
+                pf = playfield_polygon.reshape(-1, 2).astype(np.float32)
+                pf_center = pf.mean(axis=0)
+                # Shrink polygon toward center by border_margin pixels
+                directions = pf - pf_center
+                lengths = np.linalg.norm(directions, axis=1, keepdims=True)
+                lengths = np.maximum(lengths, 1e-6)
+                shrunk = pf - directions / lengths * self.border_margin
+                shrunk_poly = shrunk.reshape(-1, 1, 2).astype(np.float32)
+                if cv.pointPolygonTest(shrunk_poly, (cx, cy), False) < 0:
                     continue
 
             # Exclude centers inside expanded tag corner polygons.
