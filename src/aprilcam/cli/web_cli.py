@@ -17,11 +17,13 @@ def main(argv=None):
 
     app = create_app()
 
+    # For display URLs, use "localhost" instead of "0.0.0.0" so they're clickable
+    display_host = "localhost" if args.host == "0.0.0.0" else args.host
     print(f"Starting AprilCam web server on {args.host}:{args.port}")
-    print(f"  REST API:    http://{args.host}:{args.port}/api/")
-    print(f"  MCP SSE:     http://{args.host}:{args.port}/mcp/sse")
-    print(f"  WebSocket:   ws://{args.host}:{args.port}/ws/tags/<source_id>")
-    print(f"  API docs:    http://{args.host}:{args.port}/")
+    print(f"  REST API:    http://{display_host}:{args.port}/api/")
+    print(f"  MCP SSE:     http://{display_host}:{args.port}/mcp/sse")
+    print(f"  WebSocket:   ws://{display_host}:{args.port}/ws/tags/<source_id>")
+    print(f"  Live UI:     http://{display_host}:{args.port}/")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", workers=1)
     return 0
