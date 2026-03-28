@@ -876,6 +876,38 @@ def _warp_points(points: list, homography: np.ndarray) -> list:
     return warped.reshape(-1, 2).tolist()
 
 
+# Color name to BGR mapping for drawing object annotations
+_COLOR_BGR = {
+    "red": (0, 0, 255),
+    "green": (0, 200, 0),
+    "blue": (255, 0, 0),
+    "yellow": (0, 255, 255),
+    "orange": (0, 165, 255),
+    "purple": (255, 0, 255),
+    "unknown": (200, 200, 200),
+}
+
+
+def _draw_object_overlay(
+    frame: np.ndarray,
+    objects: list,
+) -> None:
+    """Draw object detection overlays directly on *frame* (mutates in place)."""
+    import cv2
+
+    for obj in objects:
+        x, y, w, h = obj.bbox
+        bgr = _COLOR_BGR.get(obj.color, (200, 200, 200))
+        cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
+        label = obj.color
+        cv2.putText(frame, label, (x, y - 5),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, bgr, 1, cv2.LINE_AA)
+        if obj.world_xy:
+            coord = f"({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})"
+            cv2.putText(frame, coord, (x, y + h + 15),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, bgr, 1, cv2.LINE_AA)
+
+
 def _draw_tag_overlay(
     frame: np.ndarray,
     tags: list,
@@ -984,6 +1016,40 @@ def _handle_get_frame(
                 _draw_tag_overlay(frame, latest.tags,
                                  has_homography=has_homography,
                                  homography=deskew_matrix)
+
+        # Draw detected objects
+        try:
+            import cv2 as _cv
+            from aprilcam.objects import SquareDetector
+
+            detector = SquareDetector()
+            gray_ann = _cv.cvtColor(frame, _cv.COLOR_BGR2GRAY)
+
+            # Get tag corners for exclusion
+            tag_corners_for_exclude = []
+            if det_entry is not None:
+                latest_for_obj = det_entry.ring_buffer.get_latest()
+                if latest_for_obj is not None:
+                    for tag in latest_for_obj.tags:
+                        tag_corners_for_exclude.append(
+                            np.array(tag.corners_px, dtype=np.float32)
+                        )
+
+            homography = None
+            try:
+                pf_entry = playfield_registry.get(source_id)
+                if pf_entry.homography is not None:
+                    homography = pf_entry.homography
+            except KeyError:
+                pass
+
+            objects = detector.detect(
+                gray_ann, homography=homography,
+                tag_corners=tag_corners_for_exclude,
+            )
+            _draw_object_overlay(frame, objects)
+        except Exception:
+            pass  # Object annotation is best-effort
 
     try:
         import cv2
