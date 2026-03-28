@@ -699,7 +699,8 @@ class AprilCam:
                                         ))
                                 _detected_objects = mapped
 
-                            # Color classify using pre-opened color camera
+                            # Color classify: for each B&W object, query the
+                            # color camera pixel at that world position.
                             if _color_cap is not None and _color_cal is not None and _detected_objects:
                                 try:
                                     from aprilcam.color_classifier import ColorClassifier
@@ -708,20 +709,23 @@ class AprilCam:
                                     if ret_c and color_frame is not None:
                                         color_frame = _color_cal.undistort(color_frame)
                                         classifier = ColorClassifier()
-                                        color_objects = classifier.classify(
-                                            color_frame, _color_cal.homography
-                                        )
-                                        in_field = [o for o in color_objects
-                                                    if o.world_xy and -5 <= o.world_xy[0] <= 106 and -5 <= o.world_xy[1] <= 94]
-                                        fuser = ObjectFuser()
-                                        fuser.update_colors(in_field)
-                                        _detected_objects = fuser.fuse(_detected_objects)
+                                        H_inv = np.linalg.inv(_color_cal.homography)
+                                        colored = []
+                                        for obj in _detected_objects:
+                                            if obj.world_xy:
+                                                # World -> color camera pixel
+                                                vec = H_inv @ np.array([obj.world_xy[0], obj.world_xy[1], 1.0])
+                                                cpx = vec[0] / vec[2]
+                                                cpy = vec[1] / vec[2]
+                                                color = classifier.classify_at_point(color_frame, cpx, cpy, radius=25)
+                                                colored.append(_replace(obj, color=color))
+                                            else:
+                                                colored.append(obj)
+                                        _detected_objects = colored
                                         n_col = sum(1 for o in _detected_objects if o.color != "unknown")
                                         n = len(_detected_objects)
-                                        # Brief status without flooding TUI
-                                        print(f"\r[d] {n} objects, {n_col} colored, {len(in_field)} color detections", end="", flush=True)
                                 except Exception:
-                                    pass  # don't spam TUI with errors
+                                    pass
 
                             n = len(_detected_objects)
                             print(f"[d] {n} object{'s' if n != 1 else ''} — press [c] to clear")

@@ -10,13 +10,14 @@ from .objects import ObjectRecord
 # HSV ranges tuned from real camera data (HD USB CAMERA, overhead lighting).
 # OpenCV HSV: H=0-180, S=0-255, V=0-255.
 # Ranges are non-overlapping in H to avoid misclassification.
+# S/V minimums are set low (30) to catch washed-out cubes at playfield edges.
 DEFAULT_COLOR_RANGES: dict[str, list[tuple[tuple[int, ...], tuple[int, ...]]]] = {
-    "red": [((0, 80, 80), (8, 255, 255)), ((165, 80, 80), (180, 255, 255))],
-    "orange": [((8, 80, 80), (18, 255, 255))],
-    "yellow": [((18, 80, 80), (32, 255, 255))],
-    "green": [((32, 80, 80), (85, 255, 255))],
-    "blue": [((85, 80, 80), (130, 255, 255))],
-    "purple": [((130, 60, 60), (165, 255, 255))],
+    "red": [((0, 50, 50), (8, 255, 255)), ((165, 50, 50), (180, 255, 255))],
+    "orange": [((8, 50, 50), (18, 255, 255))],
+    "yellow": [((18, 50, 50), (35, 255, 255))],
+    "green": [((35, 50, 50), (85, 255, 255))],
+    "blue": [((85, 50, 50), (130, 255, 255))],
+    "purple": [((130, 30, 50), (165, 255, 255))],
 }
 
 
