@@ -22,7 +22,7 @@ import asyncio
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -255,12 +255,261 @@ def _image_or_json(result: dict) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# HTML UI builder
+# ---------------------------------------------------------------------------
+
+
+def _build_html_ui() -> str:
+    """Return a self-contained HTML page with embedded CSS and JavaScript.
+
+    The single-page app provides:
+    - A source selector that lists available cameras.
+    - A live image stream polled from ``/api/get_frame``.
+    - A real-time tag table fed by a WebSocket at ``/ws/tags/{source_id}``.
+    - A status bar showing connection state and frame rate.
+    """
+    return """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AprilCam Live</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #1a1a2e; color: #e0e0e0; display: flex; flex-direction: column;
+         min-height: 100vh; }
+  header { background: #16213e; padding: 0.75rem 1.5rem; display: flex;
+           align-items: center; justify-content: space-between; }
+  header h1 { font-size: 1.25rem; color: #0af; }
+  .controls { display: flex; gap: 0.75rem; align-items: center; }
+  select, button { padding: 0.4rem 0.75rem; border: 1px solid #334; border-radius: 4px;
+                   background: #0d1b2a; color: #e0e0e0; font-size: 0.9rem; cursor: pointer; }
+  button:hover { background: #1b2838; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  main { flex: 1; display: flex; flex-wrap: wrap; padding: 1rem; gap: 1rem; }
+  .panel { background: #16213e; border-radius: 8px; padding: 1rem; }
+  .video-panel { flex: 2; min-width: 320px; display: flex; flex-direction: column;
+                 align-items: center; }
+  .video-panel img { max-width: 100%; border-radius: 4px; background: #000; }
+  .tags-panel { flex: 1; min-width: 260px; overflow-y: auto; max-height: 80vh; }
+  .tags-panel h2 { font-size: 1rem; margin-bottom: 0.5rem; color: #0af; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #223; }
+  th { color: #8af; }
+  footer { background: #16213e; padding: 0.5rem 1.5rem; font-size: 0.8rem;
+           display: flex; gap: 1.5rem; }
+  .status-item { display: flex; gap: 0.3rem; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+         background: #555; margin-top: 3px; }
+  .dot.ok { background: #0f0; }
+  .dot.err { background: #f33; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AprilCam Live</h1>
+  <div class="controls">
+    <select id="cameraSelect" disabled><option>Loading cameras...</option></select>
+    <button id="startBtn" disabled>Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+</header>
+<main>
+  <div class="panel video-panel">
+    <img id="liveImg" alt="No frame" width="640" height="480"
+         src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+  </div>
+  <div class="panel tags-panel">
+    <h2>Detected Tags</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Center X</th><th>Center Y</th><th>Orientation</th></tr></thead>
+      <tbody id="tagBody"><tr><td colspan="4">No data</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<footer>
+  <div class="status-item"><span class="dot" id="frameDot"></span> Frames:
+    <span id="fpsLabel">--</span> fps</div>
+  <div class="status-item"><span class="dot" id="wsDot"></span> WebSocket:
+    <span id="wsLabel">disconnected</span></div>
+  <div class="status-item">Source: <span id="srcLabel">none</span></div>
+</footer>
+<script>
+(function(){
+  const cameraSelect = document.getElementById("cameraSelect");
+  const startBtn = document.getElementById("startBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const liveImg = document.getElementById("liveImg");
+  const tagBody = document.getElementById("tagBody");
+  const frameDot = document.getElementById("frameDot");
+  const fpsLabel = document.getElementById("fpsLabel");
+  const wsDot = document.getElementById("wsDot");
+  const wsLabel = document.getElementById("wsLabel");
+  const srcLabel = document.getElementById("srcLabel");
+
+  let cameraId = null;
+  let sourceId = null;
+  let frameTimer = null;
+  let ws = null;
+  let frameCount = 0;
+  let fpsTimer = null;
+
+  async function api(tool, params) {
+    const resp = await fetch("/api/" + tool, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(params || {})
+    });
+    return resp.json();
+  }
+
+  async function loadCameras() {
+    try {
+      const cams = await api("list_cameras");
+      cameraSelect.innerHTML = "";
+      if (!cams.length) {
+        cameraSelect.innerHTML = "<option>No cameras found</option>";
+        return;
+      }
+      cams.forEach(function(c) {
+        const opt = document.createElement("option");
+        opt.value = c.index;
+        opt.textContent = c.name || ("Camera " + c.index);
+        cameraSelect.appendChild(opt);
+      });
+      cameraSelect.disabled = false;
+      startBtn.disabled = false;
+    } catch(e) {
+      cameraSelect.innerHTML = "<option>Error loading cameras</option>";
+    }
+  }
+
+  startBtn.addEventListener("click", async function() {
+    startBtn.disabled = true;
+    cameraSelect.disabled = true;
+    const idx = parseInt(cameraSelect.value, 10);
+    try {
+      const openRes = await api("open_camera", {index: idx});
+      if (openRes.error) { alert("Open camera error: " + openRes.error); reset(); return; }
+      cameraId = openRes.camera_id;
+      sourceId = cameraId;
+      srcLabel.textContent = sourceId;
+
+      const detRes = await api("start_detection", {source_id: sourceId});
+      if (detRes.error) { alert("Start detection error: " + detRes.error); reset(); return; }
+
+      stopBtn.disabled = false;
+      startFramePolling();
+      connectWebSocket();
+    } catch(e) { alert("Error: " + e.message); reset(); }
+  });
+
+  stopBtn.addEventListener("click", async function() {
+    await cleanup();
+    reset();
+  });
+
+  function startFramePolling() {
+    frameCount = 0;
+    fpsLabel.textContent = "--";
+    fpsTimer = setInterval(function() {
+      fpsLabel.textContent = (frameCount * 2).toFixed(1);
+      frameCount = 0;
+    }, 500);
+
+    async function poll() {
+      if (!sourceId) return;
+      try {
+        const res = await api("get_frame", {source_id: sourceId, format: "base64"});
+        if (res.data) {
+          liveImg.src = "data:image/jpeg;base64," + res.data;
+          frameCount++;
+          frameDot.className = "dot ok";
+        }
+      } catch(e) { frameDot.className = "dot err"; }
+      if (sourceId) frameTimer = setTimeout(poll, 500);
+    }
+    poll();
+  }
+
+  function connectWebSocket() {
+    if (!sourceId) return;
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/ws/tags/" + sourceId);
+    ws.onopen = function() { wsDot.className = "dot ok"; wsLabel.textContent = "connected"; };
+    ws.onclose = function() { wsDot.className = "dot"; wsLabel.textContent = "disconnected"; };
+    ws.onerror = function() { wsDot.className = "dot err"; wsLabel.textContent = "error"; };
+    ws.onmessage = function(evt) {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.error) { tagBody.innerHTML = "<tr><td colspan='4'>" + msg.error + "</td></tr>"; return; }
+        const tags = msg.tags || [];
+        if (!tags.length) {
+          tagBody.innerHTML = "<tr><td colspan='4'>No tags detected</td></tr>";
+          return;
+        }
+        tagBody.innerHTML = tags.map(function(t) {
+          const cx = t.center ? t.center[0].toFixed(1) : "--";
+          const cy = t.center ? t.center[1].toFixed(1) : "--";
+          const ori = t.orientation_deg != null ? t.orientation_deg.toFixed(1) + "\u00b0" : "--";
+          return "<tr><td>" + t.tag_id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td></tr>";
+        }).join("");
+      } catch(e) {}
+    };
+  }
+
+  async function cleanup() {
+    if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+    if (fpsTimer) { clearInterval(fpsTimer); fpsTimer = null; }
+    if (ws) { ws.close(); ws = null; }
+    if (sourceId) {
+      try { await api("stop_detection", {source_id: sourceId}); } catch(e) {}
+    }
+    if (cameraId) {
+      try { await api("close_camera", {camera_id: cameraId}); } catch(e) {}
+    }
+    sourceId = null;
+    cameraId = null;
+  }
+
+  function reset() {
+    cameraSelect.disabled = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    frameDot.className = "dot";
+    fpsLabel.textContent = "--";
+    wsDot.className = "dot";
+    wsLabel.textContent = "disconnected";
+    srcLabel.textContent = "none";
+    tagBody.innerHTML = "<tr><td colspan='4'>No data</td></tr>";
+  }
+
+  loadCameras();
+})();
+</script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
 # Endpoint handlers
 # ---------------------------------------------------------------------------
 
 
-async def _discovery(request: Request) -> JSONResponse:
-    """GET / — return API discovery document."""
+async def _discovery(request: Request) -> Response:
+    """GET / — return API discovery document or HTML UI.
+
+    Content negotiation: if the ``Accept`` header explicitly contains
+    ``text/html``, return the single-page web UI.  For everything else
+    (``application/json``, ``*/*``, missing header) return the JSON
+    discovery document to preserve backwards compatibility.
+    """
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return HTMLResponse(_build_html_ui())
+
     try:
         ver = _pkg_version("aprilcam")
     except Exception:
