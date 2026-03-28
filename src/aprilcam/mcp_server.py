@@ -187,12 +187,22 @@ live_view_registry: dict[str, LiveViewEntry] = {}
 def resolve_source(source_id: str) -> np.ndarray:
     """Resolve a source_id (playfield or camera) to a captured frame.
 
+    If a detection loop is running on the source, returns the latest
+    frame from the loop's cache (avoids racing with the loop for
+    camera reads).  Otherwise reads directly from the camera.
+
     If *source_id* names a playfield, the frame is deskewed automatically.
 
     Raises:
         KeyError: if *source_id* is not found in either registry.
         RuntimeError: if the underlying capture fails to read a frame.
     """
+    # If a detection loop is running, grab its cached frame to avoid
+    # racing with the loop thread for camera reads.
+    det_entry = detection_registry.get(source_id)
+    if det_entry is not None and det_entry.loop.last_frame is not None:
+        return det_entry.loop.last_frame.copy()
+
     # Try playfield first
     try:
         pf_entry = playfield_registry.get(source_id)

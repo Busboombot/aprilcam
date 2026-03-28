@@ -157,6 +157,7 @@ class DetectionLoop:
         self._frame_count = 0
         self._error: Exception | None = None
         self._max_consecutive_failures = 10
+        self._last_frame: Any = None  # latest raw BGR frame (numpy array)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -186,6 +187,11 @@ class DetectionLoop:
     def error(self) -> Exception | None:
         return self._error
 
+    @property
+    def last_frame(self) -> Any:
+        """The most recently captured raw BGR frame, or ``None``."""
+        return self._last_frame
+
     def _run(self) -> None:
         consecutive_failures = 0
         while not self._stop_event.is_set():
@@ -197,6 +203,7 @@ class DetectionLoop:
                         break
                     continue
                 ts = time.monotonic()
+                self._last_frame = frame
                 tag_records = self._cam.process_frame(frame, ts)
                 frame_record = FrameRecord(
                     timestamp=ts,
