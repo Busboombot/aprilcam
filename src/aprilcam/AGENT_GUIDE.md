@@ -61,6 +61,50 @@ Then call `list_cameras` → `open_camera` → `start_detection` → `get_tags`.
   file when `homography="auto"` (default).
 - Homography only needs to be computed once per camera position.
 
+### Joint Calibration (Multi-Camera)
+- For dual-camera setups (B&W for speed + color for classification),
+  use **joint calibration**: `data/joint-calibration.json`.
+- Joint calibration uses ALL visible tags (ArUco corners + AprilTags)
+  as shared reference points — typically 10-12 correspondence points.
+- The B&W camera gets a standard 3x3 homography.
+- The color camera gets a 3x3 homography PLUS barrel distortion
+  correction (camera_matrix + dist_coeffs from `cv.calibrateCamera`).
+- File has `"type": "joint"` to distinguish from single-camera files.
+
+**Running joint calibration:**
+```python
+import cv2
+from aprilcam.homography import calibrate_joint, save_joint_calibration
+from pathlib import Path
+
+bw_cap = cv2.VideoCapture(3)   # B&W camera
+color_cap = cv2.VideoCapture(2) # Color camera
+
+bw_cal, color_cal = calibrate_joint(
+    bw_cap, color_cap,
+    field_width_cm=101.0, field_height_cm=89.0,
+)
+bw_cap.release()
+color_cap.release()
+
+save_joint_calibration(bw_cal, color_cal, Path("data/joint-calibration.json"))
+```
+
+**Using the calibration:**
+```python
+from aprilcam.homography import load_joint_calibration
+from pathlib import Path
+
+bw_cal, color_cal = load_joint_calibration(Path("data/joint-calibration.json"))
+
+# Undistort a color frame (removes barrel distortion)
+corrected = color_cal.undistort(color_frame)
+
+# Map pixel to world coordinates (both cameras in same space)
+wx, wy = bw_cal.pixel_to_world(px, py)      # B&W pixel → cm
+wx, wy = color_cal.pixel_to_world(px, py)    # Color pixel → cm
+```
+
 ## Library API
 
 ### Primary Interface
@@ -199,6 +243,17 @@ cap.release()
 1. open_camera + create_playfield + calibrate + start_detection
 2. get_tag_history(source_id="pf_0", num_frames=60)
    → last 60 frames of tag positions, velocities, headings
+```
+
+### Workflow 4: Detect colored objects (dual-camera)
+
+```
+1. Run joint calibration once (saves to data/joint-calibration.json):
+   calibrate_joint(bw_cap, color_cap, field_width_cm=101, field_height_cm=89)
+2. aprilcam live -c 3 --color-camera 2
+3. Press 'd' to detect objects — uses joint calibration for
+   barrel-corrected color fusion in world coordinates
+4. Press 'c' to clear overlays
 ```
 
 ## CLI Commands

@@ -635,8 +635,7 @@ class AprilCam:
                         continue
                     if key == ord('d'):
                         # One-shot object detection + color classification
-                        # Always detect on the RAW frame with full filtering,
-                        # then map results to display coords if deskewed.
+                        # Uses joint calibration for world-coord fusion.
                         try:
                             from aprilcam.objects import SquareDetector, ObjectFuser
                             from dataclasses import replace as _replace
@@ -655,7 +654,7 @@ class AprilCam:
                                 tag_corners=tag_corners,
                                 playfield_polygon=pf_poly,
                             )
-                            print(f"[d] {len(_detected_objects)} squares found on raw frame")
+                            print(f"[d] {len(_detected_objects)} squares on B&W frame")
 
                             # Map to display coords if deskewed
                             deskew_M = self.playfield.get_deskew_matrix()
@@ -667,7 +666,6 @@ class AprilCam:
                                     if abs(pt[2]) > 1e-9:
                                         ncx, ncy = pt[0] / pt[2], pt[1] / pt[2]
                                         x, y, w, h = obj.bbox
-                                        # Estimate scale from raw→deskewed
                                         mapped.append(_replace(
                                             obj,
                                             center_px=(float(ncx), float(ncy)),
@@ -675,58 +673,46 @@ class AprilCam:
                                         ))
                                 _detected_objects = mapped
 
-                            # Color classify via color camera
+                            # Color classify using joint calibration
                             if color_camera is not None and _detected_objects:
                                 try:
                                     from aprilcam.color_classifier import ColorClassifier
-                                    from aprilcam.playfield import Playfield as _Playfield
-                                    import json as _json
+                                    from aprilcam.homography import load_joint_calibration
+                                    from pathlib import Path as _Path
 
-                                    cc = cv.VideoCapture(color_camera)
-                                    if not cc.isOpened():
-                                        print(f"[d] color camera {color_camera} busy")
-                                    else:
-                                        for _ in range(3):
-                                            cc.read()
-                                        ret_c, color_frame = cc.read()
-                                        cc.release()
+                                    joint_path = _Path("data/joint-calibration.json")
+                                    if joint_path.exists():
+                                        _, color_cal = load_joint_calibration(joint_path)
 
-                                        if ret_c and color_frame is not None:
-                                            # For each B&W object with world_xy, classify
-                                            # color at the corresponding pixel in the color frame
-                                            classifier = ColorClassifier()
-                                            colored = []
-                                            for obj in _detected_objects:
-                                                if obj.world_xy is not None:
-                                                    # Use classify_at_point — find the pixel in color
-                                                    # frame closest to this world position.
-                                                    # For now, use full-frame classify and fuse.
-                                                    pass
-                                                colored.append(obj)
-
-                                            # Full classify on color frame with its homography
-                                            cc_dev = None
-                                            cc_H = None
-                                            try:
-                                                from aprilcam.camutil import get_device_name
-                                                from aprilcam.homography import discover_homography
-                                                cc_dev = get_device_name(color_camera)
-                                                cc_w = color_frame.shape[1]
-                                                cc_h = color_frame.shape[0]
-                                                hpath = discover_homography(cc_dev, cc_w, cc_h, "data")
-                                                if hpath:
-                                                    cc_H = np.array(_json.loads(hpath.read_text())["homography"], dtype=float)
-                                            except Exception:
-                                                pass
-
-                                            color_objects = classifier.classify(color_frame, cc_H)
-                                            fuser = ObjectFuser()
-                                            fuser.update_colors(color_objects)
-                                            _detected_objects = fuser.fuse(_detected_objects)
-                                            n_col = sum(1 for o in _detected_objects if o.color != "unknown")
-                                            print(f"[d] color: {n_col}/{len(_detected_objects)} classified")
+                                        cc = cv.VideoCapture(color_camera)
+                                        if not cc.isOpened():
+                                            print(f"[d] color camera {color_camera} busy")
                                         else:
-                                            print("[d] color camera: no frame")
+                                            for _ in range(3):
+                                                cc.read()
+                                            ret_c, color_frame = cc.read()
+                                            cc.release()
+
+                                            if ret_c and color_frame is not None:
+                                                # Undistort barrel distortion
+                                                color_frame = color_cal.undistort(color_frame)
+
+                                                # Classify with calibrated homography
+                                                classifier = ColorClassifier()
+                                                color_objects = classifier.classify(
+                                                    color_frame, color_cal.homography
+                                                )
+
+                                                # Fuse by world coordinates
+                                                fuser = ObjectFuser()
+                                                fuser.update_colors(color_objects)
+                                                _detected_objects = fuser.fuse(_detected_objects)
+                                                n_col = sum(1 for o in _detected_objects if o.color != "unknown")
+                                                print(f"[d] color: {n_col}/{len(_detected_objects)} classified (joint cal, {color_cal.tags_used} tags)")
+                                            else:
+                                                print("[d] color camera: no frame")
+                                    else:
+                                        print("[d] no joint-calibration.json — run calibrate_joint() first")
                                 except Exception as ce:
                                     print(f"[d] color failed: {ce}")
 
