@@ -1,7 +1,7 @@
 ---
 id: "004"
 title: "detect_tags integration and MCP get_objects tool"
-status: todo
+status: done
 use-cases: ["SUC-012-001"]
 depends-on: ["003"]
 github-issue: ""
