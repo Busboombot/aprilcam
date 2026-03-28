@@ -581,6 +581,9 @@ class AprilCam:
         last_display: Optional[np.ndarray] = None
         # Persistent object overlays (list of ObjectRecord or None)
         _detected_objects: list | None = None
+        # Persistent square detector that caches tag positions
+        from aprilcam.objects import SquareDetector as _SD
+        _sq_detector = _SD()
 
         if not self.headless:
             print("Keys: [q]uit  [space]pause  [d]etect objects  [c]lear objects")
@@ -596,6 +599,10 @@ class AprilCam:
 
                     now = time.monotonic()
                     tag_records = self.process_frame(frame, now)
+
+                    # Feed tag positions to persistent detector for exclusion cache
+                    if tag_records:
+                        _sq_detector.update_known_tags(tag_records)
 
                     # 6) Optional TUI display (fixed-position, EMA-smoothed)
                     if self.print_tags and tag_records:
@@ -637,10 +644,9 @@ class AprilCam:
                         # One-shot object detection + color classification
                         # Uses joint calibration for world-coord fusion.
                         try:
-                            from aprilcam.objects import SquareDetector, ObjectFuser
+                            from aprilcam.objects import ObjectFuser
                             from dataclasses import replace as _replace
 
-                            det = SquareDetector()
                             raw_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
                             tag_corners = [
                                 np.array(t.corners_px, dtype=np.float32)
@@ -648,7 +654,7 @@ class AprilCam:
                             ] if tag_records else []
                             pf_poly = self.playfield.get_polygon()
 
-                            _detected_objects = det.detect(
+                            _detected_objects = _sq_detector.detect(
                                 raw_gray,
                                 homography=self.homography,
                                 tag_corners=tag_corners,
