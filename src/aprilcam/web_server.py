@@ -325,8 +325,8 @@ def _build_html_ui() -> str:
   <div class="panel tags-panel">
     <h2>Detected Tags</h2>
     <table>
-      <thead><tr><th>ID</th><th>Center X</th><th>Center Y</th><th>Orientation</th><th>World X</th><th>World Y</th></tr></thead>
-      <tbody id="tagBody"><tr><td colspan="6">No data</td></tr></tbody>
+      <thead><tr><th>ID</th><th>Center X</th><th>Center Y</th><th>Orientation</th><th>Speed</th><th>World X</th><th>World Y</th></tr></thead>
+      <tbody id="tagBody"><tr><td colspan="7">No data</td></tr></tbody>
     </table>
   </div>
 </main>
@@ -460,19 +460,20 @@ def _build_html_ui() -> str:
     ws.onmessage = function(evt) {
       try {
         const msg = JSON.parse(evt.data);
-        if (msg.error) { tagBody.innerHTML = "<tr><td colspan='6'>" + msg.error + "</td></tr>"; return; }
+        if (msg.error) { tagBody.innerHTML = "<tr><td colspan='7'>" + msg.error + "</td></tr>"; return; }
         const tags = msg.tags || [];
         if (!tags.length) {
-          tagBody.innerHTML = "<tr><td colspan='6'>No tags detected</td></tr>";
+          tagBody.innerHTML = "<tr><td colspan='7'>No tags detected</td></tr>";
           return;
         }
         tagBody.innerHTML = tags.map(function(t) {
           const cx = t.center_px ? t.center_px[0].toFixed(1) : "--";
           const cy = t.center_px ? t.center_px[1].toFixed(1) : "--";
           const ori = t.orientation_yaw != null ? (t.orientation_yaw * 180 / Math.PI).toFixed(1) + "\u00b0" : "--";
+          const spd = t.speed_px != null ? t.speed_px.toFixed(1) + " px/s" : "--";
           const wx = t.world_xy ? t.world_xy[0].toFixed(1) : "--";
           const wy = t.world_xy ? t.world_xy[1].toFixed(1) : "--";
-          return "<tr><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td><td>" + wx + "</td><td>" + wy + "</td></tr>";
+          return "<tr><td>" + t.id + "</td><td>" + cx + "</td><td>" + cy + "</td><td>" + ori + "</td><td>" + spd + "</td><td>" + wx + "</td><td>" + wy + "</td></tr>";
         }).join("");
       } catch(e) {}
     };
@@ -501,7 +502,7 @@ def _build_html_ui() -> str:
     wsDot.className = "dot";
     wsLabel.textContent = "disconnected";
     srcLabel.textContent = "none";
-    tagBody.innerHTML = "<tr><td colspan='6'>No data</td></tr>";
+    tagBody.innerHTML = "<tr><td colspan='7'>No data</td></tr>";
   }
 
   loadCameras();
