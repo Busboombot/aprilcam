@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: CLI subcommand and integration tests
-status: in-progress
+status: done
 use-cases:
 - SUC-010-001
 - SUC-010-002

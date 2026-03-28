@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Add WebSocket tag streaming endpoint
-status: in-progress
+status: done
 use-cases:
 - SUC-010-004
 depends-on:

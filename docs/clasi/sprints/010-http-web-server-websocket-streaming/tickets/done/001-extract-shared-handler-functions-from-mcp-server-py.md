@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Extract shared handler functions from mcp_server.py
-status: in-progress
+status: done
 use-cases:
 - SUC-010-001
 depends-on: []

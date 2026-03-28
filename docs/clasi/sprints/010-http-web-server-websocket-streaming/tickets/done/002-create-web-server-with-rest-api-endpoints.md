@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Create web server with REST API endpoints
-status: in-progress
+status: done
 use-cases:
 - SUC-010-001
 - SUC-010-002

@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Add MCP SSE transport endpoint
-status: in-progress
+status: done
 use-cases:
 - SUC-010-003
 depends-on:
