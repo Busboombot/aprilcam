@@ -20,6 +20,20 @@ class CameraInfo:
     backend: Optional[str] = None
 
 
+def camera_slug(device_name: str, width: int, height: int) -> str:
+    """Create a filesystem-safe slug from camera device name and resolution.
+
+    Example: camera_slug("Brio 501", 1920, 1080) → "brio-501-1920x1080"
+    """
+    # Lowercase and replace non-alphanumeric chars with hyphens
+    slug = re.sub(r"[^a-z0-9]+", "-", device_name.lower())
+    # Strip leading/trailing hyphens
+    slug = slug.strip("-")
+    # Collapse multiple hyphens
+    slug = re.sub(r"-{2,}", "-", slug)
+    return f"{slug}-{width}x{height}"
+
+
 def default_backends() -> List[int]:
     if os.name == "nt":  # Windows
         return [getattr(cv, "CAP_MSMF", 1400), getattr(cv, "CAP_DSHOW", 700), getattr(cv, "CAP_ANY", 0)]

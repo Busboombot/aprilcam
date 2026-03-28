@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2 as cv
 import numpy as np
 
+from .camutil import camera_slug
 from .config import AppConfig
 from .screencap import ScreenCaptureMSS
 
@@ -62,6 +63,33 @@ def choose_corner_point(pts: np.ndarray) -> np.ndarray:
     Heights are measured from the center of the tags per spec.
     """
     return pts.mean(axis=0)
+
+
+def homography_path(slug: str, data_dir: str | Path = "data") -> Path:
+    """Return the per-camera homography file path for a given slug."""
+    return Path(data_dir) / f"homography-{slug}.json"
+
+
+def discover_homography(
+    device_name: str,
+    width: int,
+    height: int,
+    data_dir: str | Path = "data",
+) -> Path | None:
+    """Find the best homography file for a specific camera.
+
+    Checks for a per-camera file first (``homography-<slug>.json``),
+    then falls back to the global ``homography.json``.  Returns ``None``
+    if neither exists.
+    """
+    slug = camera_slug(device_name, width, height)
+    per_camera = homography_path(slug, data_dir)
+    if per_camera.exists():
+        return per_camera
+    fallback = Path(data_dir) / "homography.json"
+    if fallback.exists():
+        return fallback
+    return None
 
 
 def compute_homography(pixel_pts: np.ndarray, world_pts_cm: np.ndarray) -> np.ndarray:
@@ -265,6 +293,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         }
         out_path.write_text(json.dumps(out, indent=2))
         print(f"Wrote homography to {out_path}")
+
+        # Also save a per-camera named file when source is a camera
+        if source_meta.get("type") == "camera":
+            try:
+                from .camutil import macos_avfoundation_device_names
+                cam_idx = source_meta.get("index")
+                cap_w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+                cap_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+                av_names = macos_avfoundation_device_names()
+                dev_name = av_names.get(cam_idx, f"camera-{cam_idx}") if cam_idx is not None else None
+                if dev_name and cap_w and cap_h:
+                    slug = camera_slug(dev_name, cap_w, cap_h)
+                    per_cam_path = homography_path(slug, cfg.data_dir)
+                    per_cam_path.write_text(json.dumps(out, indent=2))
+                    print(f"Wrote per-camera homography to {per_cam_path}")
+            except Exception as e:
+                print(f"Warning: could not save per-camera homography: {e}")
 
         # Draw annotations on snapshot: fiducial centers, fiducial bounding boxes, and playfield boundary
         draw_img = None

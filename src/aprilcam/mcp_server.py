@@ -554,12 +554,70 @@ def _handle_calibrate_playfield(
         entry.field_spec = field_spec
         entry.homography = H
 
-        return {
+        # Persist per-camera homography file
+        per_camera_path: str | None = None
+        try:
+            camera_id = entry.camera_id
+            cap = registry.get(camera_id)
+            import cv2
+            cap_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            cap_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            # Resolve device name from camera index
+            cam_idx: int | None = None
+            if camera_id.startswith("cam_"):
+                try:
+                    cam_idx = int(camera_id.split("_", 1)[1])
+                except (ValueError, IndexError):
+                    pass
+
+            from aprilcam.camutil import camera_slug, macos_avfoundation_device_names
+            from aprilcam.homography import homography_path
+
+            av_names = macos_avfoundation_device_names()
+            dev_name = av_names.get(cam_idx, f"camera-{cam_idx}") if cam_idx is not None else None
+
+            if dev_name and cap_w and cap_h:
+                from aprilcam.config import AppConfig
+                cfg = AppConfig.load()
+                slug = camera_slug(dev_name, cap_w, cap_h)
+                pc_path = homography_path(slug, cfg.data_dir)
+                pc_path.parent.mkdir(parents=True, exist_ok=True)
+
+                cal_data = {
+                    "units": "cm",
+                    "width_cm": field_spec.width_cm,
+                    "height_cm": field_spec.height_cm,
+                    "pixel_points": [list(pixel_corners[k]) for k in ("upper_left", "upper_right", "lower_left", "lower_right")],
+                    "world_points_cm": [
+                        [0.0, 0.0],
+                        [field_spec.width_cm, 0.0],
+                        [0.0, field_spec.height_cm],
+                        [field_spec.width_cm, field_spec.height_cm],
+                    ],
+                    "homography": H.tolist(),
+                    "note": "Maps [u,v,1]^T pixels to [X,Y,W]^T; use X/W,Y/W in centimeters.",
+                    "source": {
+                        "type": "camera",
+                        "index": cam_idx,
+                        "device_name": dev_name,
+                        "resolution": [cap_w, cap_h],
+                    },
+                }
+                pc_path.write_text(json.dumps(cal_data, indent=2))
+                per_camera_path = str(pc_path)
+        except Exception:
+            pass  # best-effort persistence
+
+        result = {
             "playfield_id": playfield_id,
             "calibrated": True,
             "width_cm": field_spec.width_cm,
             "height_cm": field_spec.height_cm,
         }
+        if per_camera_path:
+            result["homography_file"] = per_camera_path
+        return result
     except Exception as exc:
         return {"error": f"Unexpected error: {exc}"}
 

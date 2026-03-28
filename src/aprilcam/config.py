@@ -147,11 +147,34 @@ class AppConfig:
         return None
 
     # --- Homography helpers ---
-    def load_homography(self, path: Optional[Path] = None) -> Optional[np.ndarray]:
-        """Load a 3x3 homography matrix from JSON. Defaults to <DATA_DIR>/homography.json.
+    def load_homography(
+        self,
+        path: Optional[Path] = None,
+        device_name: Optional[str] = None,
+        resolution: Optional[tuple[int, int]] = None,
+    ) -> Optional[np.ndarray]:
+        """Load a 3x3 homography matrix from JSON.
+
+        When *device_name* and *resolution* are provided, uses
+        :func:`~aprilcam.homography.discover_homography` to find the
+        best matching file (per-camera first, then global fallback).
+        Otherwise defaults to ``<DATA_DIR>/homography.json``.
+
         Returns numpy array (float64) or None if not found/invalid.
         """
-        p = Path(path) if path else (self.data_dir / "homography.json")
+        if path is not None:
+            p = Path(path)
+        elif device_name is not None and resolution is not None:
+            from .homography import discover_homography
+
+            found = discover_homography(
+                device_name, resolution[0], resolution[1], self.data_dir
+            )
+            if found is None:
+                return None
+            p = found
+        else:
+            p = self.data_dir / "homography.json"
         if not p.exists():
             return None
         try:
