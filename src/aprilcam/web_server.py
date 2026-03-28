@@ -396,7 +396,19 @@ def _build_html_ui() -> str:
       if (openRes.error) { alert("Open camera error: " + openRes.error); reset(); return; }
       cameraId = openRes.camera_id;
       sourceId = cameraId;
-      srcLabel.textContent = sourceId;
+
+      // Try to create a playfield (deskew via ArUco corner markers).
+      // If it succeeds, use the playfield_id as the source so frames
+      // are homography-corrected. If it fails (no corners found),
+      // fall back to the raw camera.
+      srcLabel.textContent = "detecting corners...";
+      const pfRes = await api("create_playfield", {camera_id: cameraId});
+      if (pfRes.playfield_id) {
+        sourceId = pfRes.playfield_id;
+        srcLabel.textContent = sourceId + " (deskewed)";
+      } else {
+        srcLabel.textContent = sourceId + " (no playfield)";
+      }
 
       const detRes = await api("start_detection", {source_id: sourceId});
       if (detRes.error) { alert("Start detection error: " + detRes.error); reset(); return; }
