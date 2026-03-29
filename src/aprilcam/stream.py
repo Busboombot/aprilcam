@@ -339,7 +339,7 @@ def calibrate(
     color_camera: int | str = 2,
     field_width_cm: float = 101.0,
     field_height_cm: float = 89.0,
-    data_dir: str | Path = "data",
+    output: str | Path = "data/calibration.json",
     num_frames: int = 30,
 ) -> Path:
     """Run joint calibration on two cameras and save to data/calibration.json.
@@ -354,7 +354,7 @@ def calibrate(
         color_camera: Color camera index or name pattern.
         field_width_cm: Playfield width between ArUco corners.
         field_height_cm: Playfield height between ArUco corners.
-        data_dir: Directory to save calibration.json.
+        output: Path to save the calibration file.
         num_frames: Frames to accumulate for tag detection.
 
     Returns:
@@ -387,12 +387,20 @@ def calibrate(
         bw_cap.release()
         color_cap.release()
 
-    path = save_calibration(
-        [bw_cal, color_cal],
-        data_dir=data_dir,
-        field_width_cm=field_width_cm,
-        field_height_cm=field_height_cm,
-    )
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    cal_data = {
+        "type": "playfield",
+        "field_width_cm": field_width_cm,
+        "field_height_cm": field_height_cm,
+        "cameras": {
+            bw_cal.device_name: bw_cal.to_dict(),
+            color_cal.device_name: color_cal.to_dict(),
+        },
+    }
+    out_path.write_text(_json.dumps(cal_data, indent=2))
+    path = out_path
 
     print(f"Calibration saved to {path}")
     print(f"  B&W:   {bw_cal.device_name} {bw_cal.resolution}, {bw_cal.tags_used} tags, RMS {bw_cal.rms_error:.2f}cm")
