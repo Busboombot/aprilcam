@@ -1,6 +1,6 @@
 from pathlib import Path as _Path
 
-from aprilcam.stream import detect_tags, detect_objects
+from aprilcam.stream import detect_tags, detect_objects, calibrate
 from aprilcam.detection import TagRecord
 from aprilcam.aprilcam import AprilCam
 from aprilcam.models import AprilTag
@@ -18,6 +18,7 @@ __all__ = [
     "help",
     "detect_tags",
     "detect_objects",
+    "calibrate",
     "TagRecord",
     "AprilCam",
     "AprilTag",

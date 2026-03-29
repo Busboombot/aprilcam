@@ -332,3 +332,72 @@ def detect_objects(
     finally:
         if cap is not None and cap.isOpened():
             cap.release()
+
+
+def calibrate(
+    bw_camera: int | str = 3,
+    color_camera: int | str = 2,
+    field_width_cm: float = 101.0,
+    field_height_cm: float = 89.0,
+    data_dir: str | Path = "data",
+    num_frames: int = 30,
+) -> Path:
+    """Run joint calibration on two cameras and save to data/calibration.json.
+
+    Opens both cameras, detects all ArUco + AprilTag markers as shared
+    reference points, computes homography for both cameras (with barrel
+    distortion correction on the color camera if enough points), and
+    saves everything to a single calibration file.
+
+    Args:
+        bw_camera: B&W camera index or name pattern.
+        color_camera: Color camera index or name pattern.
+        field_width_cm: Playfield width between ArUco corners.
+        field_height_cm: Playfield height between ArUco corners.
+        data_dir: Directory to save calibration.json.
+        num_frames: Frames to accumulate for tag detection.
+
+    Returns:
+        Path to the saved calibration file.
+    """
+    from .homography import calibrate_joint, save_calibration
+
+    bw_index = _resolve_camera_index(bw_camera)
+    color_index = _resolve_camera_index(color_camera)
+
+    bw_cap = cv.VideoCapture(bw_index)
+    color_cap = cv.VideoCapture(color_index)
+
+    try:
+        # Warm up
+        for _ in range(10):
+            bw_cap.read()
+        for _ in range(5):
+            color_cap.read()
+
+        bw_cal, color_cal = calibrate_joint(
+            bw_cap, color_cap,
+            field_width_cm=field_width_cm,
+            field_height_cm=field_height_cm,
+            num_frames=num_frames,
+            bw_index=bw_index,
+            color_index=color_index,
+        )
+    finally:
+        bw_cap.release()
+        color_cap.release()
+
+    path = save_calibration(
+        [bw_cal, color_cal],
+        data_dir=data_dir,
+        field_width_cm=field_width_cm,
+        field_height_cm=field_height_cm,
+    )
+
+    print(f"Calibration saved to {path}")
+    print(f"  B&W:   {bw_cal.device_name} {bw_cal.resolution}, {bw_cal.tags_used} tags, RMS {bw_cal.rms_error:.2f}cm")
+    print(f"  Color: {color_cal.device_name} {color_cal.resolution}, {color_cal.tags_used} tags, RMS {color_cal.rms_error:.2f}")
+    if color_cal.dist_coeffs is not None:
+        print(f"  Barrel distortion correction: yes")
+
+    return path

@@ -98,23 +98,12 @@ Then call `list_cameras` → `open_camera` → `start_detection` → `get_tags`.
   correction (camera_matrix + dist_coeffs from `cv.calibrateCamera`).
 - File has `"type": "joint"` to distinguish from single-camera files.
 
-**Running joint calibration:**
+**Running calibration:**
 ```python
-import cv2
-from aprilcam.homography import calibrate_joint, save_joint_calibration
-from pathlib import Path
+from aprilcam import calibrate
 
-bw_cap = cv2.VideoCapture(3)   # B&W camera
-color_cap = cv2.VideoCapture(2) # Color camera
-
-bw_cal, color_cal = calibrate_joint(
-    bw_cap, color_cap,
-    field_width_cm=101.0, field_height_cm=89.0,
-)
-bw_cap.release()
-color_cap.release()
-
-save_joint_calibration(bw_cal, color_cal, Path("data/joint-calibration.json"))
+calibrate(bw_camera=3, color_camera=2)
+# Saves to data/calibration.json
 ```
 
 **Using the calibration:**
