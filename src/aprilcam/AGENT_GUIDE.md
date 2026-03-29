@@ -103,7 +103,10 @@ Then call `list_cameras` → `open_camera` → `start_detection` → `get_tags`.
 from aprilcam import calibrate
 
 calibrate(bw_camera=3, color_camera=2)
-# Saves to data/calibration.json
+# Saves to data/calibration.json (default)
+
+# Custom output path:
+calibrate(bw_camera=3, color_camera=2, output="my_calibration.json")
 ```
 
 **Using the calibration:**
