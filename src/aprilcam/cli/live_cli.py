@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # Load from calibration.json (preferred) or legacy per-camera files
         try:
-            from aprilcam.calibration.homography import load_calibration_for_camera
+            from aprilcam.calibration.calibration import load_calibration_for_camera
             from aprilcam.camera.camutil import get_device_name
 
             dev_name = get_device_name(args.camera)

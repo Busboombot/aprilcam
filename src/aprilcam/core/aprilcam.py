@@ -681,7 +681,7 @@ class AprilCam:
             else:
                 # Load calibration
                 try:
-                    from aprilcam.calibration.homography import load_calibration
+                    from aprilcam.calibration.calibration import load_calibration
                     all_cals = load_calibration()
                     for _name, _cal in all_cals.items():
                         if _cal.dist_coeffs is not None or _cal.resolution[0] > 1280:

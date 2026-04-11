@@ -1,13 +1,13 @@
 ---
 id: '005'
 title: 'Calibration split: extract calibrate() and types from homography.py'
-status: todo
+status: done
 use-cases:
-  - SUC-009
+- SUC-009
 depends-on: []
 github-issue: ''
 todo:
-  - docs/clasi/todo/oop-refactoring.md
+- docs/clasi/todo/oop-refactoring.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -26,18 +26,18 @@ load JSON. `homography.py` owns: matrix math, coordinate transforms.
 
 ## Acceptance Criteria
 
-- [ ] `calibration/calibration.py` exists with `calibrate()`, `CameraCalibration`,
+- [x] `calibration/calibration.py` exists with `calibrate()`, `CameraCalibration`,
       `FieldSpec`.
-- [ ] `calibrate()` function: detect corners, compute homography, write JSON to disk.
-- [ ] `CameraCalibration` dataclass: contains `homography: np.ndarray`, `field_spec: FieldSpec`,
+- [x] `calibrate()` function: detect corners, compute homography, write JSON to disk.
+- [x] `CameraCalibration` dataclass: contains `homography: np.ndarray`, `field_spec: FieldSpec`,
       `device_name: str`, `resolution: tuple[int, int]`.
-- [ ] `FieldSpec` dataclass: `width_cm`, `height_cm` (and unit-conversion helpers).
-- [ ] `homography.py` retains only pure math functions (no `calibrate()`, no `FieldSpec`,
+- [x] `FieldSpec` dataclass: `width_cm`, `height_cm` (and unit-conversion helpers).
+- [x] `homography.py` retains only pure math functions (no `calibrate()`, no `FieldSpec`,
       no `CameraCalibration`).
-- [ ] All existing callers of `CameraCalibration`, `FieldSpec`, `calibrate()`
+- [x] All existing callers of `CameraCalibration`, `FieldSpec`, `calibrate()`
       updated to import from `calibration.calibration` (not `calibration.homography`).
-- [ ] `calibration/__init__.py` exports `calibrate`, `CameraCalibration`, `FieldSpec`.
-- [ ] `from aprilcam.calibration import calibrate` works at the package level.
+- [x] `calibration/__init__.py` exports `calibrate`, `CameraCalibration`, `FieldSpec`.
+- [x] `from aprilcam.calibration import calibrate` works at the package level.
 
 ## Implementation Plan
 
