@@ -46,7 +46,7 @@ from aprilcam.vision.image_processing import (
 )
 from aprilcam.errors import CameraError, CameraNotFoundError, CameraInUseError
 from aprilcam.core.models import AprilTag
-from aprilcam.core.playfield import Playfield
+from aprilcam.core.playfield import PlayfieldBoundary as Playfield
 
 # ---------------------------------------------------------------------------
 # Camera registry

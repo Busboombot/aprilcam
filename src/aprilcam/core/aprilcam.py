@@ -13,7 +13,7 @@ from .detection import TagRecord
 from ..iohelpers import get_data_dir
 from ..camera.camutil import list_cameras as _list_cameras, select_camera_by_pattern, diagnose_camera_failure
 from ..errors import CameraError, CameraNotFoundError, CameraInUseError
-from .playfield import Playfield
+from .playfield import PlayfieldBoundary as Playfield
 from .models import AprilTag as AprilTagModel
 from ..ui.display import PlayfieldDisplay
 from .detector import TagDetector, DetectorConfig
