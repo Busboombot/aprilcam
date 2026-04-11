@@ -178,11 +178,15 @@ class Playfield:
         return cv.getPerspectiveTransform(src, dst)
 
     # --- tag flow integration ---
-    def add_tag(self, tag: AprilTag) -> None:
+    def add_tag(self, tag: AprilTag, homography: Optional[np.ndarray] = None) -> None:
         """Add/Update a tag into the playfield flows, setting in_playfield.
 
         Computes EMA-smoothed velocity with dead-band suppression and stores
         the result on the flow via :meth:`AprilTagFlow.set_velocity`.
+
+        When *homography* is provided, also computes world-space velocity
+        by transforming the pixel velocity through the homography and stores
+        it via :meth:`AprilTagFlow.set_world_velocity`.
 
         If the playfield polygon is unknown, in_playfield defaults to True.
         """
@@ -228,6 +232,21 @@ class Playfield:
             self._last_seen[tid] = (cx, cy, timestamp)
 
         flow.set_velocity(vel_px_val, speed_px_val)
+
+        # --- world-space velocity via homography ---
+        if homography is not None and speed_px_val > 0.0:
+            vx, vy = vel_px_val
+            p1 = np.array([cx, cy, 1.0], dtype=float)
+            p2 = np.array([cx + vx, cy + vy, 1.0], dtype=float)
+            w1 = homography @ p1
+            w1 = w1 / w1[2]
+            w2 = homography @ p2
+            w2 = w2 / w2[2]
+            wvx = float(w2[0] - w1[0])
+            wvy = float(w2[1] - w1[1])
+            speed_world = math.hypot(wvx, wvy)
+            heading_rad = math.atan2(wvy, wvx)
+            flow.set_world_velocity((wvx, wvy), speed_world, heading_rad)
 
     def get_flows(self) -> Dict[int, AprilTagFlow]:
         return self._flows
