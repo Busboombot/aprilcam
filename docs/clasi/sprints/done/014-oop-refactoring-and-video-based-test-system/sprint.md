@@ -1,22 +1,22 @@
 ---
-id: "014"
-title: "OOP Refactoring and Video-Based Test System"
-status: planning
+id: '014'
+title: OOP Refactoring and Video-Based Test System
+status: done
 branch: sprint/014-oop-refactoring-and-video-based-test-system
 todos:
-  - docs/clasi/todo/oop-refactoring.md
-  - docs/clasi/todo/video-based-test-system.md
+- docs/clasi/todo/oop-refactoring.md
+- docs/clasi/todo/video-based-test-system.md
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
-  - SUC-006
-  - SUC-007
-  - SUC-008
-  - SUC-009
-  - SUC-010
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
+- SUC-009
+- SUC-010
 ---
 
 # Sprint 014: OOP Refactoring and Video-Based Test System
