@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'TagDetector: pure stateless detection engine'
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on: []
@@ -24,20 +24,20 @@ the duplicate module-level versions of those functions from `aprilcam.py`.
 
 ## Acceptance Criteria
 
-- [ ] `core/detector.py` exists with `DetectorConfig` dataclass and `TagDetector` class.
-- [ ] `DetectorConfig` fields: `family`, `quad_decimate`, `quad_sigma`, `corner_refine`,
+- [x] `core/detector.py` exists with `DetectorConfig` dataclass and `TagDetector` class.
+- [x] `DetectorConfig` fields: `family`, `quad_decimate`, `quad_sigma`, `corner_refine`,
       `detect_inverted`, `use_clahe`, `use_sharpen`, `use_highpass`, `highpass_ksize`,
       `april_min_wb_diff`, `april_min_cluster_pixels`, `april_max_line_fit_mse`,
       `detect_aruco_4x4`, `proc_width` — all with sensible defaults.
-- [ ] `TagDetector(config: DetectorConfig | None = None)` constructs detector objects.
-- [ ] `TagDetector.detect(frame_bgr: np.ndarray) -> list[Detection]` runs preprocessing
+- [x] `TagDetector(config: DetectorConfig | None = None)` constructs detector objects.
+- [x] `TagDetector.detect(frame_bgr: np.ndarray) -> list[Detection]` runs preprocessing
       and detection; returns list of `Detection` objects.
-- [ ] `Detection` dataclass: `id: int`, `center: tuple[float, float]`,
+- [x] `Detection` dataclass: `id: int`, `center: tuple[float, float]`,
       `corners: np.ndarray` (4x2), `family: str`.
-- [ ] Calling `detect()` twice on the same frame returns equivalent results (stateless).
-- [ ] Duplicate module-level `build_detectors()` / `detect_apriltags()` removed from
+- [x] Calling `detect()` twice on the same frame returns equivalent results (stateless).
+- [x] Duplicate module-level `build_detectors()` / `detect_apriltags()` removed from
       `aprilcam.py`; `aprilcam.py` delegates to `TagDetector` instead.
-- [ ] `core/__init__.py` exports `TagDetector`, `DetectorConfig`.
+- [x] `core/__init__.py` exports `TagDetector`, `DetectorConfig`.
 
 ## Implementation Plan
 

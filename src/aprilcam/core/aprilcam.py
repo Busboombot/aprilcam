@@ -16,6 +16,7 @@ from ..errors import CameraError, CameraNotFoundError, CameraInUseError
 from .playfield import Playfield
 from .models import AprilTag as AprilTagModel
 from ..ui.display import PlayfieldDisplay
+from .detector import TagDetector, DetectorConfig
 
 
 _OBJECT_COLOR_BGR = {
@@ -132,13 +133,23 @@ class AprilCam:
         if playfield_poly_init is not None and isinstance(playfield_poly_init, np.ndarray) and playfield_poly_init.shape == (4, 2):
             self.play_poly = playfield_poly_init.astype(np.float32)
 
-        # Cached state
-        self.detectors = self._build_detectors()
-        # Pre-build ArucoDetector objects once (avoid per-frame construction)
-        self._cached_detectors = [
-            (cv.aruco.ArucoDetector(d, p), fam)
-            for d, p, fam in self.detectors
-        ]
+        # Stateless detection engine (builds detector objects once)
+        self._tag_detector = TagDetector(DetectorConfig(
+            family=self.family,
+            proc_width=self.proc_width,
+            quad_decimate=self.quad_decimate,
+            quad_sigma=self.quad_sigma,
+            corner_refine=self.corner_refine,
+            detect_inverted=self.detect_inverted,
+            detect_aruco_4x4=self.detect_aruco_4x4,
+            use_highpass=self.use_highpass,
+            highpass_ksize=self.highpass_ksize,
+            use_clahe=self.use_clahe,
+            use_sharpen=self.use_sharpen,
+            april_min_wb_diff=self.april_min_wb_diff,
+            april_min_cluster_pixels=self.april_min_cluster_pixels,
+            april_max_line_fit_mse=self.april_max_line_fit_mse,
+        ))
         self.playfield = Playfield(
             proc_width=self.proc_width or 960,
             detect_inverted=False,
@@ -427,39 +438,24 @@ class AprilCam:
     def detect_apriltags(self, frame_bgr: np.ndarray, scale: float = 1.0, gray: Optional[np.ndarray] = None) -> List[Tuple[np.ndarray, np.ndarray, int, str]]:
         """Detect AprilTags in a BGR frame.
 
+        Delegates to :class:`~aprilcam.core.detector.TagDetector`.
+        Downscaling for detection speed is handled by ``proc_width`` inside
+        ``TagDetector``; the *scale* argument is accepted for back-compat
+        but should be 1.0 — callers should not compute scale externally
+        when ``proc_width`` is set.
+
         Args:
             frame_bgr: Input color frame in BGR order.
-            scale: Optional downscale factor for speed (<1 downscales).
-            gray: Optional pre-computed grayscale image. If None, computed
-                from *frame_bgr* internally.
+            scale: Ignored (kept for API compatibility). Downscaling is
+                controlled by ``DetectorConfig.proc_width``.
+            gray: Optional pre-computed grayscale image.
 
         Returns:
-            A list of (pts[4x2], raw_pts[4x2], id, family) for each detected tag.
+            A list of ``(pts[4x2], raw_pts[4x2], id, family)`` tuples for
+            each detected tag.
         """
-        h, w = frame_bgr.shape[:2]
-        if gray is None:
-            gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
-        if scale < 1.0:
-            new_w = max(1, int(w * scale))
-            new_h = max(1, int(h * scale))
-            gray = cv.resize(gray, (new_w, new_h), interpolation=cv.INTER_AREA)
-        gray = self._maybe_preprocess(
-            gray, self.use_clahe, self.use_sharpen,
-            self.use_highpass, self.highpass_ksize,
-        )
-
-        detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
-        for det_entry in self._cached_detectors:
-            detector, fam = det_entry
-            corners, ids, _rej = detector.detectMarkers(gray)
-            if ids is None:
-                continue
-            for c, idv in zip(corners, ids.flatten().tolist()):
-                pts = c.reshape(-1, 2).astype(np.float32)
-                if scale < 1.0:
-                    pts = pts / float(scale)
-                detections.append((pts, pts.copy(), int(idv), fam))
-        return detections
+        raw = self._tag_detector.detect(frame_bgr, gray=gray)
+        return [(det.corners, det.corners.copy(), det.id, det.family) for det in raw]
 
     @staticmethod
     def lk_track(prev_gray: np.ndarray, gray: np.ndarray, pts: np.ndarray) -> Optional[np.ndarray]:
@@ -543,11 +539,8 @@ class AprilCam:
                 or self._frame_idx % max(1, self.detect_interval) == 0
                 or self._prev_gray is None
                 or not self._tracks):
-            w = frame_bgr.shape[1]
-            scale = (min(1.0, float(self.proc_width) / float(w))
-                     if (self.proc_width and self.proc_width > 0 and w > 0)
-                     else 1.0)
-            detections = self.detect_apriltags(frame_bgr, scale=scale, gray=gray)
+            # TagDetector handles proc_width downscaling internally.
+            detections = self.detect_apriltags(frame_bgr, gray=gray)
             self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
             self._track_families = {tid: fam for (_pts, _raw, tid, fam) in detections}
         else:
@@ -561,11 +554,7 @@ class AprilCam:
                     detections.append((new_pts, new_pts, tid, fam))
             self._tracks = new_tracks
             if len(detections) == 0:
-                w = frame_bgr.shape[1]
-                scale = (min(1.0, float(self.proc_width) / float(w))
-                         if (self.proc_width and self.proc_width > 0 and w > 0)
-                         else 1.0)
-                detections = self.detect_apriltags(frame_bgr, scale=scale, gray=gray)
+                detections = self.detect_apriltags(frame_bgr, gray=gray)
                 self._tracks = {tid: pts for (pts, _raw, tid, _fam) in detections}
                 self._track_families = {tid: fam for (_pts, _raw, tid, fam) in detections}
 
@@ -933,81 +922,5 @@ def load_last_camera() -> Optional[int]:
 # CLI main moved to aprilcam.cli.aprilcam_cli
 
 
-# --- Back-compat wrappers for CLI offline evaluation ---
-def build_detectors(
-    family: str,
-    corner_refine: str,
-    quad_decimate: float,
-    quad_sigma: float,
-    detect_inverted: bool,
-    april_min_wb_diff: float = 3.0,
-    april_min_cluster_pixels: int = 5,
-    april_max_line_fit_mse: float = 20.0,
-):
-    """Return a list of (dictionary, parameters, family_name) configured for the requested family/families.
-
-    Mirrors AprilCam._build_detectors but exposed at module scope for CLI use.
-    """
-    fams = [family] if family != "all" else ["16h5", "25h9", "36h10", "36h11"]
-    detectors = []
-    for f in fams:
-        d = cv.aruco.getPredefinedDictionary(AprilCam._get_dict_by_family(f))
-        p = cv.aruco.DetectorParameters()
-        p.cornerRefinementMethod = {
-            "none": cv.aruco.CORNER_REFINE_NONE,
-            "contour": cv.aruco.CORNER_REFINE_CONTOUR,
-            "subpix": cv.aruco.CORNER_REFINE_SUBPIX,
-        }.get(corner_refine, cv.aruco.CORNER_REFINE_SUBPIX)
-        p.aprilTagQuadDecimate = float(max(1.0, quad_decimate))
-        p.aprilTagQuadSigma = float(max(0.0, quad_sigma))
-        if hasattr(p, "aprilTagMinWhiteBlackDiff"):
-            try:
-                p.aprilTagMinWhiteBlackDiff = int(max(0, int(round(april_min_wb_diff))))
-            except Exception:
-                p.aprilTagMinWhiteBlackDiff = 3
-        if hasattr(p, "aprilTagMinClusterPixels"):
-            try:
-                p.aprilTagMinClusterPixels = int(max(1, int(april_min_cluster_pixels)))
-            except Exception:
-                p.aprilTagMinClusterPixels = 5
-        if hasattr(p, "aprilTagMaxLineFitMse"):
-            try:
-                p.aprilTagMaxLineFitMse = float(max(1.0, float(april_max_line_fit_mse)))
-            except Exception:
-                p.aprilTagMaxLineFitMse = 20.0
-        p.detectInvertedMarker = bool(detect_inverted)
-        detectors.append((d, p, f))
-    return detectors
-
-
-def detect_apriltags(
-    frame_bgr: np.ndarray,
-    detectors,
-    scale: float = 1.0,
-    clahe: bool = False,
-    sharpen: bool = False,
-):
-    """Detect AprilTags in an image using provided detectors.
-
-    Returns a list of tuples: (pts[4x2], raw_pts[4x2], id, family)
-    """
-    h, w = frame_bgr.shape[:2]
-    gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
-    if scale < 1.0:
-        new_w = max(1, int(w * scale))
-        new_h = max(1, int(h * scale))
-        gray = cv.resize(gray, (new_w, new_h), interpolation=cv.INTER_AREA)
-    gray = AprilCam._maybe_preprocess(gray, clahe, sharpen)
-
-    detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
-    for d, p, fam in detectors:
-        detector = cv.aruco.ArucoDetector(d, p)
-        corners, ids, _rej = detector.detectMarkers(gray)
-        if ids is None:
-            continue
-        for c, idv in zip(corners, ids.flatten().tolist()):
-            pts = c.reshape(-1, 2).astype(np.float32)
-            if scale < 1.0:
-                pts = pts / float(scale)
-            detections.append((pts, pts.copy(), int(idv), fam))
-    return detections
+# Module-level build_detectors() and detect_apriltags() were removed.
+# Use TagDetector / DetectorConfig from aprilcam.core.detector instead.
