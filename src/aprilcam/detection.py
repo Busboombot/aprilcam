@@ -56,6 +56,57 @@ class TagRecord:
             "age": self.age,
         }
 
+    def estimate(self, t: float | None = None) -> TagRecord:
+        """Return a new TagRecord with position extrapolated to time *t*.
+
+        Uses linear extrapolation from the stored velocity.  When *t* is
+        ``None``, defaults to ``time.monotonic()``.
+
+        Args:
+            t: Target monotonic time.  Defaults to now.
+
+        Returns:
+            New ``TagRecord`` with ``center_px``, ``corners_px``, and
+            ``world_xy`` shifted by velocity * dt.  ``timestamp`` is set
+            to *t* and ``age`` is increased by dt.  All other fields are
+            preserved unchanged.
+        """
+        if t is None:
+            t = time.monotonic()
+        dt = t - self.timestamp
+
+        new_center = self.center_px
+        new_corners = self.corners_px
+        if self.vel_px is not None:
+            dx = self.vel_px[0] * dt
+            dy = self.vel_px[1] * dt
+            new_center = (self.center_px[0] + dx, self.center_px[1] + dy)
+            new_corners = [[c[0] + dx, c[1] + dy] for c in self.corners_px]
+
+        new_world = self.world_xy
+        if self.world_xy is not None and self.vel_world is not None:
+            new_world = (
+                self.world_xy[0] + self.vel_world[0] * dt,
+                self.world_xy[1] + self.vel_world[1] * dt,
+            )
+
+        return TagRecord(
+            id=self.id,
+            center_px=new_center,
+            corners_px=new_corners,
+            orientation_yaw=self.orientation_yaw,
+            world_xy=new_world,
+            in_playfield=self.in_playfield,
+            vel_px=self.vel_px,
+            speed_px=self.speed_px,
+            vel_world=self.vel_world,
+            speed_world=self.speed_world,
+            heading_rad=self.heading_rad,
+            timestamp=t,
+            frame_index=self.frame_index,
+            age=self.age + dt,
+        )
+
     @classmethod
     def from_apriltag(
         cls,

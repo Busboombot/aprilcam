@@ -132,6 +132,9 @@ class AprilTagFlow:
         self._id: Optional[int] = None
         self._vel_px: Tuple[float, float] = (0.0, 0.0)
         self._speed_px: float = 0.0
+        self._vel_world: Optional[Tuple[float, float]] = None
+        self._speed_world: Optional[float] = None
+        self._heading_rad: Optional[float] = None
 
     def add_tag(self, tag: AprilTag) -> None:
         if self._id is None:
@@ -146,6 +149,21 @@ class AprilTagFlow:
         """
         self._vel_px = vel_px
         self._speed_px = speed_px
+
+    def set_world_velocity(
+        self,
+        vel_world: Tuple[float, float],
+        speed_world: float,
+        heading_rad: float,
+    ) -> None:
+        """Set the world-space velocity for this flow.
+
+        Called by Playfield.add_tag() after transforming the pixel velocity
+        through the homography matrix.
+        """
+        self._vel_world = vel_world
+        self._speed_world = speed_world
+        self._heading_rad = heading_rad
 
     # --- core accessors mirroring AprilTag ---
     @property
@@ -203,3 +221,15 @@ class AprilTagFlow:
     @property
     def speed_px(self) -> float:
         return self._speed_px
+
+    @property
+    def vel_world(self) -> Optional[Tuple[float, float]]:
+        return self._vel_world
+
+    @property
+    def speed_world(self) -> Optional[float]:
+        return self._speed_world
+
+    @property
+    def heading_rad(self) -> Optional[float]:
+        return self._heading_rad

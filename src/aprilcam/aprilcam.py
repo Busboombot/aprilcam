@@ -592,7 +592,7 @@ class AprilCam:
                     family=fam,
                 )
             self._tag_models[tid].frame = self._frame_idx
-            self.playfield.add_tag(self._tag_models[tid])
+            self.playfield.add_tag(self._tag_models[tid], homography=self.homography)
 
         # Prune models not seen for >1 second
         seen_ids = {tid for _pts, _r, tid, _fam in detections}
@@ -619,9 +619,9 @@ class AprilCam:
                 model,
                 vel_px=vel_px_val,
                 speed_px=speed_px_val,
-                vel_world=None,
-                speed_world=None,
-                heading_rad=None,
+                vel_world=flow.vel_world if flow else None,
+                speed_world=flow.speed_world if flow else None,
+                heading_rad=flow.heading_rad if flow else None,
                 timestamp=timestamp,
                 frame_index=self._frame_idx,
                 age=0.0,
@@ -639,9 +639,9 @@ class AprilCam:
                     model,
                     vel_px=vel_px_val,
                     speed_px=speed_px_val,
-                    vel_world=None,
-                    speed_world=None,
-                    heading_rad=None,
+                    vel_world=flow.vel_world if flow else None,
+                    speed_world=flow.speed_world if flow else None,
+                    heading_rad=flow.heading_rad if flow else None,
                     timestamp=timestamp,
                     frame_index=self._frame_idx,
                     age=age,
