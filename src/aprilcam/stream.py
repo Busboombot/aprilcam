@@ -390,14 +390,20 @@ def calibrate(
         finally:
             cap.release()
 
-        cal_data = {
-            "type": "playfield",
-            "field_width_cm": field_width_cm,
-            "field_height_cm": field_height_cm,
-            "cameras": {
-                cal.device_name: cal.to_dict(),
-            },
-        }
+        # Merge into existing calibration file if it exists
+        if out_path.exists():
+            try:
+                cal_data = _json.loads(out_path.read_text())
+            except Exception:
+                cal_data = {}
+        else:
+            cal_data = {}
+        cal_data["type"] = "playfield"
+        cal_data["field_width_cm"] = field_width_cm
+        cal_data["field_height_cm"] = field_height_cm
+        if "cameras" not in cal_data:
+            cal_data["cameras"] = {}
+        cal_data["cameras"][cal.device_name] = cal.to_dict()
         out_path.write_text(_json.dumps(cal_data, indent=2))
 
         print(f"Calibration saved to {out_path}")

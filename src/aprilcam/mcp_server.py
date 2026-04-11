@@ -1327,6 +1327,22 @@ def _image_result_to_mcp(result: dict) -> list[TextContent | ImageContent]:
 
 
 @server.tool()
+async def get_version() -> list[TextContent]:
+    """Return the aprilcam package version.
+
+    Returns:
+        A JSON object with ``version`` (str).
+    """
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        ver = _pkg_version("aprilcam")
+    except Exception:
+        ver = "unknown"
+    return [TextContent(type="text", text=json.dumps({"version": ver}))]
+
+
+@server.tool()
 async def list_cameras() -> list[TextContent]:
     """List available cameras by probing indices 0 through 9.
 

@@ -1,12 +1,12 @@
 ---
-id: "012"
-title: "Object Detection for Colored Cubes"
-status: planning
+id: '012'
+title: Object Detection for Colored Cubes
+status: done
 branch: sprint/012-object-detection-for-colored-cubes
 use-cases:
-  - SUC-012-001
-  - SUC-012-002
-  - SUC-012-003
+- SUC-012-001
+- SUC-012-002
+- SUC-012-003
 ---
 
 # Sprint 012: Object Detection for Colored Cubes

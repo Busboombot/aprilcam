@@ -123,6 +123,11 @@ class AprilCam:
         self.homography = homography
         self.headless = bool(headless)
         self.deskew_overlay = bool(deskew_overlay)
+        try:
+            from .camutil import get_device_name
+            self.camera_name: str = get_device_name(index)
+        except Exception:
+            self.camera_name = f"camera-{index}"
         self.play_poly: Optional[np.ndarray] = None
         if playfield_poly_init is not None and isinstance(playfield_poly_init, np.ndarray) and playfield_poly_init.shape == (4, 2):
             self.play_poly = playfield_poly_init.astype(np.float32)
@@ -183,7 +188,7 @@ class AprilCam:
             state[key] = alpha * value + (1.0 - alpha) * state[key]
         return state[key]
 
-    def _build_tui_layout(self, tag_records: list, has_world: bool, pipe_mode: str = "color"):
+    def _build_tui_layout(self, tag_records: list, has_world: bool, pipe_mode: str = "color", fps: float = 0.0):
         """Build a Rich Layout with tag table and status panel."""
         from rich.table import Table
         from rich.columns import Columns
@@ -263,7 +268,9 @@ class AprilCam:
         st.add_column("Key", style="white", width=14)
         st.add_column("Value", width=24)
 
+        st.add_row("Camera", self.camera_name)
         st.add_row("Frame", str(self._frame_idx))
+        st.add_row("FPS", f"{fps:.1f}")
 
         view_labels = {
             "color": "0: Color",
@@ -300,12 +307,12 @@ class AprilCam:
 
         return Columns([table, st])
 
-    def _print_tui(self, tag_records: list, has_world: bool, pipe_mode: str = "color") -> None:
+    def _print_tui(self, tag_records: list, has_world: bool, pipe_mode: str = "color", fps: float = 0.0) -> None:
         """Update the Rich Live TUI dashboard."""
         from rich.live import Live
         from rich.console import Console
 
-        layout = self._build_tui_layout(tag_records, has_world, pipe_mode=pipe_mode)
+        layout = self._build_tui_layout(tag_records, has_world, pipe_mode=pipe_mode, fps=fps)
 
         if self._tui_live is None:
             console = Console()
@@ -708,6 +715,10 @@ class AprilCam:
         if not self.headless:
             print("Keys: [q]uit [space]pause [d]etect [c]lear  Views: [0]color [1]gray [2]hp [3]clahe [4]hp+clahe [5]thresh")
 
+        _fps = 0.0
+        _last_fps_time = time.monotonic()
+        _fps_frame_count = 0
+
         try:
             while True:
                 if not paused:
@@ -720,13 +731,21 @@ class AprilCam:
                     now = time.monotonic()
                     tag_records = self.process_frame(frame, now)
 
+                    # FPS calculation (smoothed over 1-second windows)
+                    _fps_frame_count += 1
+                    fps_elapsed = now - _last_fps_time
+                    if fps_elapsed >= 1.0:
+                        _fps = _fps_frame_count / fps_elapsed
+                        _fps_frame_count = 0
+                        _last_fps_time = now
+
                     # Feed tag positions to persistent detector for exclusion cache
                     if tag_records:
                         _sq_detector.update_known_tags(tag_records)
 
                     # 6) Optional TUI display (fixed-position, EMA-smoothed)
                     if self.print_tags and tag_records:
-                        self._print_tui(tag_records, has_world=self.homography is not None, pipe_mode=_pipe_mode)
+                        self._print_tui(tag_records, has_world=self.homography is not None, pipe_mode=_pipe_mode, fps=_fps)
 
                     # 7) Build pipeline debug images
                     gray_img = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)

@@ -129,7 +129,32 @@ def macos_avfoundation_device_names() -> Dict[int, str]:
 
 
 def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop_after_failures: int = 4, quiet: bool = False, detailed_names: bool = False) -> List[CameraInfo]:
-    cameras: List[CameraInfo] = []
+    """List available cameras.
+
+    Uses ``cv2-enumerate-cameras`` when available for accurate OS device
+    names and ordering.  Falls back to the legacy OpenCV probe loop.
+    """
+    # --- Primary path: cv2-enumerate-cameras ---
+    try:
+        from cv2_enumerate_cameras import enumerate_cameras
+
+        avf_offset = getattr(cv, "CAP_AVFOUNDATION", 1200)
+        cameras: List[CameraInfo] = []
+        for cam in enumerate_cameras():
+            # Derive the OpenCV index from the raw backend index
+            idx = cam.index - avf_offset if cam.index >= avf_offset else cam.index
+            backend_name = "AVFOUNDATION" if cam.index >= avf_offset else None
+            device_name = cam.name or None
+            name = (device_name or f"Camera {idx}") + (f" ({backend_name})" if backend_name else "")
+            cameras.append(CameraInfo(index=idx, name=name, backend=backend_name, device_name=device_name))
+        return cameras
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # --- Fallback: legacy OpenCV probe loop ---
+    cameras = []
     backends = backends or default_backends()
     backend_failures: Dict[int, int] = {be: 0 for be in backends}
     av_names: Dict[int, str] = {}
@@ -137,7 +162,6 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
         av_names = _macos_avfoundation_device_names()
     for idx in range(max_index):
         for be in list(backends):
-            # If this backend has too many consecutive failures, skip further attempts to reduce noise
             if backend_failures.get(be, 0) >= max(1, int(stop_after_failures)) and idx > 1:
                 continue
             with _SilenceStderr(quiet):
@@ -149,7 +173,6 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
                             backend_name = cap.getBackendName() if hasattr(cap, "getBackendName") else None
                         except Exception:
                             pass
-                        # Prefer detailed AVFoundation device name if available
                         pretty = None
                         if sys.platform == "darwin" and backend_name == "AVFOUNDATION" and idx in av_names:
                             pretty = av_names.get(idx)

@@ -1,30 +1,37 @@
 ---
+name: se
 description: CLASI Software Engineering process dispatcher
 ---
 
 # /se
 
 Dispatch to the CLASI SE process. Parse the argument after `/se` and
-call the matching MCP tool from the table below.
+invoke the matching skill from the table below.
 
 If `/se` is called with **no arguments**, display this help listing
 to the user and stop — do not execute any skill.
 
 ## Available commands
 
-| Command | Description | MCP call |
-|---------|-------------|----------|
-| `/se status` | Show project status — sprints, tickets, next actions | `get_skill_definition("project-status")` |
-| `/se next` | Determine and execute the next process step | `get_skill_definition("next")` |
-| `/se todo <text>` | Create a TODO file from the description | `get_skill_definition("todo")` |
-| `/se init` | Start a new project with a guided interview | `get_skill_definition("project-initiation")` |
-| `/se report` | Report a bug with the CLASI tools | `get_skill_definition("report")` |
-| `/se ghtodo <text>` | Create a GitHub issue from the description | `get_skill_definition("ghtodo")` |
-| `/se gh-import [repo] [--labels L]` | Import GitHub issues as TODOs | `get_skill_definition("gh-import")` |
-| `/se knowledge <description>` | Capture hard-won technical understanding | `get_skill_definition("project-knowledge")` |
+| Command | Description | Action |
+|---------|-------------|--------|
+| `/se status` | Show project status — sprints, tickets, next actions | Invoke the `project-status` skill |
+| `/se todo <text>` | Create a TODO file from the description | Invoke the `todo` skill |
+| `/se init` | Start a new project with a guided interview | Invoke the `project-initiation` skill |
+| `/se report` | Report a bug with the CLASI tools | Invoke the `report` skill |
+| `/se gh-import [repo] [--labels L]` | Import GitHub issues as TODOs | Invoke the `gh-import` skill |
+| `/se knowledge <description>` | Capture hard-won technical understanding | Invoke the `project-knowledge` skill |
+| `/se oop` | Make a quick out-of-process change | Invoke the `oop` skill |
+| `/se plan` | Enter plan mode for a discussed TODO | Enter plan mode via `EnterPlanMode` |
 
 Pass any remaining text after the subcommand as the argument to the
 skill (e.g., `/se todo fix the login bug` passes "fix the login bug"
 to the todo skill).
 
-For general SE process guidance, call `get_se_overview()`.
+## When to use /se todo vs /se plan
+
+- `/se todo <text>`: Quick capture. The user has a clear idea and just
+  wants it recorded. One statement → one TODO file.
+- `/se plan`: The user wants to discuss, explore, and refine an idea
+  before capturing it. Enters plan mode for a conversation. On exit,
+  the plan-to-todo hook automatically creates the TODO.
