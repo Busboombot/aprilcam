@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from aprilcam.composite import CompositeManager
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     composite_manager,
     create_composite,
     get_composite_frame,
@@ -422,7 +422,7 @@ class TestGetCompositeTags:
 
     def test_with_playfield_calibration(self):
         """Tags get world_xy when composite has a calibrated playfield."""
-        from aprilcam.mcp_server import PlayfieldEntry
+        from aprilcam.server.mcp_server import PlayfieldEntry
         from aprilcam.playfield import Playfield
 
         comp_id, cam1_id, cam2_id = _setup_composite_with_tags()

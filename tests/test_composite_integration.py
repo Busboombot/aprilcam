@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     capture_frame,
     composite_manager,
     create_composite,

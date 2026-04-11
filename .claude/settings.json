@@ -8,7 +8,8 @@
       "Bash(aprilcam web:*)",
       "Read(//tmp/**)",
       "Read(//private/tmp/**)",
-      "mcp__clasi__list_sprints"
+      "mcp__clasi__list_sprints",
+      "Bash(find tests:*)"
     ]
   },
   "hooks": {

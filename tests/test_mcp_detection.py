@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import pytest
 
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     detection_registry,
     get_tag_history,
     get_tags,

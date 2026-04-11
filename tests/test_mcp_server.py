@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy
 import pytest
 
-from aprilcam.mcp_server import CameraRegistry, registry
+from aprilcam.server.mcp_server import CameraRegistry, registry
 
 # ---------------------------------------------------------------------------
 # CameraRegistry tests
@@ -108,7 +108,7 @@ class TestListCameras:
             pass
 
         # Patch the inner import used inside the tool function
-        from aprilcam.mcp_server import list_cameras as tool_fn
+        from aprilcam.server.mcp_server import list_cameras as tool_fn
 
         mock_cam = MagicMock()
         mock_cam.index = 0
@@ -129,7 +129,7 @@ class TestListCameras:
         assert data[0]["device_name"] == "FaceTime"
 
     def test_returns_empty_array_when_no_cameras(self):
-        from aprilcam.mcp_server import list_cameras as tool_fn
+        from aprilcam.server.mcp_server import list_cameras as tool_fn
 
         with patch("aprilcam.camutil.list_cameras", return_value=[]):
             result = _run(tool_fn())
@@ -140,7 +140,7 @@ class TestListCameras:
 
 class TestOpenCamera:
     def test_with_index_returns_handle(self):
-        from aprilcam.mcp_server import open_camera, registry as reg
+        from aprilcam.server.mcp_server import open_camera, registry as reg
 
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
@@ -159,7 +159,7 @@ class TestOpenCamera:
             pass
 
     def test_returns_error_when_camera_fails_to_open(self):
-        from aprilcam.mcp_server import open_camera
+        from aprilcam.server.mcp_server import open_camera
 
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = False
@@ -175,7 +175,7 @@ class TestOpenCamera:
 class TestCaptureFrame:
     def _make_registry_with_cap(self):
         """Create a mock capture in the module-level registry and return (handle, cap)."""
-        from aprilcam.mcp_server import registry as reg
+        from aprilcam.server.mcp_server import registry as reg
 
         cap = MagicMock()
         frame = numpy.zeros((100, 100, 3), dtype=numpy.uint8)
@@ -184,7 +184,7 @@ class TestCaptureFrame:
         return handle, cap
 
     def test_returns_image_content_with_base64(self):
-        from aprilcam.mcp_server import capture_frame
+        from aprilcam.server.mcp_server import capture_frame
 
         handle, cap = self._make_registry_with_cap()
         try:
@@ -195,14 +195,14 @@ class TestCaptureFrame:
             assert result[0].mimeType == "image/jpeg"
             assert len(result[0].data) > 0
         finally:
-            from aprilcam.mcp_server import registry as reg
+            from aprilcam.server.mcp_server import registry as reg
             try:
                 reg.close(handle)
             except KeyError:
                 pass
 
     def test_with_format_file_returns_path(self):
-        from aprilcam.mcp_server import capture_frame
+        from aprilcam.server.mcp_server import capture_frame
 
         handle, cap = self._make_registry_with_cap()
         try:
@@ -212,14 +212,14 @@ class TestCaptureFrame:
             assert "path" in data
             assert data["path"].endswith(".jpg")
         finally:
-            from aprilcam.mcp_server import registry as reg
+            from aprilcam.server.mcp_server import registry as reg
             try:
                 reg.close(handle)
             except KeyError:
                 pass
 
     def test_returns_error_for_invalid_camera_id(self):
-        from aprilcam.mcp_server import capture_frame
+        from aprilcam.server.mcp_server import capture_frame
 
         result = _run(capture_frame(camera_id="invalid-id"))
         data = json.loads(result[0].text)
@@ -229,7 +229,7 @@ class TestCaptureFrame:
 
 class TestCloseCamera:
     def test_returns_status_closed(self):
-        from aprilcam.mcp_server import close_camera, registry as reg
+        from aprilcam.server.mcp_server import close_camera, registry as reg
 
         cap = MagicMock()
         handle = reg.open(cap)
@@ -239,7 +239,7 @@ class TestCloseCamera:
         cap.release.assert_called_once()
 
     def test_returns_error_for_invalid_handle(self):
-        from aprilcam.mcp_server import close_camera
+        from aprilcam.server.mcp_server import close_camera
 
         result = _run(close_camera(camera_id="bogus-handle"))
         data = json.loads(result[0].text)

@@ -19,7 +19,7 @@ from aprilcam.image_processing import (
     process_detect_motion,
     process_detect_qr_codes,
 )
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     PlayfieldEntry,
     format_image_output,
     playfield_registry,

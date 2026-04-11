@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     _motion_prev_frames,
     apply_transform,
     crop_region,

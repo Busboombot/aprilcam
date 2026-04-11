@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     create_frame_from_image,
     frame_registry,
     playfield_registry,

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from aprilcam.mcp_server import (
+from aprilcam.server.mcp_server import (
     PlayfieldEntry,
     PlayfieldRegistry,
     calibrate_playfield,

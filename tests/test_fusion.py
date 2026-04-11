@@ -73,7 +73,7 @@ def test_fuser_overwrite():
 def test_fuser_clear_stale():
     fuser = ObjectFuser()
 
-    with patch("aprilcam.objects.time") as mock_time:
+    with patch("aprilcam.vision.objects.time") as mock_time:
         mock_time.time.return_value = 1000.0
         fuser.update_colors([_make_obj(world_xy=(10.0, 20.0), color="red")])
         assert len(fuser._color_map) == 1
@@ -113,7 +113,7 @@ def test_color_camera_thread_lifecycle():
     mock_cap = MagicMock()
     mock_cap.read.return_value = (True, MagicMock())
 
-    with patch("aprilcam.objects.cv.VideoCapture", return_value=mock_cap):
+    with patch("aprilcam.vision.objects.cv.VideoCapture", return_value=mock_cap):
         thread = ColorCameraThread(
             camera_index=0, fuser=fuser, classifier=classifier, fps=100.0
         )
@@ -134,7 +134,7 @@ def test_color_camera_thread_is_daemon():
     mock_cap = MagicMock()
     mock_cap.read.return_value = (False, None)
 
-    with patch("aprilcam.objects.cv.VideoCapture", return_value=mock_cap):
+    with patch("aprilcam.vision.objects.cv.VideoCapture", return_value=mock_cap):
         thread = ColorCameraThread(
             camera_index=0, fuser=fuser, classifier=classifier, fps=100.0
         )

@@ -46,7 +46,7 @@ class McpClient:
             [
                 sys.executable,
                 "-c",
-                "from aprilcam.mcp_server import main; main()",
+                "from aprilcam.server.mcp_server import main; main()",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

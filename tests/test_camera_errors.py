@@ -71,8 +71,8 @@ class TestDiagnoseCameraFailureLive:
 # ---------- diagnose_camera_failure — mocked ----------
 
 class TestDiagnoseCameraFailureMocked:
-    @patch("aprilcam.camutil.sys")
-    @patch("aprilcam.camutil._macos_avfoundation_device_names")
+    @patch("aprilcam.camera.camutil.sys")
+    @patch("aprilcam.camera.camutil._macos_avfoundation_device_names")
     def test_macos_camera_not_found(self, mock_av_names, mock_sys):
         mock_sys.platform = "darwin"
         mock_av_names.return_value = {0: "FaceTime HD Camera"}
@@ -80,9 +80,9 @@ class TestDiagnoseCameraFailureMocked:
         result = diagnose_camera_failure(5)
         assert result["exists"] is False
 
-    @patch("aprilcam.camutil.sys")
-    @patch("aprilcam.camutil._macos_avfoundation_device_names")
-    @patch("aprilcam.camutil.subprocess")
+    @patch("aprilcam.camera.camutil.sys")
+    @patch("aprilcam.camera.camutil._macos_avfoundation_device_names")
+    @patch("aprilcam.camera.camutil.subprocess")
     def test_macos_blocking_processes(self, mock_subprocess, mock_av_names, mock_sys):
         mock_sys.platform = "darwin"
         mock_av_names.return_value = {0: "FaceTime HD Camera"}
@@ -100,8 +100,8 @@ class TestDiagnoseCameraFailureMocked:
         pids = [p["pid"] for p in result["blocking_processes"]]
         assert 1234 in pids
 
-    @patch("aprilcam.camutil.sys")
-    @patch("aprilcam.camutil.os.path.exists")
+    @patch("aprilcam.camera.camutil.sys")
+    @patch("aprilcam.camera.camutil.os.path.exists")
     def test_linux_device_not_found(self, mock_exists, mock_sys):
         mock_sys.platform = "linux"
         mock_exists.return_value = False
@@ -109,10 +109,10 @@ class TestDiagnoseCameraFailureMocked:
         result = diagnose_camera_failure(99)
         assert result["exists"] is False
 
-    @patch("aprilcam.camutil.sys")
-    @patch("aprilcam.camutil.os.path.exists")
-    @patch("aprilcam.camutil.subprocess")
-    @patch("aprilcam.camutil._get_process_name")
+    @patch("aprilcam.camera.camutil.sys")
+    @patch("aprilcam.camera.camutil.os.path.exists")
+    @patch("aprilcam.camera.camutil.subprocess")
+    @patch("aprilcam.camera.camutil._get_process_name")
     def test_linux_blocking_processes(self, mock_get_name, mock_subprocess, mock_exists, mock_sys):
         mock_sys.platform = "linux"
         mock_exists.return_value = True
@@ -129,8 +129,8 @@ class TestDiagnoseCameraFailureMocked:
         assert result["blocking_processes"][0]["pid"] == 4321
         assert result["blocking_processes"][0]["name"] == "ffmpeg"
 
-    @patch("aprilcam.camutil.sys")
-    @patch("aprilcam.camutil._macos_avfoundation_device_names")
+    @patch("aprilcam.camera.camutil.sys")
+    @patch("aprilcam.camera.camutil._macos_avfoundation_device_names")
     def test_subprocess_failure_no_crash(self, mock_av_names, mock_sys):
         mock_sys.platform = "darwin"
         mock_av_names.side_effect = OSError("ffmpeg not found")

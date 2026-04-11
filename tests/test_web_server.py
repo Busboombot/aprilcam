@@ -2,7 +2,7 @@
 
 import pytest
 from starlette.testclient import TestClient
-from aprilcam.web_server import create_app
+from aprilcam.server.web_server import create_app
 
 
 @pytest.fixture
