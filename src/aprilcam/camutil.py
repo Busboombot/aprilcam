@@ -137,9 +137,6 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
         av_names = _macos_avfoundation_device_names()
     for idx in range(max_index):
         for be in list(backends):
-            # Skip overly chatty/invalid indices for AVFoundation, but allow CAP_ANY for >2 to support multiple cams.
-            if sys.platform == "darwin" and be == getattr(cv, "CAP_AVFOUNDATION", 1200) and idx >= 2:
-                continue
             # If this backend has too many consecutive failures, skip further attempts to reduce noise
             if backend_failures.get(be, 0) >= max(1, int(stop_after_failures)) and idx > 1:
                 continue
@@ -170,11 +167,26 @@ def list_cameras(max_index: int = 10, backends: Optional[List[int]] = None, stop
 def get_device_name(index: int) -> str:
     """Return the OS-reported device name for a camera index.
 
-    Uses ``list_cameras(detailed_names=True)`` with a full enumeration
-    (max_index=10) so the ffmpeg-to-OpenCV index mapping is consistent
-    regardless of which index is queried. Falls back to
-    ``"camera-{index}"`` if the name cannot be determined.
+    Uses ``cv2-enumerate-cameras`` to get the correct AVFoundation
+    device name for an OpenCV camera index.  The library returns
+    indices in the form ``backend_offset + device_index`` (e.g. 1200,
+    1201, 1202 for AVFoundation), which maps directly to OpenCV
+    indices 0, 1, 2 when using CAP_AVFOUNDATION.
+
+    Falls back to ``"camera-{index}"`` if the name cannot be determined.
     """
+    try:
+        from cv2_enumerate_cameras import enumerate_cameras
+        avf_offset = getattr(cv, "CAP_AVFOUNDATION", 1200)
+        target = avf_offset + index
+        for cam in enumerate_cameras():
+            if cam.index == target:
+                return cam.name
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # Fallback: try the ffmpeg-based enumeration
     try:
         cams = list_cameras(max_index=10, quiet=True, detailed_names=True)
         for c in cams:

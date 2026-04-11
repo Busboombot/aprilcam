@@ -5,7 +5,9 @@
       "mcp__aprilcam__list_cameras",
       "mcp__clasi__list_tickets",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:17439/mcp/sse)",
-      "Bash(aprilcam web:*)"
+      "Bash(aprilcam web:*)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)"
     ]
   },
   "hooks": {

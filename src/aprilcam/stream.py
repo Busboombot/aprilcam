@@ -335,23 +335,29 @@ def detect_objects(
 
 
 def calibrate(
-    bw_camera: int | str = 3,
-    color_camera: int | str = 2,
+    camera: int | str | None = None,
+    bw_camera: int | str | None = None,
+    color_camera: int | str | None = None,
     field_width_cm: float = 101.0,
     field_height_cm: float = 89.0,
     output: str | Path = "data/calibration.json",
     num_frames: int = 30,
 ) -> Path:
-    """Run joint calibration on two cameras and save to data/calibration.json.
+    """Run calibration on one or two cameras and save to data/calibration.json.
 
-    Opens both cameras, detects all ArUco + AprilTag markers as shared
-    reference points, computes homography for both cameras (with barrel
-    distortion correction on the color camera if enough points), and
-    saves everything to a single calibration file.
+    Single-camera mode (provide *camera*):
+        Opens one camera, detects ArUco corners and AprilTags, computes
+        homography (with optional distortion correction).
+
+    Two-camera mode (provide *bw_camera* and *color_camera*):
+        Opens both cameras, uses the B&W camera as the primary reference
+        and cross-calibrates the color camera.
 
     Args:
-        bw_camera: B&W camera index or name pattern.
-        color_camera: Color camera index or name pattern.
+        camera: Single camera index or name pattern. Use this for
+            single-camera calibration.
+        bw_camera: B&W camera index or name pattern (two-camera mode).
+        color_camera: Color camera index or name pattern (two-camera mode).
         field_width_cm: Playfield width between ArUco corners.
         field_height_cm: Playfield height between ArUco corners.
         output: Path to save the calibration file.
@@ -360,6 +366,53 @@ def calibrate(
     Returns:
         Path to the saved calibration file.
     """
+    import json as _json
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Single-camera mode
+    if camera is not None:
+        from .homography import calibrate_single, save_calibration
+
+        cam_index = _resolve_camera_index(camera)
+        cap = cv.VideoCapture(cam_index)
+        try:
+            for _ in range(10):
+                cap.read()
+            cal = calibrate_single(
+                cap,
+                field_width_cm=field_width_cm,
+                field_height_cm=field_height_cm,
+                num_frames=num_frames,
+                camera_index=cam_index,
+            )
+        finally:
+            cap.release()
+
+        cal_data = {
+            "type": "playfield",
+            "field_width_cm": field_width_cm,
+            "field_height_cm": field_height_cm,
+            "cameras": {
+                cal.device_name: cal.to_dict(),
+            },
+        }
+        out_path.write_text(_json.dumps(cal_data, indent=2))
+
+        print(f"Calibration saved to {out_path}")
+        print(f"  Camera: {cal.device_name} {cal.resolution}, {cal.tags_used} tags, RMS {cal.rms_error:.6f}")
+        if cal.dist_coeffs is not None:
+            print(f"  Barrel distortion correction: yes")
+        return out_path
+
+    # Two-camera mode (legacy)
+    if bw_camera is None or color_camera is None:
+        raise ValueError(
+            "Provide either 'camera' for single-camera calibration, "
+            "or both 'bw_camera' and 'color_camera' for two-camera calibration."
+        )
+
     from .homography import calibrate_joint, save_calibration
 
     bw_index = _resolve_camera_index(bw_camera)
@@ -369,7 +422,6 @@ def calibrate(
     color_cap = cv.VideoCapture(color_index)
 
     try:
-        # Warm up
         for _ in range(10):
             bw_cap.read()
         for _ in range(5):
@@ -387,9 +439,6 @@ def calibrate(
         bw_cap.release()
         color_cap.release()
 
-    out_path = Path(output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
     cal_data = {
         "type": "playfield",
         "field_width_cm": field_width_cm,
@@ -400,12 +449,11 @@ def calibrate(
         },
     }
     out_path.write_text(_json.dumps(cal_data, indent=2))
-    path = out_path
 
-    print(f"Calibration saved to {path}")
+    print(f"Calibration saved to {out_path}")
     print(f"  B&W:   {bw_cal.device_name} {bw_cal.resolution}, {bw_cal.tags_used} tags, RMS {bw_cal.rms_error:.2f}cm")
     print(f"  Color: {color_cal.device_name} {color_cal.resolution}, {color_cal.tags_used} tags, RMS {color_cal.rms_error:.2f}")
     if color_cal.dist_coeffs is not None:
         print(f"  Barrel distortion correction: yes")
 
-    return path
+    return out_path

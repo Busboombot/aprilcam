@@ -163,6 +163,8 @@ class DetectionEntry:
     ring_buffer: RingBuffer
     aprilcam: AprilCam
     operations: list[str] = field(default_factory=lambda: ["detect_tags"])
+    robot_tag_id: Optional[int] = None
+    gripper_offset_cm: float = 14.0
 
 
 detection_registry: dict[str, DetectionEntry] = {}
@@ -645,6 +647,8 @@ def _handle_start_detection(
     detect_interval: int = 1,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> dict:
     """Core logic for start_detection — returns status dict or error dict."""
     try:
@@ -733,6 +737,8 @@ def _handle_start_detection(
             loop=loop,
             ring_buffer=buf,
             aprilcam=cam,
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
         # Remember state so stop_detection can re-open the shared camera
         detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
@@ -776,6 +782,45 @@ def _handle_stop_detection(source_id: str) -> dict:
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _compute_gripper_world_xy(
+    tag_dict: dict,
+    homography: Optional[np.ndarray],
+    offset_cm: float = 14.0,
+) -> Optional[list[float]]:
+    """Compute the gripper position in world coords for a robot tag.
+
+    Returns [x, y] in world units, or None if homography is unavailable
+    or the geometry is degenerate.
+    """
+    if homography is None or homography.size != 9:
+        return None
+    try:
+        cx, cy = tag_dict["center_px"]
+        corners = tag_dict["corners_px"]
+        top_mid_px = [
+            (corners[0][0] + corners[1][0]) * 0.5,
+            (corners[0][1] + corners[1][1]) * 0.5,
+        ]
+        # Map center and top-mid to world coords
+        cvec = np.array([cx, cy, 1.0])
+        cw = homography @ cvec
+        cw_xy = np.array([cw[0] / cw[2], cw[1] / cw[2]])
+
+        tvec = np.array([top_mid_px[0], top_mid_px[1], 1.0])
+        tw = homography @ tvec
+        tw_xy = np.array([tw[0] / tw[2], tw[1] / tw[2]])
+
+        w_dir = tw_xy - cw_xy
+        w_norm = float(np.linalg.norm(w_dir))
+        if w_norm < 1e-6:
+            return None
+        w_unit = w_dir / w_norm
+        gripper = cw_xy + w_unit * offset_cm
+        return [float(gripper[0]), float(gripper[1])]
+    except Exception:
+        return None
+
+
 def _handle_get_tags(source_id: str) -> dict:
     """Core logic for get_tags — returns tag data dict or error dict."""
     try:
@@ -789,6 +834,21 @@ def _handle_get_tags(source_id: str) -> dict:
 
         result = latest.to_dict()
         result["source_id"] = source_id
+
+        # Add gripper position for the robot tag if configured
+        if entry.robot_tag_id is not None:
+            homography = None
+            try:
+                pf_entry = playfield_registry.get(source_id)
+                homography = pf_entry.homography
+            except KeyError:
+                pass
+            for tag in result.get("tags", []):
+                if tag["id"] == entry.robot_tag_id:
+                    tag["gripper_world_xy"] = _compute_gripper_world_xy(
+                        tag, homography, offset_cm=entry.gripper_offset_cm
+                    )
+
         return result
     except Exception as exc:
         return {"error": f"Unexpected error: {exc}"}
@@ -857,6 +917,17 @@ def _handle_get_objects(source_id: str) -> dict:
             gray, homography=homography, tag_corners=tag_corners,
             playfield_polygon=pf_poly,
         )
+
+        # Color classify each object using the color frame
+        from aprilcam.color_classifier import ColorClassifier
+        from dataclasses import replace as _replace
+        classifier = ColorClassifier()
+        colored = []
+        for obj in objects:
+            cx, cy = obj.center_px
+            c = classifier.classify_at_point(frame, cx, cy)
+            colored.append(_replace(obj, color=c))
+        objects = colored
 
         return {
             "source_id": source_id,
@@ -1094,6 +1165,8 @@ def _handle_start_live_view(
     proc_width: int = 0,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> dict:
     """Core logic for start_live_view — returns status dict or error dict."""
     try:
@@ -1162,6 +1235,8 @@ def _handle_start_live_view(
             proc_width=proc_width,
             use_clahe=use_clahe,
             use_sharpen=use_sharpen,
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
         proc.start(on_frame=on_frame)
 
@@ -1866,6 +1941,8 @@ async def start_detection(
     detect_interval: int = 1,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> list[TextContent]:
     """Start a persistent tag detection loop on a camera or playfield.
 
@@ -1880,6 +1957,10 @@ async def start_detection(
         detect_interval: Run detection every N frames (default 1).
         use_clahe: Apply CLAHE contrast enhancement before detection.
         use_sharpen: Apply sharpening before detection.
+        robot_tag_id: Tag ID of the robot. When set, ``get_tags`` includes
+            a ``gripper_world_xy`` field on this tag's record.
+        gripper_offset_cm: Distance from the robot tag center to the gripper
+            center, in cm along the tag's forward direction (default 14.0).
 
     Returns:
         On success: ``{"source_id": "<id>", "status": "started"}``.
@@ -1888,7 +1969,8 @@ async def start_detection(
     result = _handle_start_detection(
         source_id, family=family, proc_width=proc_width,
         detect_interval=detect_interval, use_clahe=use_clahe,
-        use_sharpen=use_sharpen,
+        use_sharpen=use_sharpen, robot_tag_id=robot_tag_id,
+        gripper_offset_cm=gripper_offset_cm,
     )
     return [TextContent(type="text", text=json.dumps(result))]
 
@@ -1914,6 +1996,8 @@ async def stream_tags(
     operations: list[str] | None = None,
     family: str = "36h11",
     proc_width: int = 0,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> list[TextContent]:
     """Start continuous tag detection on a camera or playfield with a fixed operation pipeline.
 
@@ -1929,6 +2013,10 @@ async def stream_tags(
             Defaults to ``["detect_tags"]``.
         family: AprilTag family (default ``"36h11"``).
         proc_width: Processing width in pixels; 0 means no downscale.
+        robot_tag_id: Tag ID of the robot. When set, ``get_tags`` includes
+            a ``gripper_world_xy`` field on this tag's record.
+        gripper_offset_cm: Distance from the robot tag center to the gripper
+            center, in cm along the tag's forward direction (default 14.0).
 
     Returns:
         On success: ``{"stream_id": "<id>", "operations": [...], "status": "started"}``.
@@ -2027,6 +2115,8 @@ async def stream_tags(
             ring_buffer=buf,
             aprilcam=cam,
             operations=list(operations),
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
         detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
         detection_registry[source_id]._camera_index = camera_index  # type: ignore[attr-defined]
@@ -2481,6 +2571,8 @@ async def start_live_view(
     proc_width: int = 0,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> list[TextContent]:
     """Open a live visualization window with tag detection overlays.
 
@@ -2491,6 +2583,7 @@ async def start_live_view(
     - Yellow arrow showing velocity vector
     - Red tag ID number centered on the tag
     - White playfield outline
+    - Blue circle at the gripper position (if robot_tag_id is set)
 
     Detection data also feeds into a ring buffer accessible via
     ``get_tags`` and ``get_tag_history`` using the returned view_id.
@@ -2502,6 +2595,12 @@ async def start_live_view(
         proc_width: Processing width for detection downscale (0 = full).
         use_clahe: Apply CLAHE contrast enhancement before detection.
         use_sharpen: Apply sharpening before detection.
+        robot_tag_id: Tag ID of the robot. When set, a blue circle is
+            drawn forward from this tag along its orientation to indicate
+            the gripper center position.
+        gripper_offset_cm: Distance from the robot tag center to the
+            gripper center, in cm along the tag's forward direction
+            (default 14.0).
 
     Returns:
         On success: ``{"view_id": "<id>", "status": "started"}``.
@@ -2510,6 +2609,7 @@ async def start_live_view(
     result = _handle_start_live_view(
         camera_id, deskew=deskew, family=family, proc_width=proc_width,
         use_clahe=use_clahe, use_sharpen=use_sharpen,
+        robot_tag_id=robot_tag_id, gripper_offset_cm=gripper_offset_cm,
     )
     return [TextContent(type="text", text=json.dumps(result))]
 

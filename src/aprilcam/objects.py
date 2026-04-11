@@ -45,24 +45,27 @@ class FrameResult(list):
 class SquareDetector:
     """Detect square-ish bright contours on a dark playfield.
 
-    Uses simple binary thresholding (not adaptive) because the playfield
-    is a known dark surface with bright objects.  Filters by area, aspect
-    ratio, solidity, and optional playfield polygon containment.
+    Applies a high-pass filter to remove low-frequency illumination
+    gradients (glare, uneven lighting), then binary-thresholds the
+    result.  Filters by area, aspect ratio, solidity, and optional
+    playfield polygon containment.
     """
 
     def __init__(
         self,
-        min_area: int = 80,
+        min_area: int = 200,
         max_area: int = 800,
-        threshold: int = 120,
+        threshold: int = 150,
         tag_margin: float = 1.8,
-        border_margin: int = 40,
+        border_margin: int = 50,
+        highpass_ksize: int = 51,
     ):
         self.min_area = min_area
         self.max_area = max_area
         self.threshold = threshold
         self.tag_margin = tag_margin  # expand tag exclusion zones by this factor
         self.border_margin = border_margin  # pixels inset from playfield edge
+        self.highpass_ksize = highpass_ksize
         # Persistent tag positions for exclusion across frames
         self._known_tag_corners: dict[int, np.ndarray] = {}
 
@@ -102,8 +105,14 @@ class SquareDetector:
             List of :class:`ObjectRecord` for each detected square-like
             contour.
         """
-        # Simple binary threshold — bright objects on dark playfield.
-        _, thresh = cv.threshold(gray, self.threshold, 255, cv.THRESH_BINARY)
+        # High-pass filter removes illumination gradients (glare, uneven
+        # lighting) so cubes stand out regardless of where they sit on the
+        # playfield.  Re-center around 128 so the threshold is intensity-
+        # independent.
+        k = self.highpass_ksize
+        blur_lp = cv.GaussianBlur(gray, (k, k), 0)
+        hp = cv.add(cv.subtract(gray, blur_lp), 128)
+        _, thresh = cv.threshold(hp, self.threshold, 255, cv.THRESH_BINARY)
         # Light morphological open to remove specks.
         kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
         thresh = cv.morphologyEx(thresh, cv.MORPH_OPEN, kernel)

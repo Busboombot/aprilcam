@@ -59,6 +59,14 @@ def main(argv: list[str] | None = None) -> int:
         "--color-camera", type=int, default=None,
         help="Color camera index for object color classification (used with [d] key)",
     )
+    parser.add_argument(
+        "--robot-tag", type=int, default=None,
+        help="Tag ID of the robot; draws a blue gripper circle forward along orientation",
+    )
+    parser.add_argument(
+        "--gripper-offset", type=float, default=14.0,
+        help="Distance from robot tag center to gripper center in cm (default: 14.0)",
+    )
     args = parser.parse_args(argv)
 
     import json
@@ -130,5 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         use_sharpen=args.sharpen,
         homography=homography,
         color_camera=args.color_camera,
+        robot_tag_id=args.robot_tag,
+        gripper_offset_cm=args.gripper_offset,
     )
     return 0

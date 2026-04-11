@@ -266,6 +266,112 @@ ARUCO_CORNER_WORLD: Dict[int, Tuple[float, float]] = {
 }
 
 
+def calibrate_single(
+    cap: cv.VideoCapture,
+    field_width_cm: float = 101.0,
+    field_height_cm: float = 89.0,
+    num_frames: int = 30,
+    correct_distortion: bool = True,
+    camera_index: int = 0,
+) -> CameraCalibration:
+    """Calibrate a single camera using ArUco corners and AprilTags.
+
+    Detects ArUco 4x4 corner markers (known world positions) and all
+    AprilTags visible in the frame.  Computes homography from the 4
+    ArUco corners, then refines using all detected tags.  Optionally
+    estimates lens distortion if enough points are available.
+
+    Args:
+        cap: Open VideoCapture for the camera.
+        field_width_cm: Playfield width between ArUco corners in cm.
+        field_height_cm: Playfield height between ArUco corners in cm.
+        num_frames: Frames to accumulate for tag detection.
+        correct_distortion: Attempt barrel distortion correction.
+        camera_index: Camera index (for device name lookup).
+
+    Returns:
+        CameraCalibration for the camera.
+    """
+    corner_world = {
+        -1: (0.0, 0.0),
+        -2: (field_width_cm, 0.0),
+        -3: (0.0, field_height_cm),
+        -4: (field_width_cm, field_height_cm),
+    }
+
+    tags = detect_all_tags(cap, num_frames)
+
+    cam_w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+    cam_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+
+    # Homography from ArUco corners
+    corner_pixels = []
+    corner_worlds = []
+    for neg_id, world_xy in corner_world.items():
+        if neg_id in tags:
+            corner_pixels.append(tags[neg_id])
+            corner_worlds.append(world_xy)
+
+    if len(corner_pixels) < 4:
+        raise RuntimeError(
+            f"Camera: only {len(corner_pixels)} ArUco corners found, need 4"
+        )
+
+    pixel_pts = np.array(corner_pixels, dtype=np.float32)
+    world_pts = np.array(corner_worlds, dtype=np.float32)
+    H = compute_homography(pixel_pts, world_pts)
+
+    # Compute world positions for AprilTags using corner-based homography
+    all_px = list(corner_pixels)
+    all_wp = list(corner_worlds)
+    for tid, px in tags.items():
+        if tid > 0:  # AprilTag (positive ID)
+            vec = H @ np.array([px[0], px[1], 1.0])
+            world_xy = (float(vec[0] / vec[2]), float(vec[1] / vec[2]))
+            all_px.append(px)
+            all_wp.append(world_xy)
+
+    all_pixel = np.array(all_px, dtype=np.float32)
+    all_world = np.array(all_wp, dtype=np.float32)
+    n_pts = len(all_px)
+
+    # Optionally correct barrel distortion
+    camera_matrix = None
+    dist_coeffs = None
+
+    if correct_distortion and n_pts >= 6:
+        obj_pts_3d = np.zeros((n_pts, 1, 3), dtype=np.float32)
+        obj_pts_3d[:, 0, :2] = all_world
+        img_pts = all_pixel.reshape(n_pts, 1, 2)
+
+        _rms, camera_matrix, dist_coeffs, _rvecs, _tvecs = cv.calibrateCamera(
+            [obj_pts_3d], [img_pts], (cam_w, cam_h), None, None
+        )
+        dist_coeffs = dist_coeffs.flatten()
+
+        undist_pts = cv.undistortPoints(
+            all_pixel.reshape(-1, 1, 2), camera_matrix, dist_coeffs, P=camera_matrix
+        ).reshape(-1, 2)
+        H = compute_homography(undist_pts, all_world)
+    elif n_pts > 4:
+        # Recompute with all points for better accuracy
+        H = compute_homography(all_pixel, all_world)
+
+    rms = _reprojection_rms(H, all_pixel, all_world)
+
+    from .camutil import get_device_name
+
+    return CameraCalibration(
+        device_name=get_device_name(camera_index),
+        resolution=(cam_w, cam_h),
+        homography=H,
+        camera_matrix=camera_matrix,
+        dist_coeffs=dist_coeffs,
+        tags_used=n_pts,
+        rms_error=rms,
+    )
+
+
 def calibrate_joint(
     bw_cap: cv.VideoCapture,
     color_cap: cv.VideoCapture,

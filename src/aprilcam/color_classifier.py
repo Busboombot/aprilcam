@@ -7,17 +7,18 @@ import numpy as np
 
 from .objects import ObjectRecord
 
-# HSV ranges tuned from real camera data (HD USB CAMERA, overhead lighting).
+# HSV ranges tuned from Brio 501 camera under overhead lighting.
 # OpenCV HSV: H=0-180, S=0-255, V=0-255.
 # Ranges are non-overlapping in H to avoid misclassification.
-# S/V minimums are set low (30) to catch washed-out cubes at playfield edges.
+# S minimum is set to 30 to catch washed-out cubes (Brio 501 produces
+# low-saturation colors on dark playfields, with S as low as ~35-40).
 DEFAULT_COLOR_RANGES: dict[str, list[tuple[tuple[int, ...], tuple[int, ...]]]] = {
-    "red": [((0, 50, 50), (8, 255, 255)), ((165, 50, 50), (180, 255, 255))],
-    "orange": [((8, 50, 50), (18, 255, 255))],
-    "yellow": [((18, 50, 50), (35, 255, 255))],
-    "green": [((35, 50, 50), (85, 255, 255))],
-    "blue": [((85, 50, 50), (130, 255, 255))],
-    "purple": [((130, 30, 50), (165, 255, 255))],
+    "red": [((0, 30, 50), (8, 255, 255)), ((165, 30, 50), (180, 255, 255))],
+    "orange": [((8, 30, 50), (22, 255, 255))],
+    "yellow": [((22, 30, 50), (35, 255, 255))],
+    "green": [((35, 30, 50), (85, 255, 255))],
+    "blue": [((85, 30, 50), (125, 255, 255))],
+    "purple": [((125, 30, 50), (165, 255, 255))],
 }
 
 
@@ -105,6 +106,9 @@ class ColorClassifier:
     ) -> str:
         """Classify the dominant color at a point.
 
+        Uses a tight center crop and filters to bright, saturated pixels
+        to avoid background contamination from the dark playfield.
+
         Args:
             frame_bgr: BGR uint8 image.
             x: X coordinate of the query point.
@@ -115,18 +119,28 @@ class ColorClassifier:
             Color name or ``"unknown"``.
         """
         h_img, w_img = frame_bgr.shape[:2]
-        x1 = max(0, int(x - radius))
-        y1 = max(0, int(y - radius))
-        x2 = min(w_img, int(x + radius))
-        y2 = min(h_img, int(y + radius))
+        # Use a tight radius to focus on the cube face
+        r = min(radius, 10)
+        x1 = max(0, int(x - r))
+        y1 = max(0, int(y - r))
+        x2 = min(w_img, int(x + r))
+        y2 = min(h_img, int(y + r))
         if x2 <= x1 or y2 <= y1:
             return "unknown"
 
         roi = frame_bgr[y1:y2, x1:x2]
         hsv_roi = cv.cvtColor(roi, cv.COLOR_BGR2HSV)
-        total_pixels = hsv_roi.shape[0] * hsv_roi.shape[1]
-        if total_pixels == 0:
-            return "unknown"
+
+        # Only consider bright, saturated pixels (the actual cube face,
+        # not dark playfield background bleeding into the ROI).
+        bright_sat_mask = (hsv_roi[:, :, 1] > 40) & (hsv_roi[:, :, 2] > 80)
+        n_valid = int(np.count_nonzero(bright_sat_mask))
+        if n_valid < 5:
+            # Fall back to all pixels with lower threshold
+            bright_sat_mask = hsv_roi[:, :, 1] > 25
+            n_valid = int(np.count_nonzero(bright_sat_mask))
+            if n_valid < 5:
+                return "unknown"
 
         best_color = "unknown"
         best_pct = 0.10  # minimum 10% threshold
@@ -139,7 +153,9 @@ class ColorClassifier:
                     np.array(lo, dtype=np.uint8),
                     np.array(hi, dtype=np.uint8),
                 )
-            pct = float(np.count_nonzero(mask)) / total_pixels
+            # Count only within bright+saturated pixels
+            match_count = int(np.count_nonzero(mask & bright_sat_mask.astype(np.uint8)))
+            pct = float(match_count) / n_valid
             if pct > best_pct:
                 best_pct = pct
                 best_color = color_name
