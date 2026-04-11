@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from aprilcam.taggen import parse_ids, render_tag, generate_pdf
+from aprilcam.tags.taggen import parse_ids, render_tag, generate_pdf
 
 
 class TestParseIds:
@@ -62,7 +62,7 @@ class TestGeneratePdf:
 
 class TestCliPngMode:
     def test_png_output(self, tmp_path):
-        from aprilcam.taggen import main
+        from aprilcam.tags.taggen import main
 
         out_dir = tmp_path / "pngs"
         rc = main(["0-2", "--png", "-o", str(out_dir)])
@@ -71,7 +71,7 @@ class TestCliPngMode:
         assert len(pngs) == 3
 
     def test_aruco_png_output(self, tmp_path):
-        from aprilcam.taggen import main
+        from aprilcam.tags.taggen import main
 
         out_dir = tmp_path / "aruco_pngs"
         rc = main(["-A", "0-1", "--png", "-o", str(out_dir)])
