@@ -18,6 +18,27 @@ from .models import AprilTag as AprilTagModel
 from .display import PlayfieldDisplay
 
 
+_OBJECT_COLOR_BGR = {
+    "red": (0, 0, 255), "green": (0, 200, 0), "blue": (255, 0, 0),
+    "yellow": (0, 255, 255), "orange": (0, 165, 255),
+    "purple": (255, 0, 255), "unknown": (200, 200, 200),
+}
+
+
+def _draw_object_boxes(frame: np.ndarray, objects: list) -> None:
+    """Draw persistent object detection overlays on a frame."""
+    for obj in objects:
+        x, y, w, h = obj.bbox
+        bgr = _OBJECT_COLOR_BGR.get(obj.color, (200, 200, 200))
+        cv.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
+        cv.putText(frame, obj.color, (x, y - 5),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.5, bgr, 1, cv.LINE_AA)
+        if obj.world_xy:
+            coord = f"({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})"
+            cv.putText(frame, coord, (x, y + h + 15),
+                       cv.FONT_HERSHEY_SIMPLEX, 0.4, bgr, 1, cv.LINE_AA)
+
+
 class AprilCam:
     def __init__(
         self,
@@ -32,7 +53,7 @@ class AprilCam:
         quad_sigma: float = 0.0,
         corner_refine: str = "subpix",
         detect_inverted: bool = True,
-        detect_interval: int = 1,
+        detect_interval: int = 3,
         use_clahe: bool = False,
         use_sharpen: bool = False,
         use_highpass: bool = True,
@@ -47,6 +68,8 @@ class AprilCam:
         deskew_overlay: bool = False,
         detect_aruco_4x4: bool = False,
         playfield_poly_init: Optional[np.ndarray] = None,
+        robot_tag_id: Optional[int] = None,
+        gripper_offset_cm: float = 14.0,
     ) -> None:
         """Initialize the AprilCam controller.
 
@@ -100,12 +123,22 @@ class AprilCam:
         self.homography = homography
         self.headless = bool(headless)
         self.deskew_overlay = bool(deskew_overlay)
+        try:
+            from .camutil import get_device_name
+            self.camera_name: str = get_device_name(index)
+        except Exception:
+            self.camera_name = f"camera-{index}"
         self.play_poly: Optional[np.ndarray] = None
         if playfield_poly_init is not None and isinstance(playfield_poly_init, np.ndarray) and playfield_poly_init.shape == (4, 2):
             self.play_poly = playfield_poly_init.astype(np.float32)
 
         # Cached state
         self.detectors = self._build_detectors()
+        # Pre-build ArucoDetector objects once (avoid per-frame construction)
+        self._cached_detectors = [
+            (cv.aruco.ArucoDetector(d, p), fam)
+            for d, p, fam in self.detectors
+        ]
         self.playfield = Playfield(
             proc_width=self.proc_width or 960,
             detect_inverted=False,
@@ -117,6 +150,8 @@ class AprilCam:
             window_name=self.window,
             headless=self.headless,
             deskew_overlay=self.deskew_overlay,
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
 
         # Tracking state (initialized by reset_state)
@@ -129,8 +164,7 @@ class AprilCam:
         # EMA state for TUI display smoothing
         self._ema: dict[int, dict[str, float]] = {}
         self._ema_alpha: float = 0.05  # smoothing factor (lower = smoother)
-        self._tui_initialized: bool = False
-        self._tui_last_ids: set[int] = set()
+        self._tui_live: Optional[Any] = None  # Rich Live instance
 
     def reset_state(self) -> None:
         """Reset all tracking state to initial values."""
@@ -140,8 +174,7 @@ class AprilCam:
         self._tag_models = {}
         self._frame_idx = 0
         self._ema = {}
-        self._tui_initialized = False
-        self._tui_last_ids = set()
+        self._tui_live = None
 
     def _ema_smooth(self, tag_id: int, key: str, value: float) -> float:
         """Apply exponential moving average to a value for a given tag/key."""
@@ -155,25 +188,27 @@ class AprilCam:
             state[key] = alpha * value + (1.0 - alpha) * state[key]
         return state[key]
 
-    def _print_tui(self, tag_records: list, has_world: bool) -> None:
-        """Print a fixed-position TUI table of tag data with EMA smoothing."""
-        import sys
+    def _build_tui_layout(self, tag_records: list, has_world: bool, pipe_mode: str = "color", fps: float = 0.0):
+        """Build a Rich Layout with tag table and status panel."""
+        from rich.table import Table
+        from rich.columns import Columns
 
-        # Build smoothed rows sorted by tag ID
-        rows = []
-        for tr in sorted(tag_records, key=lambda t: t.id):
+        current_ids: set[int] = set()
+        rows: dict[int, dict] = {}
+
+        for tr in tag_records:
             tag_id = tr.id
+            current_ids.add(tag_id)
             cx = self._ema_smooth(tag_id, "cx", float(tr.center_px[0]))
             cy = self._ema_smooth(tag_id, "cy", float(tr.center_px[1]))
-            ori_raw = math.degrees(tr.orientation_yaw)
-            ori = self._ema_smooth(tag_id, "ori", ori_raw)
+            ori = self._ema_smooth(tag_id, "ori", math.degrees(tr.orientation_yaw))
             spd_raw = float(tr.speed_px) if tr.speed_px is not None else 0.0
             spd = self._ema_smooth(tag_id, "spd", spd_raw)
             vx, vy = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
             vang_raw = math.degrees(math.atan2(vy, vx)) if (vx != 0.0 or vy != 0.0) else 0.0
             vang = self._ema_smooth(tag_id, "vang", vang_raw)
 
-            row = {"id": tag_id, "cx": cx, "cy": cy, "ori": ori, "spd": spd, "vang": vang}
+            row = {"id": tag_id, "cx": cx, "cy": cy, "ori": ori, "spd": spd, "vang": vang, "visible": True}
 
             if has_world:
                 H = self.homography
@@ -181,50 +216,124 @@ class AprilCam:
                 vec = np.array([u, v, 1.0], dtype=float)
                 Xw = H @ vec
                 if abs(Xw[2]) > 1e-6:
-                    wx = self._ema_smooth(tag_id, "wx", Xw[0] / Xw[2])
-                    wy = self._ema_smooth(tag_id, "wy", Xw[1] / Xw[2])
-                    row["wx"] = wx
-                    row["wy"] = wy
+                    row["wx"] = self._ema_smooth(tag_id, "wx", Xw[0] / Xw[2])
+                    row["wy"] = self._ema_smooth(tag_id, "wy", Xw[1] / Xw[2])
 
-            rows.append(row)
+            rows[tag_id] = row
 
-        current_ids = {r["id"] for r in rows}
-
-        # Prune EMA state for tags no longer visible
-        for old_id in list(self._ema.keys()):
+        for old_id, ema_data in self._ema.items():
             if old_id not in current_ids:
-                del self._ema[old_id]
+                row = {
+                    "id": old_id,
+                    "cx": ema_data.get("cx", 0), "cy": ema_data.get("cy", 0),
+                    "ori": ema_data.get("ori", 0), "spd": 0.0, "vang": 0.0,
+                    "visible": False,
+                }
+                if "wx" in ema_data:
+                    row["wx"] = ema_data["wx"]
+                if "wy" in ema_data:
+                    row["wy"] = ema_data["wy"]
+                rows[old_id] = row
 
-        # Build output lines
-        header = f"{'ID':>4s}  {'CX':>6s}  {'CY':>6s}  {'ORI':>8s}  {'SPEED':>8s}  {'VANG':>8s}"
+        sorted_rows = sorted(rows.values(), key=lambda r: r["id"])
+
+        # --- Tag table ---
+        table = Table(title="Tags", border_style="blue", title_style="bold cyan")
+        table.add_column("ID", justify="right", style="cyan", width=4)
+        table.add_column("CX", justify="right", width=7)
+        table.add_column("CY", justify="right", width=7)
+        table.add_column("ORI", justify="right", width=8)
+        table.add_column("SPD", justify="right", width=8)
         if has_world:
-            header += f"  {'WX':>8s}  {'WY':>8s}"
+            table.add_column("WX", justify="right", width=8)
+            table.add_column("WY", justify="right", width=8)
 
-        sep = "-" * len(header)
+        for r in sorted_rows:
+            style = "dim" if not r["visible"] else ""
+            cols = [
+                str(r["id"]),
+                f"{r['cx']:.1f}",
+                f"{r['cy']:.1f}",
+                f"{r['ori']:+.1f}°",
+                f"{r['spd']:.1f}",
+            ]
+            if has_world:
+                cols.append(f"{r.get('wx', 0):.1f}" if "wx" in r else "—")
+                cols.append(f"{r.get('wy', 0):.1f}" if "wy" in r else "—")
+            table.add_row(*cols, style=style)
 
-        lines = [sep, header, sep]
-        for r in rows:
-            line = f"{r['id']:4d}  {r['cx']:6.1f}  {r['cy']:6.1f}  {r['ori']:+7.1f}°  {r['spd']:7.1f}  {r['vang']:+7.1f}°"
-            if has_world and "wx" in r:
-                line += f"  {r['wx']:7.1f}cm  {r['wy']:7.1f}cm"
-            lines.append(line)
-        lines.append(sep)
+        # --- Status table (same structure as tag table) ---
+        st = Table(title="Status", border_style="blue", title_style="bold cyan",
+                   show_header=False, min_width=40)
+        st.add_column("Key", style="white", width=14)
+        st.add_column("Value", width=24)
 
-        # Calculate how many lines to clear
-        total_lines = len(lines)
-        if self._tui_initialized:
-            # Move cursor up to overwrite previous output
-            # Need to account for previous frame's line count
-            prev_count = 4 + len(self._tui_last_ids)  # header(3) + data rows + footer(1)
-            sys.stdout.write(f"\033[{prev_count}A")
+        st.add_row("Camera", self.camera_name)
+        st.add_row("Frame", str(self._frame_idx))
+        st.add_row("FPS", f"{fps:.1f}")
 
-        # Write new content, clearing each line
-        for line in lines:
-            sys.stdout.write(f"\033[2K{line}\n")
+        view_labels = {
+            "color": "0: Color",
+            "gray": "1: Grayscale",
+            "flat": "2: Flattened",
+            "clahe": "3: CLAHE",
+            "flat+clahe": "4: Flat+CLAHE",
+            "threshold": "5: Threshold",
+        }
+        st.add_row("View", f"[cyan]{view_labels.get(pipe_mode, pipe_mode)}[/cyan]")
 
-        sys.stdout.flush()
-        self._tui_initialized = True
-        self._tui_last_ids = current_ids
+        poly = self.playfield.get_polygon()
+        if poly is not None:
+            st.add_row("Playfield", "[green]OK[/green]")
+        else:
+            st.add_row("Playfield", "[red]NO — need ArUco 0-3[/red]")
+
+        if self.deskew_overlay:
+            if self.display.M_deskew is not None:
+                st.add_row("Deskew", "[green]ON[/green]")
+            else:
+                st.add_row("Deskew", "[yellow]waiting[/yellow]")
+
+        if has_world:
+            st.add_row("Homography", "[green]OK[/green]")
+        else:
+            st.add_row("Homography", "[red]NO — no calibration[/red]")
+
+        visible = sorted(r["id"] for r in sorted_rows if r["visible"])
+        missing = sorted(r["id"] for r in sorted_rows if not r["visible"])
+        st.add_row("Visible", f"[green]{visible}[/green]")
+        if missing:
+            st.add_row("Missing", f"[red]{missing}[/red]")
+
+        return Columns([table, st])
+
+    def _print_tui(self, tag_records: list, has_world: bool, pipe_mode: str = "color", fps: float = 0.0) -> None:
+        """Update the Rich Live TUI dashboard."""
+        from rich.live import Live
+        from rich.console import Console
+
+        layout = self._build_tui_layout(tag_records, has_world, pipe_mode=pipe_mode, fps=fps)
+
+        if self._tui_live is None:
+            console = Console()
+            self._tui_live = Live(
+                layout,
+                console=console,
+                refresh_per_second=15,
+                screen=True,
+            )
+            self._tui_live.start()
+        else:
+            self._tui_live.update(layout)
+
+    def _stop_tui(self) -> None:
+        """Stop the Rich Live display if running."""
+        if self._tui_live is not None:
+            try:
+                self._tui_live.stop()
+            except Exception:
+                pass
+            self._tui_live = None
 
     @staticmethod
     def _get_dict_by_family(name: str):
@@ -247,6 +356,11 @@ class AprilCam:
         for f in fams:
             d = cv.aruco.getPredefinedDictionary(self._get_dict_by_family(f))
             p = cv.aruco.DetectorParameters()
+            # Wider adaptive threshold range with smaller steps for robust
+            # detection under uneven illumination / glare.
+            p.adaptiveThreshWinSizeMin = 3
+            p.adaptiveThreshWinSizeMax = 53
+            p.adaptiveThreshWinSizeStep = 4
             p.cornerRefinementMethod = {
                 "none": cv.aruco.CORNER_REFINE_NONE,
                 "contour": cv.aruco.CORNER_REFINE_CONTOUR,
@@ -283,18 +397,25 @@ class AprilCam:
     ) -> np.ndarray:
         """Optionally apply preprocessing to a grayscale image.
 
-        High-pass filtering is on by default — it subtracts a blurred
-        version of the image, removing low-frequency glare gradients
-        while preserving the high-frequency edges that define tags.
+        Illumination flattening is on by default — estimates the low-
+        frequency illumination field via a large Gaussian blur and
+        divides it out.  Because illumination is multiplicative
+        (pixel = reflectance x illumination), division recovers the
+        reflectance: a white tag square under dim light and one under
+        bright glare both come out at the same value.
         """
         out = gray
         if use_highpass:
             k = highpass_ksize
             if k % 2 == 0:
                 k += 1
-            blurred = cv.GaussianBlur(out, (k, k), 0)
-            hp = cv.subtract(out, blurred)
-            out = cv.normalize(hp, None, 0, 255, cv.NORM_MINMAX).astype(np.uint8)
+            # Estimate the low-frequency illumination field
+            illum = cv.GaussianBlur(out, (k, k), 0).astype(np.float32)
+            # Clamp to avoid division by zero in very dark regions
+            illum = np.maximum(illum, 1.0)
+            # Divide out the illumination and rescale to 0-255
+            flat = (out.astype(np.float32) / illum) * 128.0
+            out = np.clip(flat, 0, 255).astype(np.uint8)
         if use_clahe:
             clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             out = clahe.apply(out)
@@ -328,8 +449,8 @@ class AprilCam:
         )
 
         detections: List[Tuple[np.ndarray, np.ndarray, int, str]] = []
-        for d, p, fam in self.detectors:
-            detector = cv.aruco.ArucoDetector(d, p)
+        for det_entry in self._cached_detectors:
+            detector, fam = det_entry
             corners, ids, _rej = detector.detectMarkers(gray)
             if ids is None:
                 continue
@@ -473,15 +594,16 @@ class AprilCam:
             self._tag_models[tid].frame = self._frame_idx
             self.playfield.add_tag(self._tag_models[tid])
 
-        # Prune models not seen recently (>1.5s)
+        # Prune models not seen for >1 second
         seen_ids = {tid for _pts, _r, tid, _fam in detections}
+        stale_cutoff = 1.0  # seconds
         for tid in list(self._tag_models.keys()):
             if (tid not in seen_ids
                     and self._tag_models[tid].last_ts is not None
-                    and (timestamp - float(self._tag_models[tid].last_ts)) > 1.5):
+                    and (timestamp - float(self._tag_models[tid].last_ts)) > stale_cutoff):
                 del self._tag_models[tid]
 
-        # Build TagRecord objects — velocity is now computed by Playfield.add_tag()
+        # Build TagRecord objects for CURRENT detections (age=0)
         tag_records: List[TagRecord] = []
         flows = self.playfield.get_flows()
         for pts, _raw, tid, _fam in detections:
@@ -502,16 +624,49 @@ class AprilCam:
                 heading_rad=None,
                 timestamp=timestamp,
                 frame_index=self._frame_idx,
+                age=0.0,
             )
             tag_records.append(tr)
+
+        # Add STALE tags (not seen this frame but seen within stale_cutoff)
+        for tid, model in self._tag_models.items():
+            if tid not in seen_ids and model.last_ts is not None:
+                age = timestamp - float(model.last_ts)
+                flow = flows.get(tid)
+                vel_px_val = flow.vel_px if flow else None
+                speed_px_val = flow.speed_px if flow else None
+                tr = TagRecord.from_apriltag(
+                    model,
+                    vel_px=vel_px_val,
+                    speed_px=speed_px_val,
+                    vel_world=None,
+                    speed_world=None,
+                    heading_rad=None,
+                    timestamp=timestamp,
+                    frame_index=self._frame_idx,
+                    age=age,
+                )
+                tag_records.append(tr)
 
         # Bookkeeping
         self._frame_idx += 1
         self._prev_gray = gray
         return tag_records
 
-    def run(self) -> None:
-        """Main capture/detect/track loop with display and overlays."""
+    def run(self, color_camera: Optional[int] = None) -> None:
+        """Main capture/detect/track loop with display and overlays.
+
+        Args:
+            color_camera: Optional camera index for a color camera.
+                When provided and 'd' is pressed, the color camera is
+                used to classify object colors via HSV thresholding.
+
+        Key bindings:
+            q / Esc — quit
+            Space   — pause / resume
+            d       — run one-shot object detection, draw results (persists)
+            c       — clear object detection overlays
+        """
         cap = self._init_capture()
         if cap is None:
             return
@@ -520,6 +675,49 @@ class AprilCam:
         self.reset_state()
         paused = False
         last_display: Optional[np.ndarray] = None
+        # Persistent object overlays (list of ObjectRecord or None)
+        _detected_objects: list | None = None
+        # Persistent square detector that caches tag positions
+        from aprilcam.objects import SquareDetector as _SD
+        _sq_detector = _SD()
+
+        # Open color camera at startup if specified (avoids USB contention on each 'd')
+        _color_cap = None
+        _color_cal = None
+        if color_camera is not None:
+            _color_cap = cv.VideoCapture(color_camera)
+            if not _color_cap.isOpened():
+                print(f"Warning: color camera {color_camera} failed to open")
+                _color_cap = None
+            else:
+                # Load calibration
+                try:
+                    from aprilcam.homography import load_calibration
+                    all_cals = load_calibration()
+                    for _name, _cal in all_cals.items():
+                        if _cal.dist_coeffs is not None or _cal.resolution[0] > 1280:
+                            _color_cal = _cal
+                            break
+                except Exception:
+                    pass
+
+        # Pipeline view modes — number keys switch the displayed image
+        _PIPE_MODES = {
+            ord("0"): "color",
+            ord("1"): "gray",
+            ord("2"): "flat",
+            ord("3"): "clahe",
+            ord("4"): "flat+clahe",
+            ord("5"): "threshold",
+        }
+        _pipe_mode = "color"
+
+        if not self.headless:
+            print("Keys: [q]uit [space]pause [d]etect [c]lear  Views: [0]color [1]gray [2]hp [3]clahe [4]hp+clahe [5]thresh")
+
+        _fps = 0.0
+        _last_fps_time = time.monotonic()
+        _fps_frame_count = 0
 
         try:
             while True:
@@ -533,15 +731,60 @@ class AprilCam:
                     now = time.monotonic()
                     tag_records = self.process_frame(frame, now)
 
+                    # FPS calculation (smoothed over 1-second windows)
+                    _fps_frame_count += 1
+                    fps_elapsed = now - _last_fps_time
+                    if fps_elapsed >= 1.0:
+                        _fps = _fps_frame_count / fps_elapsed
+                        _fps_frame_count = 0
+                        _last_fps_time = now
+
+                    # Feed tag positions to persistent detector for exclusion cache
+                    if tag_records:
+                        _sq_detector.update_known_tags(tag_records)
+
                     # 6) Optional TUI display (fixed-position, EMA-smoothed)
                     if self.print_tags and tag_records:
-                        self._print_tui(tag_records, has_world=self.homography is not None)
+                        self._print_tui(tag_records, has_world=self.homography is not None, pipe_mode=_pipe_mode, fps=_fps)
 
-                    # 8) Prepare display image and draw overlays
-                    display = self.display.update(frame)
+                    # 7) Build pipeline debug images
+                    gray_img = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                    illum = cv.GaussianBlur(gray_img, (51, 51), 0).astype(np.float32)
+                    illum = np.maximum(illum, 1.0)
+                    flat_img = np.clip((gray_img.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
+                    clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(gray_img)
+                    flat_clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(flat_img)
+                    _, thresh_img = cv.threshold(flat_img, 150, 255, cv.THRESH_BINARY)
+
+                    if _pipe_mode == "color":
+                        view_frame = frame
+                    elif _pipe_mode == "gray":
+                        view_frame = cv.cvtColor(gray_img, cv.COLOR_GRAY2BGR)
+                    elif _pipe_mode == "flat":
+                        view_frame = cv.cvtColor(flat_img, cv.COLOR_GRAY2BGR)
+                    elif _pipe_mode == "clahe":
+                        view_frame = cv.cvtColor(clahe_img, cv.COLOR_GRAY2BGR)
+                    elif _pipe_mode == "flat+clahe":
+                        view_frame = cv.cvtColor(flat_clahe_img, cv.COLOR_GRAY2BGR)
+                    elif _pipe_mode == "threshold":
+                        view_frame = cv.cvtColor(thresh_img, cv.COLOR_GRAY2BGR)
+                    else:
+                        view_frame = frame
+
+                    # 8) Prepare display — playfield detection on raw, display on view
+                    self.display.playfield.update(frame)
+                    self.display._update_deskew(frame)
+                    self.display._ensure_window()
+                    display = self.display.prepare_display(view_frame)
+
                     flows = self.playfield.get_flows()
                     tags_for_overlay = list(flows.values())
-                    self.display.draw_overlays(display if display is not None else frame, tags_for_overlay, homography=self.homography)
+                    self.display.draw_overlays(display if display is not None else view_frame, tags_for_overlay, homography=self.homography)
+
+                    # Draw persistent object overlays if any
+                    if _detected_objects:
+                        _draw_object_boxes(display if display is not None else frame, _detected_objects)
+
                     last_display = display.copy()
                 else:
                     # Paused branch: reuse last display buffer and show a pause overlay
@@ -564,11 +807,95 @@ class AprilCam:
                     if key == ord(' '):
                         paused = not paused
                         continue
+                    if key == ord('d'):
+                        # One-shot object detection + color classification
+                        # Uses joint calibration for world-coord fusion.
+                        try:
+                            from aprilcam.objects import ObjectFuser
+                            from dataclasses import replace as _replace
+
+                            raw_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                            tag_corners = [
+                                np.array(t.corners_px, dtype=np.float32)
+                                for t in tag_records
+                            ] if tag_records else []
+                            pf_poly = self.playfield.get_polygon()
+
+                            _detected_objects = _sq_detector.detect(
+                                raw_gray,
+                                homography=self.homography,
+                                tag_corners=tag_corners,
+                                playfield_polygon=pf_poly,
+                            )
+                            print(f"[d] {len(_detected_objects)} squares on B&W frame")
+
+                            # Color classify BEFORE deskew remap — center_px
+                            # is still in original frame coords at this point.
+                            try:
+                                from aprilcam.color_classifier import ColorClassifier
+                                classifier = ColorClassifier()
+                                colored = []
+
+                                if _color_cap is not None and _color_cal is not None:
+                                    ret_c, cf = _color_cap.read()
+                                    if ret_c and cf is not None:
+                                        cf = _color_cal.undistort(cf)
+                                        H_inv = np.linalg.inv(_color_cal.homography)
+                                        for obj in _detected_objects:
+                                            if obj.world_xy:
+                                                vec = H_inv @ np.array([obj.world_xy[0], obj.world_xy[1], 1.0])
+                                                cpx, cpy = vec[0] / vec[2], vec[1] / vec[2]
+                                                c = classifier.classify_at_point(cf, cpx, cpy)
+                                                colored.append(_replace(obj, color=c))
+                                            else:
+                                                colored.append(obj)
+                                else:
+                                    for obj in _detected_objects:
+                                        cx, cy = obj.center_px
+                                        c = classifier.classify_at_point(frame, cx, cy)
+                                        colored.append(_replace(obj, color=c))
+                                _detected_objects = colored
+                            except Exception:
+                                pass
+
+                            # Map to display coords if deskewed
+                            deskew_M = self.playfield.get_deskew_matrix()
+                            if display is not None and deskew_M is not None:
+                                mapped = []
+                                for obj in _detected_objects:
+                                    cx, cy = obj.center_px
+                                    pt = deskew_M @ np.array([cx, cy, 1.0])
+                                    if abs(pt[2]) > 1e-9:
+                                        ncx, ncy = pt[0] / pt[2], pt[1] / pt[2]
+                                        x, y, w, h = obj.bbox
+                                        mapped.append(_replace(
+                                            obj,
+                                            center_px=(float(ncx), float(ncy)),
+                                            bbox=(int(ncx - w/2), int(ncy - h/2), w, h),
+                                        ))
+                                _detected_objects = mapped
+
+                            n = len(_detected_objects)
+                            print(f"[d] {n} object{'s' if n != 1 else ''} — press [c] to clear")
+                        except Exception as e:
+                            import traceback
+                            print(f"[d] detection failed: {e}")
+                            traceback.print_exc()
+                    if key == ord('c'):
+                        _detected_objects = None
+                    if key in _PIPE_MODES:
+                        _pipe_mode = _PIPE_MODES[key]
                 else:
                     # Headless: small sleep to avoid tight loop
                     time.sleep(0.001)
         finally:
             # Cleanup resources
+            self._stop_tui()
+            try:
+                if _color_cap is not None:
+                    _color_cap.release()
+            except Exception:
+                pass
             try:
                 if self.cap is not None:
                     self.cap.release()

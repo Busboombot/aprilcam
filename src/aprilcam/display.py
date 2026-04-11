@@ -23,12 +23,16 @@ class PlayfieldDisplay:
         window_name: str = "aprilcam",
         headless: bool = False,
         deskew_overlay: bool = False,
+        robot_tag_id: Optional[int] = None,
+        gripper_offset_cm: float = 14.0,
     ) -> None:
         # references and flags
         self.playfield = playfield
         self.window = window_name
         self.headless = bool(headless)
         self.deskew_overlay = bool(deskew_overlay)
+        self.robot_tag_id = robot_tag_id
+        self.gripper_offset_cm = float(gripper_offset_cm)
 
         # perspective (deskew) cache
         self.M_deskew = None
@@ -184,6 +188,33 @@ class PlayfieldDisplay:
                 cx, cy = int(start_map[0]), int(start_map[1])
                 cv.arrowedLine(frame, (cx, cy), end, (0, 255, 255), 2, tipLength=0.12)
                 cv.circle(frame, (cx, cy), 4, (0, 255, 255), -1)
+            # Gripper position: 14 cm forward from robot tag along orientation
+            if self.robot_tag_id is not None and tag.id == self.robot_tag_id and homography is not None:
+                try:
+                    H_inv = np.linalg.inv(homography)
+                    # Map center to world
+                    cvec = np.array([tag.center_px[0], tag.center_px[1], 1.0])
+                    cw = homography @ cvec
+                    cw_xy = np.array([cw[0] / cw[2], cw[1] / cw[2]])
+                    # Map top_mid to world to get world orientation
+                    top_mid_px = (tag.corners_px[0] + tag.corners_px[1]) * 0.5
+                    tvec = np.array([float(top_mid_px[0]), float(top_mid_px[1]), 1.0])
+                    tw = homography @ tvec
+                    tw_xy = np.array([tw[0] / tw[2], tw[1] / tw[2]])
+                    # World orientation direction (center -> top_mid)
+                    w_dir = tw_xy - cw_xy
+                    w_norm = float(np.linalg.norm(w_dir))
+                    if w_norm > 1e-6:
+                        w_unit = w_dir / w_norm
+                        gripper_world = cw_xy + w_unit * self.gripper_offset_cm
+                        gvec = np.array([gripper_world[0], gripper_world[1], 1.0])
+                        gp = H_inv @ gvec
+                        gripper_px = np.array([[gp[0] / gp[2], gp[1] / gp[2]]], dtype=np.float32)
+                        gripper_disp = self._map_points_to_display(gripper_px).reshape(2)
+                        gx, gy = int(gripper_disp[0]), int(gripper_disp[1])
+                        cv.circle(frame, (gx, gy), 8, (255, 0, 0), -1, cv.LINE_AA)
+                except Exception:
+                    pass
             # ID label (centered on the tag center)
             id_text = f"{tag.id}"
             (tw, th), base = cv.getTextSize(id_text, cv.FONT_HERSHEY_SIMPLEX, 0.8, 2)
@@ -229,6 +260,92 @@ class PlayfieldDisplay:
                         placed = True
                 if not placed:
                     self._draw_text_with_outline(frame, text, (cx + 8, cy + 14), color=(0, 255, 0), font_scale=0.5, thickness=1)
+
+    def draw_status_panel(
+        self,
+        frame: np.ndarray,
+        tags: Iterable[AprilTag],
+        homography: Optional[np.ndarray] = None,
+    ) -> None:
+        """Draw a status panel on the right side of the frame."""
+        fh, fw = frame.shape[:2]
+        tag_list = list(tags)
+        tag_ids = {t.id for t in tag_list}
+
+        lines: List[Tuple[str, Tuple[int, int, int]]] = []
+
+        # Playfield status
+        poly = self.playfield.get_polygon()
+        aruco_expected = {0, 1, 2, 3}
+        aruco_found = tag_ids & {0, 1, 2, 3}  # ArUco IDs overlap with AprilTag
+        # Check which ArUco corners the playfield actually has
+        if poly is not None:
+            lines.append(("Playfield: OK", (0, 255, 0)))
+        else:
+            # Report which ArUco corners are missing
+            # The playfield detector looks for ArUco 4x4 IDs 0-3
+            lines.append(("Playfield: NO", (0, 0, 255)))
+            lines.append(("  Need ArUco 0,1,2,3", (0, 0, 255)))
+
+        # Deskew status
+        if self._mode == "deskew":
+            lines.append(("Deskew: ON", (0, 255, 0)))
+        elif self._mode == "crop":
+            lines.append(("Deskew: crop", (0, 255, 255)))
+        else:
+            lines.append(("Deskew: OFF", (128, 128, 128)))
+
+        # Homography status
+        if homography is not None:
+            lines.append(("Homography: OK", (0, 255, 0)))
+        else:
+            lines.append(("Homography: NO", (0, 0, 255)))
+            lines.append(("  No calibration.json", (0, 0, 255)))
+
+        # Tag count
+        april_ids = sorted(tid for tid in tag_ids if tid >= 5)
+        lines.append((f"Tags: {len(tag_list)}", (255, 255, 255)))
+        if april_ids:
+            lines.append((f"  AT: {april_ids}", (200, 200, 200)))
+
+        # Gripper
+        if self.robot_tag_id is not None:
+            if self.robot_tag_id in tag_ids:
+                lines.append((f"Robot tag {self.robot_tag_id}: OK", (255, 200, 0)))
+            else:
+                lines.append((f"Robot tag {self.robot_tag_id}: --", (0, 0, 255)))
+
+        # Draw the panel — top-right corner with a semi-transparent background
+        font = cv.FONT_HERSHEY_SIMPLEX
+        scale = 0.5
+        thickness = 1
+        line_height = 20
+        margin = 10
+        pad = 6
+
+        # Measure max text width for background box
+        max_tw = 0
+        for text, _ in lines:
+            (tw, _), _ = cv.getTextSize(text, font, scale, thickness)
+            if tw > max_tw:
+                max_tw = tw
+
+        # Draw semi-transparent background
+        box_w = max_tw + 2 * pad
+        box_h = len(lines) * line_height + 2 * pad
+        x0 = fw - margin - box_w
+        y0 = margin
+        overlay = frame.copy()
+        cv.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+        cv.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+        # Draw text lines
+        y = y0 + pad + 14  # baseline offset
+        for text, color in lines:
+            (tw, _), _ = cv.getTextSize(text, font, scale, thickness)
+            x = x0 + box_w - pad - tw  # right-align within box
+            cv.putText(frame, text, (x, y), font, scale, color, thickness, cv.LINE_AA)
+            y += line_height
 
     def update(self, frame: np.ndarray) -> np.ndarray:
         # ensure playfield cache and deskew once

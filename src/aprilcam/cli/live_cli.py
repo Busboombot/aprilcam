@@ -53,29 +53,75 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--homography", type=str, default=None,
-        help="Path to homography JSON file (default: data/homography.json if it exists)",
+        help="Path to homography JSON file (default: auto-discover from data/)",
+    )
+    parser.add_argument(
+        "--color-camera", type=int, default=None,
+        help="Color camera index for object color classification (used with [d] key)",
+    )
+    parser.add_argument(
+        "--robot-tag", type=int, default=None,
+        help="Tag ID of the robot; draws a blue gripper circle forward along orientation",
+    )
+    parser.add_argument(
+        "--gripper-offset", type=float, default=14.0,
+        help="Distance from robot tag center to gripper center in cm (default: 14.0)",
     )
     args = parser.parse_args(argv)
 
-    # Load homography matrix if available
     import json
     from pathlib import Path
     import numpy as np
 
     homography = None
-    hom_path = None
-    if args.homography:
-        hom_path = Path(args.homography)
-    else:
-        hom_path = Path("data/homography.json")
 
-    if hom_path and hom_path.is_file():
+    if args.homography:
+        # Explicit path
+        hom_path = Path(args.homography)
+        if hom_path.is_file():
+            try:
+                data = json.loads(hom_path.read_text())
+                homography = np.array(data["homography"], dtype=np.float64)
+                print(f"Loaded homography from {hom_path}")
+            except Exception as e:
+                print(f"Warning: failed to load homography from {hom_path}: {e}")
+    else:
+        # Load from calibration.json (preferred) or legacy per-camera files
         try:
-            data = json.loads(hom_path.read_text())
-            homography = np.array(data["homography"], dtype=np.float64)
-            print(f"Loaded homography from {hom_path}")
+            from aprilcam.homography import load_calibration_for_camera
+            from aprilcam.camutil import get_device_name
+
+            dev_name = get_device_name(args.camera)
+            cal = load_calibration_for_camera(dev_name)
+            if cal is not None:
+                homography = cal.homography
+                print(f"Loaded calibration for '{dev_name}'")
+            else:
+                # Legacy fallback
+                from aprilcam.homography import discover_homography
+                import cv2 as cv
+                cap = cv.VideoCapture(args.camera)
+                if cap.isOpened():
+                    w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+                    h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+                    cap.release()
+                    found = discover_homography(dev_name, w, h, "data")
+                    if found:
+                        data = json.loads(found.read_text())
+                        # Handle unified format
+                        if "cameras" in data:
+                            for _k, cd in data["cameras"].items():
+                                if cd.get("device_name") == dev_name:
+                                    homography = np.array(cd["homography"], dtype=np.float64)
+                                    break
+                        else:
+                            homography = np.array(data["homography"], dtype=np.float64)
+                        if homography is not None:
+                            print(f"Loaded homography from {found}")
+                else:
+                    cap.release()
         except Exception as e:
-            print(f"Warning: failed to load homography from {hom_path}: {e}")
+            print(f"Warning: homography auto-discover failed: {e}")
 
     from aprilcam.liveview import run_live_view
 
@@ -91,5 +137,8 @@ def main(argv: list[str] | None = None) -> int:
         use_clahe=args.clahe,
         use_sharpen=args.sharpen,
         homography=homography,
+        color_camera=args.color_camera,
+        robot_tag_id=args.robot_tag,
+        gripper_offset_cm=args.gripper_offset,
     )
     return 0

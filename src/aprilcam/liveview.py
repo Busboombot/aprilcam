@@ -37,6 +37,8 @@ def _child_main(
     use_clahe: bool,
     use_sharpen: bool,
     stop_fd: int,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> None:
     """Entry point for the live-view child process.
 
@@ -59,6 +61,18 @@ def _child_main(
         pipe_out.close()
         return
 
+    # Load calibration homography for world coords and gripper overlay
+    homography = None
+    try:
+        from aprilcam.homography import load_calibration_for_camera
+        from aprilcam.camutil import get_device_name
+        dev_name = get_device_name(camera_index)
+        cal = load_calibration_for_camera(dev_name)
+        if cal is not None:
+            homography = cal.homography
+    except Exception:
+        pass
+
     cam = AprilCam(
         index=camera_index,
         backend=backend,
@@ -70,6 +84,7 @@ def _child_main(
         headless=True,  # we manage the window ourselves
         deskew_overlay=deskew,
         cap=cap,
+        homography=homography,
     )
 
     display = PlayfieldDisplay(
@@ -77,6 +92,8 @@ def _child_main(
         window_name="aprilcam-live",
         headless=False,
         deskew_overlay=deskew,
+        robot_tag_id=robot_tag_id,
+        gripper_offset_cm=gripper_offset_cm,
     )
 
     cam.reset_state()
@@ -86,6 +103,18 @@ def _child_main(
         import select
         r, _, _ = select.select([stop_in], [], [], 0)
         return bool(r)
+
+    # Pipeline view modes: number keys switch the displayed image
+    PIPE_MODES = {
+        ord("0"): ("color",     "0:Color (raw)"),
+        ord("1"): ("gray",      "1:Grayscale"),
+        ord("2"): ("highpass",  "2:High-pass"),
+        ord("3"): ("clahe",     "3:CLAHE"),
+        ord("4"): ("hp+clahe",  "4:HP+CLAHE"),
+        ord("5"): ("threshold", "5:Threshold"),
+    }
+    pipe_mode = "color"
+    pipe_labels = [v[1] for v in PIPE_MODES.values()]
 
     try:
         while True:
@@ -99,13 +128,63 @@ def _child_main(
             now = time.monotonic()
             tag_records = cam.process_frame(frame, now)
 
-            # Prepare display with deskew/crop
-            disp = display.update(frame)
+            # Build pipeline debug images from the raw frame
+            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            illum = cv.GaussianBlur(gray, (51, 51), 0).astype(np.float32)
+            illum = np.maximum(illum, 1.0)
+            flat = np.clip((gray.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
+            clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(gray)
+            flat_clahe = cv.createCLAHE(3.0, (8, 8)).apply(flat)
+            _, thresh_img = cv.threshold(flat, 150, 255, cv.THRESH_BINARY)
+
+            # Always update playfield detection from the raw color frame
+            display.playfield.update(frame)
+            display._update_deskew(frame)
+            display._ensure_window()
+
+            # Select which image to display based on pipeline mode
+            if pipe_mode == "color":
+                view_frame = frame
+            elif pipe_mode == "gray":
+                view_frame = cv.cvtColor(gray, cv.COLOR_GRAY2BGR)
+            elif pipe_mode == "highpass":
+                view_frame = cv.cvtColor(flat, cv.COLOR_GRAY2BGR)
+            elif pipe_mode == "clahe":
+                view_frame = cv.cvtColor(clahe_img, cv.COLOR_GRAY2BGR)
+            elif pipe_mode == "hp+clahe":
+                view_frame = cv.cvtColor(flat_clahe, cv.COLOR_GRAY2BGR)
+            elif pipe_mode == "threshold":
+                view_frame = cv.cvtColor(thresh_img, cv.COLOR_GRAY2BGR)
+            else:
+                view_frame = frame
+
+            # Prepare display (deskew/crop) using the selected view
+            disp = display.prepare_display(view_frame)
 
             # Draw overlays using playfield flows (which have velocity)
             flows = cam.playfield.get_flows()
             tags_for_overlay = list(flows.values())
             display.draw_overlays(disp, tags_for_overlay, homography=cam.homography)
+
+            # Status panel on right side
+            display.draw_status_panel(disp, tags_for_overlay, homography=cam.homography)
+
+            # Pipeline mode menu at bottom-left
+            fh, fw = disp.shape[:2]
+            menu_y = fh - 8
+            for label in reversed(pipe_labels):
+                # Highlight active mode
+                mode_key = label.split(":")[1].lower().replace(" (raw)", "").replace(" ", "")
+                # Map label back to mode name
+                mode_map = {"color": "color", "grayscale": "gray", "high-pass": "highpass",
+                            "clahe": "clahe", "hp+clahe": "hp+clahe", "threshold": "threshold"}
+                is_active = mode_map.get(mode_key, "") == pipe_mode
+                color = (0, 255, 255) if is_active else (160, 160, 160)
+                cv.putText(disp, label, (8, menu_y), cv.FONT_HERSHEY_SIMPLEX,
+                           0.35, (0, 0, 0), 2, cv.LINE_AA)
+                cv.putText(disp, label, (8, menu_y), cv.FONT_HERSHEY_SIMPLEX,
+                           0.35, color, 1, cv.LINE_AA)
+                menu_y -= 14
 
             # Show the frame
             display.show(disp)
@@ -124,6 +203,8 @@ def _child_main(
             key = cv.waitKey(1) & 0xFF
             if key in (27, ord("q")):
                 break
+            if key in PIPE_MODES:
+                pipe_mode = PIPE_MODES[key][0]
     finally:
         try:
             cap.release()
@@ -160,6 +241,8 @@ class LiveViewProcess:
         proc_width: int = 0,
         use_clahe: bool = False,
         use_sharpen: bool = False,
+        robot_tag_id: Optional[int] = None,
+        gripper_offset_cm: float = 14.0,
     ) -> None:
         self._camera_index = camera_index
         self._backend = backend
@@ -168,6 +251,8 @@ class LiveViewProcess:
         self._proc_width = proc_width
         self._use_clahe = use_clahe
         self._use_sharpen = use_sharpen
+        self._robot_tag_id = robot_tag_id
+        self._gripper_offset_cm = gripper_offset_cm
 
         self._process: Optional[multiprocessing.Process] = None
         self._reader_thread: Optional[threading.Thread] = None
@@ -212,6 +297,8 @@ class LiveViewProcess:
                 self._use_clahe,
                 self._use_sharpen,
                 stop_r,
+                self._robot_tag_id,
+                self._gripper_offset_cm,
             ),
             daemon=True,
         )
@@ -346,15 +433,19 @@ def run_live_view(
     use_clahe: bool = False,
     use_sharpen: bool = False,
     homography: Optional[np.ndarray] = None,
+    color_camera: Optional[int] = None,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> None:
     """Run the live view directly (blocking) — for CLI use.
-
-    This runs the detection + display loop on the current process's
-    main thread, which is the simplest path for ``aprilcam live``.
 
     Args:
         video_path: If provided, play this video file instead of a camera.
         loop: If True and video_path is set, loop the video continuously.
+        color_camera: Optional camera index for color classification
+            when the user presses 'd' for object detection.
+        robot_tag_id: Tag ID of the robot. Draws a blue gripper circle.
+        gripper_offset_cm: Distance from robot tag center to gripper (default 14).
     """
     from aprilcam.aprilcam import AprilCam
 
@@ -395,5 +486,8 @@ def run_live_view(
         print_tags=True,
         cap=cap,
         homography=homography,
+        robot_tag_id=robot_tag_id,
+        gripper_offset_cm=gripper_offset_cm,
     )
-    cam.run()
+
+    cam.run(color_camera=color_camera)

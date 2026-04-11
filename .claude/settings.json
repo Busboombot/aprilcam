@@ -5,17 +5,73 @@
       "mcp__aprilcam__list_cameras",
       "mcp__clasi__list_tickets",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:17439/mcp/sse)",
-      "Bash(aprilcam web:*)"
+      "Bash(aprilcam web:*)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "mcp__clasi__list_sprints"
     ]
   },
   "hooks": {
-    "UserPromptSubmit": [
+    "SubagentStart": [
       {
-        "matcher": "",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'CLASI: Call get_se_overview() to load the SE process before doing any work.'"
+            "command": "clasi hook subagent-start"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clasi hook subagent-stop"
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clasi hook task-created"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clasi hook task-completed"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clasi hook role-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__clasi__create_ticket|mcp__clasi__create_sprint",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clasi hook mcp-guard"
           }
         ]
       }
@@ -26,7 +82,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if echo \"$TOOL_INPUT\" | grep -q 'git commit' && git branch --show-current 2>/dev/null | grep -qE '^(master|main)$'; then echo 'CLASI: You committed on master. Call tag_version() to bump the version.'; fi"
+            "command": "clasi hook commit-check"
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clasi hook plan-to-todo"
           }
         ]
       }

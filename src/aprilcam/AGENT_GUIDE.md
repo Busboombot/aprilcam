@@ -9,11 +9,33 @@ homography, and image processing on robotics playfields.
 ```python
 from aprilcam import detect_tags
 
-for tags in detect_tags(camera=0):
+for tags in detect_tags(camera=3):
     for t in tags:
-        print(f"Tag {t.id} at pixel ({t.center_px[0]:.0f}, {t.center_px[1]:.0f})")
-        if t.world_xy:
-            print(f"  world ({t.world_xy[0]:.1f}, {t.world_xy[1]:.1f}) cm")
+        # age=0.0 means seen this frame; age>0 means stale (last seen age seconds ago)
+        status = "live" if t.age == 0 else f"stale {t.age:.2f}s"
+        print(f"Tag {t.id} [{status}] at ({t.center_px[0]:.0f}, {t.center_px[1]:.0f})")
+```
+
+### Tags + Objects (dual camera)
+
+```python
+from aprilcam import detect_tags
+
+for tags in detect_tags(camera=3, detect_objects=True, color_camera=2):
+    for t in tags:
+        print(f"Tag {t.id} world=({t.world_xy[0]:.1f}, {t.world_xy[1]:.1f})")
+    for obj in tags.objects:  # .objects attribute on the tag list
+        print(f"  {obj.color} cube at ({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})")
+```
+
+### One-shot Object Detection
+
+```python
+from aprilcam import detect_objects
+
+objects = detect_objects(camera=3, color_camera=2)
+for obj in objects:
+    print(f"{obj.color} at ({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})")
 ```
 
 ## Quick Start (MCP)
@@ -48,7 +70,12 @@ Then call `list_cameras` → `open_camera` → `start_detection` → `get_tags`.
 - **TagRecord** fields: `id`, `center_px`, `corners_px`,
   `orientation_yaw`, `world_xy` (if calibrated), `vel_px`,
   `speed_px`, `vel_world`, `speed_world`, `heading_rad`,
-  `in_playfield`, `timestamp`, `frame_index`.
+  `in_playfield`, `timestamp`, `frame_index`, `age`.
+- **`age`**: 0.0 if the tag was detected this frame. If the tag was
+  seen recently but not this frame, `age` is the seconds since last
+  detection. Tags are returned for up to ~1 second after they
+  disappear, then pruned. This gives callers a stable tag set
+  without flickering.
 - Velocities are EMA-smoothed with dead-band suppression.
 
 ### Homography Files
@@ -60,6 +87,42 @@ Then call `list_cameras` → `open_camera` → `start_detection` → `get_tags`.
 - The `detect_tags()` generator auto-discovers the right homography
   file when `homography="auto"` (default).
 - Homography only needs to be computed once per camera position.
+
+### Joint Calibration (Multi-Camera)
+- For dual-camera setups (B&W for speed + color for classification),
+  use **joint calibration**: `data/joint-calibration.json`.
+- Joint calibration uses ALL visible tags (ArUco corners + AprilTags)
+  as shared reference points — typically 10-12 correspondence points.
+- The B&W camera gets a standard 3x3 homography.
+- The color camera gets a 3x3 homography PLUS barrel distortion
+  correction (camera_matrix + dist_coeffs from `cv.calibrateCamera`).
+- File has `"type": "joint"` to distinguish from single-camera files.
+
+**Running calibration:**
+```python
+from aprilcam import calibrate
+
+calibrate(bw_camera=3, color_camera=2)
+# Saves to data/calibration.json (default)
+
+# Custom output path:
+calibrate(bw_camera=3, color_camera=2, output="my_calibration.json")
+```
+
+**Using the calibration:**
+```python
+from aprilcam.homography import load_joint_calibration
+from pathlib import Path
+
+bw_cal, color_cal = load_joint_calibration(Path("data/joint-calibration.json"))
+
+# Undistort a color frame (removes barrel distortion)
+corrected = color_cal.undistort(color_frame)
+
+# Map pixel to world coordinates (both cameras in same space)
+wx, wy = bw_cal.pixel_to_world(px, py)      # B&W pixel → cm
+wx, wy = color_cal.pixel_to_world(px, py)    # Color pixel → cm
+```
 
 ## Library API
 
@@ -87,9 +150,11 @@ for tags in detect_tags(
 
 ```python
 from aprilcam import (
-    detect_tags,              # Generator API (recommended)
+    detect_tags,              # Generator: yields tags per frame (with age)
+    detect_objects,           # One-shot: returns colored cubes
     AprilCam,                 # Core detection engine
-    TagRecord,                # Per-tag detection result
+    TagRecord,                # Per-tag detection result (has .age field)
+    ObjectRecord,             # Per-object detection result (has .color field)
     AprilTag,                 # Tag model with tracking state
     Playfield,                # Playfield polygon and deskew
     CameraError,              # Base camera exception
@@ -199,6 +264,17 @@ cap.release()
 1. open_camera + create_playfield + calibrate + start_detection
 2. get_tag_history(source_id="pf_0", num_frames=60)
    → last 60 frames of tag positions, velocities, headings
+```
+
+### Workflow 4: Detect colored objects (dual-camera)
+
+```
+1. Run joint calibration once (saves to data/joint-calibration.json):
+   calibrate_joint(bw_cap, color_cap, field_width_cm=101, field_height_cm=89)
+2. aprilcam live -c 3 --color-camera 2
+3. Press 'd' to detect objects — uses joint calibration for
+   barrel-corrected color fusion in world coordinates
+4. Press 'c' to clear overlays
 ```
 
 ## CLI Commands

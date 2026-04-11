@@ -39,6 +39,7 @@ from aprilcam.mcp_server import (
     _handle_stop_detection,
     _handle_get_tags,
     _handle_get_tag_history,
+    _handle_get_objects,
     _handle_get_frame,
     _handle_start_live_view,
     _handle_stop_live_view,
@@ -160,6 +161,16 @@ _TOOL_SPECS: list[dict[str, Any]] = [
         "returns": "{source_id, frames: [...]} or {error}",
     },
     {
+        "name": "get_objects",
+        "path": "/api/get_objects",
+        "method": "POST",
+        "description": "Detect non-tag objects (cubes, etc.) from a running detection loop.",
+        "parameters": [
+            {"name": "source_id", "type": "string", "default": None, "description": "Source handle (required)"},
+        ],
+        "returns": "{source_id, objects: [...]} or {error}",
+    },
+    {
         "name": "get_frame",
         "path": "/api/get_frame",
         "method": "POST",
@@ -212,6 +223,7 @@ _HANDLERS: dict[str, Any] = {
     "stop_detection": _handle_stop_detection,
     "get_tags": _handle_get_tags,
     "get_tag_history": _handle_get_tag_history,
+    "get_objects": _handle_get_objects,
     "get_frame": _handle_get_frame,
     "start_live_view": _handle_start_live_view,
     "stop_live_view": _handle_stop_live_view,

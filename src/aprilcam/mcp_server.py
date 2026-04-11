@@ -163,6 +163,8 @@ class DetectionEntry:
     ring_buffer: RingBuffer
     aprilcam: AprilCam
     operations: list[str] = field(default_factory=lambda: ["detect_tags"])
+    robot_tag_id: Optional[int] = None
+    gripper_offset_cm: float = 14.0
 
 
 detection_registry: dict[str, DetectionEntry] = {}
@@ -645,6 +647,8 @@ def _handle_start_detection(
     detect_interval: int = 1,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> dict:
     """Core logic for start_detection — returns status dict or error dict."""
     try:
@@ -733,6 +737,8 @@ def _handle_start_detection(
             loop=loop,
             ring_buffer=buf,
             aprilcam=cam,
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
         # Remember state so stop_detection can re-open the shared camera
         detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
@@ -776,6 +782,45 @@ def _handle_stop_detection(source_id: str) -> dict:
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _compute_gripper_world_xy(
+    tag_dict: dict,
+    homography: Optional[np.ndarray],
+    offset_cm: float = 14.0,
+) -> Optional[list[float]]:
+    """Compute the gripper position in world coords for a robot tag.
+
+    Returns [x, y] in world units, or None if homography is unavailable
+    or the geometry is degenerate.
+    """
+    if homography is None or homography.size != 9:
+        return None
+    try:
+        cx, cy = tag_dict["center_px"]
+        corners = tag_dict["corners_px"]
+        top_mid_px = [
+            (corners[0][0] + corners[1][0]) * 0.5,
+            (corners[0][1] + corners[1][1]) * 0.5,
+        ]
+        # Map center and top-mid to world coords
+        cvec = np.array([cx, cy, 1.0])
+        cw = homography @ cvec
+        cw_xy = np.array([cw[0] / cw[2], cw[1] / cw[2]])
+
+        tvec = np.array([top_mid_px[0], top_mid_px[1], 1.0])
+        tw = homography @ tvec
+        tw_xy = np.array([tw[0] / tw[2], tw[1] / tw[2]])
+
+        w_dir = tw_xy - cw_xy
+        w_norm = float(np.linalg.norm(w_dir))
+        if w_norm < 1e-6:
+            return None
+        w_unit = w_dir / w_norm
+        gripper = cw_xy + w_unit * offset_cm
+        return [float(gripper[0]), float(gripper[1])]
+    except Exception:
+        return None
+
+
 def _handle_get_tags(source_id: str) -> dict:
     """Core logic for get_tags — returns tag data dict or error dict."""
     try:
@@ -789,6 +834,21 @@ def _handle_get_tags(source_id: str) -> dict:
 
         result = latest.to_dict()
         result["source_id"] = source_id
+
+        # Add gripper position for the robot tag if configured
+        if entry.robot_tag_id is not None:
+            homography = None
+            try:
+                pf_entry = playfield_registry.get(source_id)
+                homography = pf_entry.homography
+            except KeyError:
+                pass
+            for tag in result.get("tags", []):
+                if tag["id"] == entry.robot_tag_id:
+                    tag["gripper_world_xy"] = _compute_gripper_world_xy(
+                        tag, homography, offset_cm=entry.gripper_offset_cm
+                    )
+
         return result
     except Exception as exc:
         return {"error": f"Unexpected error: {exc}"}
@@ -810,12 +870,122 @@ def _handle_get_tag_history(
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _handle_get_objects(source_id: str) -> dict:
+    """Core logic for get_objects — returns detected non-tag objects or error."""
+    try:
+        import cv2 as cv
+        from aprilcam.objects import SquareDetector
+
+        det_entry = detection_registry.get(source_id)
+        if det_entry is None:
+            return {"error": f"No detection loop on '{source_id}'"}
+
+        frame = det_entry.loop.last_frame
+        if frame is None:
+            return {"error": "No frames captured yet"}
+
+        detector = SquareDetector()
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+        # Get tag corners for exclusion from the latest ring buffer entry.
+        latest = det_entry.ring_buffer.get_latest()
+        tag_corners = []
+        if latest:
+            for tag in latest.tags:
+                tag_corners.append(
+                    np.array(tag.corners_px, dtype=np.float32)
+                )
+
+        # Get homography if this source is a playfield.
+        homography = None
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            if pf_entry.homography is not None:
+                homography = pf_entry.homography
+        except KeyError:
+            pass
+
+        # Get playfield polygon for containment filtering.
+        pf_poly = None
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            pf_poly = pf_entry.playfield.get_polygon()
+        except (KeyError, AttributeError):
+            pass
+
+        objects = detector.detect(
+            gray, homography=homography, tag_corners=tag_corners,
+            playfield_polygon=pf_poly,
+        )
+
+        # Color classify each object using the color frame
+        from aprilcam.color_classifier import ColorClassifier
+        from dataclasses import replace as _replace
+        classifier = ColorClassifier()
+        colored = []
+        for obj in objects:
+            cx, cy = obj.center_px
+            c = classifier.classify_at_point(frame, cx, cy)
+            colored.append(_replace(obj, color=c))
+        objects = colored
+
+        return {
+            "source_id": source_id,
+            "objects": [
+                {
+                    "center_px": list(o.center_px),
+                    "world_xy": list(o.world_xy) if o.world_xy else None,
+                    "color": o.color,
+                    "bbox": list(o.bbox),
+                    "area_px": o.area_px,
+                    "object_type": o.object_type,
+                    "confidence": o.confidence,
+                }
+                for o in objects
+            ],
+        }
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
 def _warp_points(points: list, homography: np.ndarray) -> list:
     """Transform a list of [x, y] points through a homography matrix."""
     import cv2
     pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
     warped = cv2.perspectiveTransform(pts, homography)
     return warped.reshape(-1, 2).tolist()
+
+
+# Color name to BGR mapping for drawing object annotations
+_COLOR_BGR = {
+    "red": (0, 0, 255),
+    "green": (0, 200, 0),
+    "blue": (255, 0, 0),
+    "yellow": (0, 255, 255),
+    "orange": (0, 165, 255),
+    "purple": (255, 0, 255),
+    "unknown": (200, 200, 200),
+}
+
+
+def _draw_object_overlay(
+    frame: np.ndarray,
+    objects: list,
+) -> None:
+    """Draw object detection overlays directly on *frame* (mutates in place)."""
+    import cv2
+
+    for obj in objects:
+        x, y, w, h = obj.bbox
+        bgr = _COLOR_BGR.get(obj.color, (200, 200, 200))
+        cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
+        label = obj.color
+        cv2.putText(frame, label, (x, y - 5),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, bgr, 1, cv2.LINE_AA)
+        if obj.world_xy:
+            coord = f"({obj.world_xy[0]:.1f}, {obj.world_xy[1]:.1f})"
+            cv2.putText(frame, coord, (x, y + h + 15),
+                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, bgr, 1, cv2.LINE_AA)
 
 
 def _draw_tag_overlay(
@@ -927,6 +1097,48 @@ def _handle_get_frame(
                                  has_homography=has_homography,
                                  homography=deskew_matrix)
 
+        # Draw detected objects
+        try:
+            import cv2 as _cv
+            from aprilcam.objects import SquareDetector
+
+            detector = SquareDetector()
+            gray_ann = _cv.cvtColor(frame, _cv.COLOR_BGR2GRAY)
+
+            # Get tag corners for exclusion
+            tag_corners_for_exclude = []
+            if det_entry is not None:
+                latest_for_obj = det_entry.ring_buffer.get_latest()
+                if latest_for_obj is not None:
+                    for tag in latest_for_obj.tags:
+                        tag_corners_for_exclude.append(
+                            np.array(tag.corners_px, dtype=np.float32)
+                        )
+
+            homography = None
+            try:
+                pf_entry = playfield_registry.get(source_id)
+                if pf_entry.homography is not None:
+                    homography = pf_entry.homography
+            except KeyError:
+                pass
+
+            pf_poly_ann = None
+            try:
+                pf_entry_ann = playfield_registry.get(source_id)
+                pf_poly_ann = pf_entry_ann.playfield.get_polygon()
+            except (KeyError, AttributeError):
+                pass
+
+            objects = detector.detect(
+                gray_ann, homography=homography,
+                tag_corners=tag_corners_for_exclude,
+                playfield_polygon=pf_poly_ann,
+            )
+            _draw_object_overlay(frame, objects)
+        except Exception:
+            pass  # Object annotation is best-effort
+
     try:
         import cv2
 
@@ -953,6 +1165,8 @@ def _handle_start_live_view(
     proc_width: int = 0,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> dict:
     """Core logic for start_live_view — returns status dict or error dict."""
     try:
@@ -1021,6 +1235,8 @@ def _handle_start_live_view(
             proc_width=proc_width,
             use_clahe=use_clahe,
             use_sharpen=use_sharpen,
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
         proc.start(on_frame=on_frame)
 
@@ -1108,6 +1324,22 @@ def _image_result_to_mcp(result: dict) -> list[TextContent | ImageContent]:
 # ---------------------------------------------------------------------------
 # Tools (thin MCP wrappers)
 # ---------------------------------------------------------------------------
+
+
+@server.tool()
+async def get_version() -> list[TextContent]:
+    """Return the aprilcam package version.
+
+    Returns:
+        A JSON object with ``version`` (str).
+    """
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        ver = _pkg_version("aprilcam")
+    except Exception:
+        ver = "unknown"
+    return [TextContent(type="text", text=json.dumps({"version": ver}))]
 
 
 @server.tool()
@@ -1725,6 +1957,8 @@ async def start_detection(
     detect_interval: int = 1,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> list[TextContent]:
     """Start a persistent tag detection loop on a camera or playfield.
 
@@ -1739,6 +1973,10 @@ async def start_detection(
         detect_interval: Run detection every N frames (default 1).
         use_clahe: Apply CLAHE contrast enhancement before detection.
         use_sharpen: Apply sharpening before detection.
+        robot_tag_id: Tag ID of the robot. When set, ``get_tags`` includes
+            a ``gripper_world_xy`` field on this tag's record.
+        gripper_offset_cm: Distance from the robot tag center to the gripper
+            center, in cm along the tag's forward direction (default 14.0).
 
     Returns:
         On success: ``{"source_id": "<id>", "status": "started"}``.
@@ -1747,7 +1985,8 @@ async def start_detection(
     result = _handle_start_detection(
         source_id, family=family, proc_width=proc_width,
         detect_interval=detect_interval, use_clahe=use_clahe,
-        use_sharpen=use_sharpen,
+        use_sharpen=use_sharpen, robot_tag_id=robot_tag_id,
+        gripper_offset_cm=gripper_offset_cm,
     )
     return [TextContent(type="text", text=json.dumps(result))]
 
@@ -1773,6 +2012,8 @@ async def stream_tags(
     operations: list[str] | None = None,
     family: str = "36h11",
     proc_width: int = 0,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> list[TextContent]:
     """Start continuous tag detection on a camera or playfield with a fixed operation pipeline.
 
@@ -1788,6 +2029,10 @@ async def stream_tags(
             Defaults to ``["detect_tags"]``.
         family: AprilTag family (default ``"36h11"``).
         proc_width: Processing width in pixels; 0 means no downscale.
+        robot_tag_id: Tag ID of the robot. When set, ``get_tags`` includes
+            a ``gripper_world_xy`` field on this tag's record.
+        gripper_offset_cm: Distance from the robot tag center to the gripper
+            center, in cm along the tag's forward direction (default 14.0).
 
     Returns:
         On success: ``{"stream_id": "<id>", "operations": [...], "status": "started"}``.
@@ -1886,6 +2131,8 @@ async def stream_tags(
             ring_buffer=buf,
             aprilcam=cam,
             operations=list(operations),
+            robot_tag_id=robot_tag_id,
+            gripper_offset_cm=gripper_offset_cm,
         )
         detection_registry[source_id]._camera_id = camera_id  # type: ignore[attr-defined]
         detection_registry[source_id]._camera_index = camera_index  # type: ignore[attr-defined]
@@ -1983,6 +2230,27 @@ async def get_tag_history(
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_tag_history(source_id, num_frames=num_frames)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def get_objects(source_id: str) -> list[TextContent]:
+    """Return detected non-tag objects from a running detection loop.
+
+    Runs square-contour detection on the latest frame, excluding regions
+    covered by known AprilTag / ArUco markers.  World coordinates are
+    included when the source has a calibrated playfield homography.
+
+    Args:
+        source_id: The camera UUID or playfield_id passed to ``start_detection``.
+
+    Returns:
+        On success: ``{"source_id": "<id>", "objects": [...]}``.
+        Each object includes ``center_px``, ``world_xy``, ``color``,
+        ``bbox``, ``area_px``, ``object_type``, and ``confidence``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_get_objects(source_id)
     return [TextContent(type="text", text=json.dumps(result))]
 
 
@@ -2319,6 +2587,8 @@ async def start_live_view(
     proc_width: int = 0,
     use_clahe: bool = False,
     use_sharpen: bool = False,
+    robot_tag_id: Optional[int] = None,
+    gripper_offset_cm: float = 14.0,
 ) -> list[TextContent]:
     """Open a live visualization window with tag detection overlays.
 
@@ -2329,6 +2599,7 @@ async def start_live_view(
     - Yellow arrow showing velocity vector
     - Red tag ID number centered on the tag
     - White playfield outline
+    - Blue circle at the gripper position (if robot_tag_id is set)
 
     Detection data also feeds into a ring buffer accessible via
     ``get_tags`` and ``get_tag_history`` using the returned view_id.
@@ -2340,6 +2611,12 @@ async def start_live_view(
         proc_width: Processing width for detection downscale (0 = full).
         use_clahe: Apply CLAHE contrast enhancement before detection.
         use_sharpen: Apply sharpening before detection.
+        robot_tag_id: Tag ID of the robot. When set, a blue circle is
+            drawn forward from this tag along its orientation to indicate
+            the gripper center position.
+        gripper_offset_cm: Distance from the robot tag center to the
+            gripper center, in cm along the tag's forward direction
+            (default 14.0).
 
     Returns:
         On success: ``{"view_id": "<id>", "status": "started"}``.
@@ -2348,6 +2625,7 @@ async def start_live_view(
     result = _handle_start_live_view(
         camera_id, deskew=deskew, family=family, proc_width=proc_width,
         use_clahe=use_clahe, use_sharpen=use_sharpen,
+        robot_tag_id=robot_tag_id, gripper_offset_cm=gripper_offset_cm,
     )
     return [TextContent(type="text", text=json.dumps(result))]
 

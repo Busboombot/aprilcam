@@ -12,6 +12,10 @@ SUBCOMMANDS = {
         "help": "Generate AprilTag or ArUco marker images (PDF or PNG)",
         "module": "aprilcam.cli.taggen_cli",
     },
+    "calibrate": {
+        "help": "Run playfield calibration for one or more cameras",
+        "module": "aprilcam.cli.calibrate_cli",
+    },
     "cameras": {
         "help": "List available cameras",
         "module": "aprilcam.cli.cameras_cli",
