@@ -1,10 +1,27 @@
+"""AprilCam — AprilTag detection and playfield tracking.
+
+Primary API::
+
+    import aprilcam
+
+    camera = aprilcam.Camera.find("Brio")
+    field = aprilcam.Playfield(camera, width_cm=101, height_cm=89)
+    field.start()
+    tag = field.tag(42)
+    if tag:
+        tag.update()
+        print(f"Tag 42 at ({tag.wx:.1f}, {tag.wy:.1f}) cm")
+    field.stop()
+"""
+
 from pathlib import Path as _Path
 
-from aprilcam.stream import detect_tags, detect_objects, calibrate
-from aprilcam.core.detection import TagRecord
-from aprilcam.core.aprilcam import AprilCam
-from aprilcam.core.models import AprilTag
+# New OOP API
+from aprilcam.camera import Camera, VideoCamera
 from aprilcam.core.playfield import Playfield
+from aprilcam.core.tag import Tag
+from aprilcam.core.detection import TagRecord
+from aprilcam.calibration import calibrate, CameraCalibration, FieldSpec
 from aprilcam.vision.objects import ObjectRecord
 from aprilcam.errors import (
     CameraError,
@@ -16,14 +33,17 @@ from aprilcam.errors import (
 __all__ = [
     "__version__",
     "help",
-    "detect_tags",
-    "detect_objects",
-    "calibrate",
-    "TagRecord",
-    "AprilCam",
-    "AprilTag",
+    # New OOP API
+    "Camera",
+    "VideoCamera",
     "Playfield",
+    "Tag",
+    "calibrate",
+    "CameraCalibration",
+    "FieldSpec",
+    "TagRecord",
     "ObjectRecord",
+    # Errors
     "CameraError",
     "CameraInUseError",
     "CameraNotFoundError",
@@ -35,9 +55,5 @@ _AGENT_GUIDE = _Path(__file__).parent / "AGENT_GUIDE.md"
 
 
 def help() -> str:
-    """Return the AprilCam agent guide as a markdown string.
-
-    This guide explains how to use AprilCam as a library and via MCP,
-    including available tools, common workflows, and tips for AI agents.
-    """
+    """Return the AprilCam agent guide as a markdown string."""
     return _AGENT_GUIDE.read_text()

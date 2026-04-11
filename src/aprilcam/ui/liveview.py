@@ -64,7 +64,7 @@ def _child_main(
     # Load calibration homography for world coords and gripper overlay
     homography = None
     try:
-        from aprilcam.calibration.homography import load_calibration_for_camera
+        from aprilcam.calibration.calibration import load_calibration_for_camera
         from aprilcam.camera.camutil import get_device_name
         dev_name = get_device_name(camera_index)
         cal = load_calibration_for_camera(dev_name)

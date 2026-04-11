@@ -10,11 +10,14 @@ from .models import AprilTag, AprilTagFlow
 
 
 @dataclass
-class Playfield:
-    """Representation of the playfield extracted from video frames.
+class PlayfieldBoundary:
+    """ArUco corner detection and polygon management for the playfield.
 
-    This caches 4x4 ArUco corner detections and exposes a stable playfield polygon.
-    Corner IDs are expected to be 0=UL, 1=UR, 2=LL, 3=LR in the rendered simulator.
+    This is the internal geometry class. The user-facing :class:`Playfield`
+    composes this as ``_boundary``.
+
+    Caches 4x4 ArUco corner detections and exposes a stable playfield polygon.
+    Corner IDs are expected to be 0=UL, 1=UR, 2=LL, 3=LR.
     We compute a consistent UL,UR,LR,LL order by geometry to tolerate any ID swaps.
     """
 
@@ -251,4 +254,250 @@ class Playfield:
     def get_flows(self) -> Dict[int, AprilTagFlow]:
         return self._flows
 
- 
+
+# ---------------------------------------------------------------------------
+# New user-facing Playfield
+# ---------------------------------------------------------------------------
+
+
+class Playfield:
+    """Primary user-facing object for tag detection on a playfield.
+
+    Associates a camera with a physical playfield, manages the detection
+    pipeline, and provides access to tags.
+
+    Usage::
+
+        camera = Camera.find("Brio")
+        field = Playfield(camera, width_cm=101, height_cm=89)
+        field.start()
+        tag = field.tag(42)
+        if tag:
+            tag.update()
+            print(f"Tag 42 at ({tag.wx:.1f}, {tag.wy:.1f})")
+        field.stop()
+    """
+
+    def __init__(
+        self,
+        camera,
+        *,
+        width_cm: float = 101.0,
+        height_cm: float = 89.0,
+        family: str = "36h11",
+        calibration: Optional[str] = "auto",
+        proc_width: int = 960,
+        detect_interval: int = 3,
+    ) -> None:
+        from .detector import TagDetector, DetectorConfig
+        from .tracker import OpticalFlowTracker
+        from .pipeline import DetectionPipeline
+        from .detection import RingBuffer
+
+        self._camera = camera
+        self._width_cm = width_cm
+        self._height_cm = height_cm
+
+        # Load calibration / homography
+        self._homography: Optional[np.ndarray] = None
+        if calibration == "auto":
+            self._homography = self._auto_discover_homography()
+        elif calibration is not None:
+            self._homography = self._load_homography(calibration)
+
+        # Internal components
+        self._boundary = PlayfieldBoundary(proc_width=proc_width)
+        self._detector = TagDetector(DetectorConfig(family=family, proc_width=proc_width))
+        self._tracker = OpticalFlowTracker(detect_interval=detect_interval)
+        self._ring_buffer = RingBuffer()
+        self._pipeline = DetectionPipeline(
+            camera,
+            self._detector,
+            self._tracker,
+            homography=self._homography,
+            boundary=self._boundary,
+            ring_buffer=self._ring_buffer,
+        )
+        self._tags: Dict[int, "Tag"] = {}
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def camera(self):
+        return self._camera
+
+    @property
+    def width_cm(self) -> float:
+        return self._width_cm
+
+    @property
+    def height_cm(self) -> float:
+        return self._height_cm
+
+    @property
+    def polygon(self) -> Optional[np.ndarray]:
+        return self._boundary.get_polygon()
+
+    @property
+    def homography(self) -> Optional[np.ndarray]:
+        return self._homography
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self._homography is not None
+
+    @property
+    def is_detecting(self) -> bool:
+        return self._pipeline.is_running
+
+    # ------------------------------------------------------------------
+    # Tag access (pull interface)
+    # ------------------------------------------------------------------
+
+    def tags(self) -> Dict[int, "Tag"]:
+        """Return all currently tracked tags, keyed by ID."""
+        from .tag import Tag
+        latest = self._ring_buffer.get_latest()
+        if latest is None:
+            return {}
+        result: Dict[int, Tag] = {}
+        for tr in latest.tags:
+            t = self._tags.get(tr.id)
+            if t is None:
+                t = Tag(tr.id, self._pipeline)
+                self._tags[tr.id] = t
+            t.update()
+            result[tr.id] = t
+        return result
+
+    def tag(self, tag_id: int) -> Optional["Tag"]:
+        """Get a specific tag by ID, or None if not seen."""
+        from .tag import Tag
+        t = self._tags.get(tag_id)
+        if t is None:
+            t = Tag(tag_id, self._pipeline)
+            self._tags[tag_id] = t
+        t.update()
+        return t if t.is_visible else None
+
+    # ------------------------------------------------------------------
+    # Tag access (push interface)
+    # ------------------------------------------------------------------
+
+    def stream(self):
+        """Generator yielding list[Tag] per frame.
+
+        Starts the pipeline if not already running. Yields on each new
+        frame until stopped.
+        """
+        import time
+        from .tag import Tag
+
+        if not self.is_detecting:
+            self.start()
+
+        last_frame = -1
+        while self.is_detecting:
+            latest = self._ring_buffer.get_latest()
+            if latest is not None and latest.frame_index > last_frame:
+                last_frame = latest.frame_index
+                tags = []
+                for tr in latest.tags:
+                    t = self._tags.get(tr.id)
+                    if t is None:
+                        t = Tag(tr.id, self._pipeline)
+                        self._tags[tr.id] = t
+                    t.update()
+                    tags.append(t)
+                yield tags
+            else:
+                time.sleep(0.001)
+
+    def on_frame(self, callback) -> None:
+        """Register a callback invoked on each frame update."""
+        self._pipeline.on_frame(callback)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the background detection pipeline."""
+        self._pipeline.start()
+
+    def stop(self) -> None:
+        """Stop the background detection pipeline."""
+        self._pipeline.stop()
+
+    def calibrate(self, **kwargs):
+        """Run calibration on this playfield's camera."""
+        from ..calibration.calibration import calibrate as _calibrate
+        return _calibrate(self._camera, width_cm=self._width_cm,
+                          height_cm=self._height_cm, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Geometry
+    # ------------------------------------------------------------------
+
+    def pixel_to_world(self, u: float, v: float) -> Optional[Tuple[float, float]]:
+        """Map pixel coordinates to world coordinates (cm)."""
+        if self._homography is None:
+            return None
+        vec = self._homography @ np.array([u, v, 1.0])
+        return (float(vec[0] / vec[2]), float(vec[1] / vec[2]))
+
+    def world_to_pixel(self, x: float, y: float) -> Optional[Tuple[float, float]]:
+        """Map world coordinates (cm) to pixel coordinates."""
+        if self._homography is None:
+            return None
+        H_inv = np.linalg.inv(self._homography)
+        vec = H_inv @ np.array([x, y, 1.0])
+        return (float(vec[0] / vec[2]), float(vec[1] / vec[2]))
+
+    def deskew(self, frame: np.ndarray) -> np.ndarray:
+        """Perspective-warp frame to a top-down rectangle."""
+        return self._boundary.deskew(frame)
+
+    # ------------------------------------------------------------------
+    # Context manager
+    # ------------------------------------------------------------------
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+
+    # ------------------------------------------------------------------
+    # Homography discovery
+    # ------------------------------------------------------------------
+
+    def _auto_discover_homography(self) -> Optional[np.ndarray]:
+        try:
+            from ..calibration.homography import discover_homography
+            result = discover_homography()
+            if result is not None:
+                return np.array(result, dtype=float) if not isinstance(result, np.ndarray) else result
+        except Exception:
+            pass
+        return None
+
+    def _load_homography(self, path: str) -> Optional[np.ndarray]:
+        import json
+        from pathlib import Path
+        try:
+            data = json.loads(Path(path).read_text())
+            if "homography" in data:
+                return np.array(data["homography"], dtype=float)
+            # Check for cameras dict (unified format)
+            cameras = data.get("cameras", {})
+            for cam_data in cameras.values():
+                if "homography" in cam_data:
+                    return np.array(cam_data["homography"], dtype=float)
+        except Exception:
+            pass
+        return None
+

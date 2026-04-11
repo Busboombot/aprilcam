@@ -47,7 +47,7 @@ def _load_homography_matrix(
     if homography == "auto":
         device_name = get_device_name(camera_index)
 
-        from .calibration.homography import load_calibration_for_camera
+        from .calibration.calibration import load_calibration_for_camera
         cal = load_calibration_for_camera(device_name, data_path)
         if cal is not None:
             return cal.homography
@@ -152,7 +152,7 @@ def detect_tags(
                     color_cap = None
                 else:
                     try:
-                        from .calibration.homography import load_calibration
+                        from .calibration.calibration import load_calibration
                         all_cals = load_calibration(data_dir)
                         for _name, cal in all_cals.items():
                             if cal.dist_coeffs is not None or cal.resolution[0] > 1280:
@@ -290,7 +290,7 @@ def detect_objects(
         if color_camera is not None and objects:
             try:
                 from .vision.color_classifier import ColorClassifier
-                from .calibration.homography import load_calibration
+                from .calibration.calibration import load_calibration
                 from dataclasses import replace
 
                 color_idx = _resolve_camera_index(color_camera)
@@ -373,7 +373,7 @@ def calibrate(
 
     # Single-camera mode
     if camera is not None:
-        from .calibration.homography import calibrate_single, save_calibration
+        from .calibration.calibration import calibrate_single, save_calibration
 
         cam_index = _resolve_camera_index(camera)
         cap = cv.VideoCapture(cam_index)
@@ -419,7 +419,7 @@ def calibrate(
             "or both 'bw_camera' and 'color_camera' for two-camera calibration."
         )
 
-    from .calibration.homography import calibrate_joint, save_calibration
+    from .calibration.calibration import calibrate_joint, save_calibration
 
     bw_index = _resolve_camera_index(bw_camera)
     color_index = _resolve_camera_index(color_camera)

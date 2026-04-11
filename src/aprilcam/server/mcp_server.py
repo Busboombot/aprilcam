@@ -34,9 +34,11 @@ from aprilcam.core.detection import DetectionLoop, RingBuffer
 from aprilcam.server.frame import FrameEntry, FrameRegistry
 from aprilcam.calibration.homography import (
     CORNER_ID_MAP,
+    detect_aruco_4x4,
+)
+from aprilcam.calibration.calibration import (
     FieldSpec,
     calibrate_from_corners,
-    detect_aruco_4x4,
 )
 from aprilcam.vision.image_processing import (
     process_detect_circles,
@@ -46,7 +48,7 @@ from aprilcam.vision.image_processing import (
 )
 from aprilcam.errors import CameraError, CameraNotFoundError, CameraInUseError
 from aprilcam.core.models import AprilTag
-from aprilcam.core.playfield import Playfield
+from aprilcam.core.playfield import PlayfieldBoundary as Playfield
 
 # ---------------------------------------------------------------------------
 # Camera registry

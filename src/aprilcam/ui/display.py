@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Tuple, List
 import cv2 as cv
 import numpy as np
 
-from ..core.playfield import Playfield
+from ..core.playfield import PlayfieldBoundary as Playfield
 from ..core.models import AprilTag
 
 
