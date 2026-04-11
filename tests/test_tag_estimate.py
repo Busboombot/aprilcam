@@ -6,9 +6,9 @@ import time
 import numpy as np
 import pytest
 
-from aprilcam.detection import TagRecord
-from aprilcam.models import AprilTag, AprilTagFlow
-from aprilcam.playfield import Playfield
+from aprilcam.core.detection import TagRecord
+from aprilcam.core.models import AprilTag, AprilTagFlow
+from aprilcam.core.playfield import Playfield
 
 
 # ---------------------------------------------------------------------------

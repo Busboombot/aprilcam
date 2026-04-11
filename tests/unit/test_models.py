@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from aprilcam.models import AprilTag
+from aprilcam.core.models import AprilTag
 
 
 def _make_corners() -> np.ndarray:

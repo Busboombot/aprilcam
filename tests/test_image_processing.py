@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from mcp.types import ImageContent, TextContent
 
-from aprilcam.image_processing import (
+from aprilcam.vision.image_processing import (
     process_apply_transform,
     process_detect_circles,
     process_detect_contours,
@@ -26,7 +26,7 @@ from aprilcam.server.mcp_server import (
     registry,
     resolve_source,
 )
-from aprilcam.playfield import Playfield
+from aprilcam.core.playfield import Playfield
 
 
 # ---------------------------------------------------------------------------

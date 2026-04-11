@@ -13,7 +13,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     import uvicorn
-    from aprilcam.web_server import create_app
+    from aprilcam.server.web_server import create_app
 
     app = create_app()
 

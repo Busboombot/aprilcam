@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 import cv2 as cv
-from aprilcam.playfield import Playfield
+from aprilcam.core.playfield import Playfield
 
 
 def test_constructor_with_polygon():

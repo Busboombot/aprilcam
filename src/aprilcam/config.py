@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 from dotenv import dotenv_values
 import cv2 as cv
 
-from .camutil import (
+from .camera.camutil import (
     list_cameras,
     default_backends,
     select_camera_by_pattern,
@@ -165,7 +165,7 @@ class AppConfig:
         if path is not None:
             p = Path(path)
         elif device_name is not None and resolution is not None:
-            from .homography import discover_homography
+            from .calibration.homography import discover_homography
 
             found = discover_homography(
                 device_name, resolution[0], resolution[1], self.data_dir

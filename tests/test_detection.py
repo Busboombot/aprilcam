@@ -8,8 +8,8 @@ import pytest
 
 import numpy as np
 
-from aprilcam.detection import FrameRecord, RingBuffer, TagRecord, DetectionLoop
-from aprilcam.models import AprilTag
+from aprilcam.core.detection import FrameRecord, RingBuffer, TagRecord, DetectionLoop
+from aprilcam.core.models import AprilTag
 
 
 def _make_tag_record(**overrides):
@@ -272,7 +272,7 @@ from pathlib import Path
 
 import cv2 as cv
 
-from aprilcam.aprilcam import AprilCam
+from aprilcam.core.aprilcam import AprilCam
 
 TEST_DATA = Path(__file__).parent / "data"
 

@@ -67,7 +67,7 @@ def test_detect_tags_cleanup(monkeypatch):
 
 def test_detect_tags_camera_pattern(monkeypatch):
     """Verify string camera argument resolves via list_cameras."""
-    from aprilcam.camutil import CameraInfo
+    from aprilcam.camera.camutil import CameraInfo
 
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cap = MagicMock()

@@ -12,8 +12,8 @@ import numpy as np
 import cv2 as cv
 import pytest
 
-from aprilcam.playfield import Playfield
-from aprilcam.aprilcam import AprilCam
+from aprilcam.core.playfield import Playfield
+from aprilcam.core.aprilcam import AprilCam
 
 
 # ---------------------------------------------------------------------------

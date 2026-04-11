@@ -47,9 +47,9 @@ def _child_main(
     Exits when the window is closed (q/Esc) or *stop_fd* becomes readable.
     """
     # Late imports so the parent process doesn't load OpenCV GUI subsystem
-    from aprilcam.aprilcam import AprilCam
-    from aprilcam.display import PlayfieldDisplay
-    from aprilcam.playfield import Playfield
+    from aprilcam.core.aprilcam import AprilCam
+    from aprilcam.ui.display import PlayfieldDisplay
+    from aprilcam.core.playfield import Playfield
 
     pipe_out = os.fdopen(pipe_fd, "w", buffering=1)  # line-buffered
     stop_in = os.fdopen(stop_fd, "r")
@@ -64,8 +64,8 @@ def _child_main(
     # Load calibration homography for world coords and gripper overlay
     homography = None
     try:
-        from aprilcam.homography import load_calibration_for_camera
-        from aprilcam.camutil import get_device_name
+        from aprilcam.calibration.homography import load_calibration_for_camera
+        from aprilcam.camera.camutil import get_device_name
         dev_name = get_device_name(camera_index)
         cal = load_calibration_for_camera(dev_name)
         if cal is not None:
@@ -447,7 +447,7 @@ def run_live_view(
         robot_tag_id: Tag ID of the robot. Draws a blue gripper circle.
         gripper_offset_cm: Distance from robot tag center to gripper (default 14).
     """
-    from aprilcam.aprilcam import AprilCam
+    from aprilcam.core.aprilcam import AprilCam
 
     if video_path is not None:
         import os

@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from aprilcam.playfield import Playfield
-from aprilcam.homography import (
+from aprilcam.core.playfield import Playfield
+from aprilcam.calibration.homography import (
     detect_aruco_4x4,
     choose_corner_point,
     calibrate_from_corners,

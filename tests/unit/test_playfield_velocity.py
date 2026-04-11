@@ -7,8 +7,8 @@ import math
 import numpy as np
 import pytest
 
-from aprilcam.models import AprilTag, AprilTagFlow
-from aprilcam.playfield import Playfield
+from aprilcam.core.models import AprilTag, AprilTagFlow
+from aprilcam.core.playfield import Playfield
 
 
 def _make_tag(tag_id: int, cx: float, cy: float, ts: float) -> AprilTag:
@@ -129,7 +129,7 @@ class TestAprilCamNoVelocityState:
     """Verify AprilCam no longer has _vel_ema or _last_seen."""
 
     def test_aprilcam_no_velocity_state(self) -> None:
-        from aprilcam.aprilcam import AprilCam
+        from aprilcam.core.aprilcam import AprilCam
 
         cam = AprilCam(
             index=0,

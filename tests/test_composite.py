@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from aprilcam.composite import (
+from aprilcam.camera.composite import (
     Composite,
     CompositeManager,
     compute_cross_camera_homography,

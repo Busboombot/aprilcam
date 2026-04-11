@@ -20,7 +20,7 @@ from aprilcam.server.mcp_server import (
     playfield_registry,
     registry,
 )
-from aprilcam.playfield import Playfield
+from aprilcam.core.playfield import Playfield
 
 TEST_DATA = Path(__file__).parent / "data"
 

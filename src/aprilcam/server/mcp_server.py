@@ -24,29 +24,29 @@ import numpy as np
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
-from aprilcam.aprilcam import AprilCam
-from aprilcam.composite import (
+from aprilcam.core.aprilcam import AprilCam
+from aprilcam.camera.composite import (
     CompositeManager,
     compute_cross_camera_homography,
     map_tags_to_primary,
 )
-from aprilcam.detection import DetectionLoop, RingBuffer
-from aprilcam.frame import FrameEntry, FrameRegistry
-from aprilcam.homography import (
+from aprilcam.core.detection import DetectionLoop, RingBuffer
+from aprilcam.server.frame import FrameEntry, FrameRegistry
+from aprilcam.calibration.homography import (
     CORNER_ID_MAP,
     FieldSpec,
     calibrate_from_corners,
     detect_aruco_4x4,
 )
-from aprilcam.image_processing import (
+from aprilcam.vision.image_processing import (
     process_detect_circles,
     process_detect_contours,
     process_detect_lines,
     process_detect_qr_codes,
 )
 from aprilcam.errors import CameraError, CameraNotFoundError, CameraInUseError
-from aprilcam.models import AprilTag
-from aprilcam.playfield import Playfield
+from aprilcam.core.models import AprilTag
+from aprilcam.core.playfield import Playfield
 
 # ---------------------------------------------------------------------------
 # Camera registry
@@ -273,7 +273,7 @@ def format_image_output(
 
 def _handle_list_cameras() -> list[dict]:
     """Core logic for list_cameras — returns a list of camera info dicts."""
-    from aprilcam.camutil import list_cameras as _list_cameras
+    from aprilcam.camera.camutil import list_cameras as _list_cameras
 
     try:
         cams = _list_cameras(max_index=10, quiet=True, detailed_names=True)
@@ -294,7 +294,7 @@ def _handle_open_camera(
     """Core logic for open_camera — returns ``{"camera_id": ...}`` or ``{"error": ...}``."""
     try:
         if source == "screen":
-            from aprilcam.screencap import ScreenCaptureMSS
+            from aprilcam.camera.screencap import ScreenCaptureMSS
 
             cap = ScreenCaptureMSS()
         else:
@@ -302,7 +302,7 @@ def _handle_open_camera(
 
             idx: int | None = None
             if pattern is not None:
-                from aprilcam.camutil import (
+                from aprilcam.camera.camutil import (
                     list_cameras as _list_cameras,
                     select_camera_by_pattern,
                 )
@@ -337,7 +337,7 @@ def _handle_open_camera(
 
             if not cap.isOpened():
                 cap.release()
-                from aprilcam.camutil import diagnose_camera_failure
+                from aprilcam.camera.camutil import diagnose_camera_failure
 
                 diag = diagnose_camera_failure(idx)
                 if not diag.get("exists", True):
@@ -589,8 +589,8 @@ def _handle_calibrate_playfield(
                 except (ValueError, IndexError):
                     pass
 
-            from aprilcam.camutil import camera_slug, get_device_name
-            from aprilcam.homography import homography_path
+            from aprilcam.camera.camutil import camera_slug, get_device_name
+            from aprilcam.calibration.homography import homography_path
 
             dev_name = get_device_name(cam_idx) if cam_idx is not None else None
 
@@ -874,7 +874,7 @@ def _handle_get_objects(source_id: str) -> dict:
     """Core logic for get_objects — returns detected non-tag objects or error."""
     try:
         import cv2 as cv
-        from aprilcam.objects import SquareDetector
+        from aprilcam.vision.objects import SquareDetector
 
         det_entry = detection_registry.get(source_id)
         if det_entry is None:
@@ -919,7 +919,7 @@ def _handle_get_objects(source_id: str) -> dict:
         )
 
         # Color classify each object using the color frame
-        from aprilcam.color_classifier import ColorClassifier
+        from aprilcam.vision.color_classifier import ColorClassifier
         from dataclasses import replace as _replace
         classifier = ColorClassifier()
         colored = []
@@ -1100,7 +1100,7 @@ def _handle_get_frame(
         # Draw detected objects
         try:
             import cv2 as _cv
-            from aprilcam.objects import SquareDetector
+            from aprilcam.vision.objects import SquareDetector
 
             detector = SquareDetector()
             gray_ann = _cv.cvtColor(frame, _cv.COLOR_BGR2GRAY)
@@ -1194,8 +1194,8 @@ def _handle_start_live_view(
         if view_id in live_view_registry:
             return {"error": f"Live view already running for '{camera_id}'"}
 
-        from aprilcam.liveview import LiveViewProcess
-        from aprilcam.detection import FrameRecord, TagRecord as _TR, RingBuffer
+        from aprilcam.ui.liveview import LiveViewProcess
+        from aprilcam.core.detection import FrameRecord, TagRecord as _TR, RingBuffer
 
         buf = RingBuffer(maxlen=300)
 
@@ -2477,7 +2477,7 @@ async def detect_motion(source_id: str) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
         import cv2
 
-        from aprilcam.image_processing import process_detect_motion
+        from aprilcam.vision.image_processing import process_detect_motion
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         prev = _motion_prev_frames.get(source_id)
@@ -2563,7 +2563,7 @@ async def apply_transform(
             p = _json.loads(params) if isinstance(params, str) else params
         except Exception:
             p = {}
-        from aprilcam.image_processing import process_apply_transform
+        from aprilcam.vision.image_processing import process_apply_transform
 
         try:
             result = process_apply_transform(frame, operation, p)

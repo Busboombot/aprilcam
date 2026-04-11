@@ -14,7 +14,7 @@ import cv2 as cv
 import numpy as np
 
 from aprilcam import detect_tags
-from aprilcam.objects import SquareDetector
+from aprilcam.vision.objects import SquareDetector
 
 parser = argparse.ArgumentParser(description="Benchmark tag + object detection")
 parser.add_argument("camera", type=int, nargs="?", default=0, help="Camera index")

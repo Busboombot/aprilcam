@@ -9,7 +9,9 @@
       "Read(//tmp/**)",
       "Read(//private/tmp/**)",
       "mcp__clasi__list_sprints",
-      "Bash(find tests:*)"
+      "Bash(find tests:*)",
+      "Bash(find src:*)",
+      "Bash(find src/aprilcam/cli -name '*.py' -exec sed -i '' -e 's|from \\\\.\\\\.camutil import|from ..camera.camutil import|g' -e 's|from \\\\.\\\\.homography import|from ..calibration.homography import|g' -e 's|from \\\\.\\\\.liveview import|from ..ui.liveview import|g' -e 's|from \\\\.\\\\.mcp_server import|from ..server.mcp_server import|g' -e 's|from \\\\.\\\\.web_server import|from ..server.web_server import|g' '{}' +)"
     ]
   },
   "hooks": {

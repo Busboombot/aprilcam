@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import List, Optional
 
-from ..camutil import list_cameras, default_backends, select_camera_by_pattern, macos_avfoundation_device_names
+from ..camera.camutil import list_cameras, default_backends, select_camera_by_pattern, macos_avfoundation_device_names
 from ..config import AppConfig
 
 

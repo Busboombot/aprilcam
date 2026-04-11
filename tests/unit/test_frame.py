@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pytest
 
-from aprilcam.frame import FrameEntry, FrameRegistry
+from aprilcam.server.frame import FrameEntry, FrameRegistry
 
 
 def _make_image(value: int = 0) -> np.ndarray:

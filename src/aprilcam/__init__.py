@@ -1,11 +1,11 @@
 from pathlib import Path as _Path
 
 from aprilcam.stream import detect_tags, detect_objects, calibrate
-from aprilcam.detection import TagRecord
-from aprilcam.aprilcam import AprilCam
-from aprilcam.models import AprilTag
-from aprilcam.playfield import Playfield
-from aprilcam.objects import ObjectRecord
+from aprilcam.core.detection import TagRecord
+from aprilcam.core.aprilcam import AprilCam
+from aprilcam.core.models import AprilTag
+from aprilcam.core.playfield import Playfield
+from aprilcam.vision.objects import ObjectRecord
 from aprilcam.errors import (
     CameraError,
     CameraInUseError,

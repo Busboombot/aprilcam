@@ -25,13 +25,13 @@ def test_no_subcommand_shows_help(cli_runner):
 
 
 def test_mcp_dispatches_to_module(monkeypatch):
-    """MCP subcommand should dispatch to aprilcam.mcp_server.main."""
+    """MCP subcommand should dispatch to aprilcam.server.mcp_server.main."""
     from aprilcam.cli import SUBCOMMANDS
-    assert SUBCOMMANDS["mcp"]["module"] == "aprilcam.mcp_server"
+    assert SUBCOMMANDS["mcp"]["module"] == "aprilcam.server.mcp_server"
 
     # Verify that the dispatcher would call the module's main()
     called = []
-    import aprilcam.mcp_server as mcp_mod
+    import aprilcam.server.mcp_server as mcp_mod
     monkeypatch.setattr(mcp_mod, "main", lambda argv: called.append(argv))
     from aprilcam.cli import main
     try:

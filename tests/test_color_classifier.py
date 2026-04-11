@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from aprilcam.color_classifier import ColorClassifier
-from aprilcam.objects import ObjectRecord
+from aprilcam.vision.color_classifier import ColorClassifier
+from aprilcam.vision.objects import ObjectRecord
 
 
 def _make_image(width=200, height=200):

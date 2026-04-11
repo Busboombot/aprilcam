@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aprilcam.camutil import camera_slug
-from aprilcam.homography import discover_homography, homography_path
+from aprilcam.camera.camutil import camera_slug
+from aprilcam.calibration.homography import discover_homography, homography_path
 
 
 # -- camera_slug tests -------------------------------------------------------

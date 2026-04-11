@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from aprilcam.composite import CompositeManager
+from aprilcam.camera.composite import CompositeManager
 from aprilcam.server.mcp_server import (
     composite_manager,
     create_composite,
@@ -301,7 +301,7 @@ def _setup_composite_with_tags():
         [400, 400, 400, 400],
         [100, 400, 100, 400],
     ]
-    from aprilcam.composite import compute_cross_camera_homography
+    from aprilcam.camera.composite import compute_cross_camera_homography
 
     pri_pts = np.array([[p[0], p[1]] for p in points], dtype=np.float64)
     sec_pts = np.array([[p[2], p[3]] for p in points], dtype=np.float64)
@@ -423,7 +423,7 @@ class TestGetCompositeTags:
     def test_with_playfield_calibration(self):
         """Tags get world_xy when composite has a calibrated playfield."""
         from aprilcam.server.mcp_server import PlayfieldEntry
-        from aprilcam.playfield import Playfield
+        from aprilcam.core.playfield import Playfield
 
         comp_id, cam1_id, cam2_id = _setup_composite_with_tags()
 

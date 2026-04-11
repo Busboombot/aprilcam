@@ -66,7 +66,7 @@ def open_source_from_meta(H_meta: Dict[str, Any], quiet: bool = True):
     if src_type == "screen":
         region = H_meta.get("region")
         try:
-            from .screencap import ScreenCaptureMSS
+            from .camera.screencap import ScreenCaptureMSS
             cap = ScreenCaptureMSS(
                 monitor=int(H_meta.get("monitor", 1)),
                 fps=float(H_meta.get("fps", 30.0)),

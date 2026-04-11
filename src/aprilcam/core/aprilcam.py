@@ -678,7 +678,7 @@ class AprilCam:
         # Persistent object overlays (list of ObjectRecord or None)
         _detected_objects: list | None = None
         # Persistent square detector that caches tag positions
-        from aprilcam.objects import SquareDetector as _SD
+        from aprilcam.vision.objects import SquareDetector as _SD
         _sq_detector = _SD()
 
         # Open color camera at startup if specified (avoids USB contention on each 'd')
@@ -692,7 +692,7 @@ class AprilCam:
             else:
                 # Load calibration
                 try:
-                    from aprilcam.homography import load_calibration
+                    from aprilcam.calibration.homography import load_calibration
                     all_cals = load_calibration()
                     for _name, _cal in all_cals.items():
                         if _cal.dist_coeffs is not None or _cal.resolution[0] > 1280:
@@ -811,7 +811,7 @@ class AprilCam:
                         # One-shot object detection + color classification
                         # Uses joint calibration for world-coord fusion.
                         try:
-                            from aprilcam.objects import ObjectFuser
+                            from aprilcam.vision.objects import ObjectFuser
                             from dataclasses import replace as _replace
 
                             raw_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
@@ -832,7 +832,7 @@ class AprilCam:
                             # Color classify BEFORE deskew remap — center_px
                             # is still in original frame coords at this point.
                             try:
-                                from aprilcam.color_classifier import ColorClassifier
+                                from aprilcam.vision.color_classifier import ColorClassifier
                                 classifier = ColorClassifier()
                                 colored = []
 

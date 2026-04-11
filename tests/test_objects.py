@@ -6,7 +6,7 @@ import cv2 as cv
 import numpy as np
 import pytest
 
-from aprilcam.objects import FrameResult, ObjectRecord, SquareDetector
+from aprilcam.vision.objects import FrameResult, ObjectRecord, SquareDetector
 
 
 # ---------------------------------------------------------------------------

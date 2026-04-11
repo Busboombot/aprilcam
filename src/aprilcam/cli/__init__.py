@@ -6,7 +6,7 @@ import sys
 SUBCOMMANDS = {
     "mcp": {
         "help": "Start the MCP server",
-        "module": "aprilcam.mcp_server",
+        "module": "aprilcam.server.mcp_server",
     },
     "taggen": {
         "help": "Generate AprilTag or ArUco marker images (PDF or PNG)",

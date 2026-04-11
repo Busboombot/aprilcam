@@ -15,10 +15,10 @@ from typing import Generator
 import cv2 as cv
 import numpy as np
 
-from .aprilcam import AprilCam
-from .camutil import list_cameras, get_device_name, select_camera_by_pattern
-from .detection import TagRecord
-from .homography import discover_homography
+from .core.aprilcam import AprilCam
+from .camera.camutil import list_cameras, get_device_name, select_camera_by_pattern
+from .core.detection import TagRecord
+from .calibration.homography import discover_homography
 
 
 def _resolve_camera_index(camera: int | str) -> int:
@@ -47,7 +47,7 @@ def _load_homography_matrix(
     if homography == "auto":
         device_name = get_device_name(camera_index)
 
-        from .homography import load_calibration_for_camera
+        from .calibration.homography import load_calibration_for_camera
         cal = load_calibration_for_camera(device_name, data_path)
         if cal is not None:
             return cal.homography
@@ -142,7 +142,7 @@ def detect_tags(
         sq_detector = None
         color_cal = None
         if detect_objects:
-            from .objects import SquareDetector
+            from .vision.objects import SquareDetector
             sq_detector = SquareDetector()
 
             if color_camera is not None:
@@ -152,7 +152,7 @@ def detect_tags(
                     color_cap = None
                 else:
                     try:
-                        from .homography import load_calibration
+                        from .calibration.homography import load_calibration
                         all_cals = load_calibration(data_dir)
                         for _name, cal in all_cals.items():
                             if cal.dist_coeffs is not None or cal.resolution[0] > 1280:
@@ -185,7 +185,7 @@ def detect_tags(
                 # Color classify via color camera
                 if color_cap is not None and color_cal is not None and objects:
                     try:
-                        from .color_classifier import ColorClassifier
+                        from .vision.color_classifier import ColorClassifier
                         from dataclasses import replace
                         ret_c, color_frame = color_cap.read()
                         if ret_c and color_frame is not None:
@@ -248,7 +248,7 @@ def detect_objects(
         List of :class:`~aprilcam.objects.ObjectRecord` with world
         positions and color labels.
     """
-    from .objects import SquareDetector, ObjectRecord
+    from .vision.objects import SquareDetector, ObjectRecord
 
     index = _resolve_camera_index(camera)
     cap = cv.VideoCapture(index)
@@ -289,8 +289,8 @@ def detect_objects(
         # Color classify
         if color_camera is not None and objects:
             try:
-                from .color_classifier import ColorClassifier
-                from .homography import load_calibration
+                from .vision.color_classifier import ColorClassifier
+                from .calibration.homography import load_calibration
                 from dataclasses import replace
 
                 color_idx = _resolve_camera_index(color_camera)
@@ -373,7 +373,7 @@ def calibrate(
 
     # Single-camera mode
     if camera is not None:
-        from .homography import calibrate_single, save_calibration
+        from .calibration.homography import calibrate_single, save_calibration
 
         cam_index = _resolve_camera_index(camera)
         cap = cv.VideoCapture(cam_index)
@@ -419,7 +419,7 @@ def calibrate(
             "or both 'bw_camera' and 'color_camera' for two-camera calibration."
         )
 
-    from .homography import calibrate_joint, save_calibration
+    from .calibration.homography import calibrate_joint, save_calibration
 
     bw_index = _resolve_camera_index(bw_camera)
     color_index = _resolve_camera_index(color_camera)

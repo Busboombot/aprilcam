@@ -103,11 +103,6 @@ class TestListCameras:
         cam.name = "FaceTime"
         cam.backend = "AVFOUNDATION"
 
-        with patch("aprilcam.mcp_server.list_cameras") as mock_tool:
-            # We need to patch the inner import instead
-            pass
-
-        # Patch the inner import used inside the tool function
         from aprilcam.server.mcp_server import list_cameras as tool_fn
 
         mock_cam = MagicMock()
@@ -116,7 +111,8 @@ class TestListCameras:
         mock_cam.backend = "AVFOUNDATION"
         mock_cam.device_name = "FaceTime"
 
-        with patch("aprilcam.camutil.list_cameras", return_value=[mock_cam]):
+        import aprilcam.camera.camutil as _camutil
+        with patch.object(_camutil, "list_cameras", return_value=[mock_cam]):
             result = _run(tool_fn())
 
         assert len(result) == 1
@@ -131,7 +127,8 @@ class TestListCameras:
     def test_returns_empty_array_when_no_cameras(self):
         from aprilcam.server.mcp_server import list_cameras as tool_fn
 
-        with patch("aprilcam.camutil.list_cameras", return_value=[]):
+        import aprilcam.camera.camutil as _camutil
+        with patch.object(_camutil, "list_cameras", return_value=[]):
             result = _run(tool_fn())
 
         data = json.loads(result[0].text)

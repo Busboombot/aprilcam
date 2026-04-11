@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aprilcam.homography import FieldSpec, calibrate_from_corners
+from aprilcam.calibration.homography import FieldSpec, calibrate_from_corners
 
 
 def test_calibrate_identity():

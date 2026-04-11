@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from aprilcam.objects import FrameResult, ObjectRecord, SquareDetector
+from aprilcam.vision.objects import FrameResult, ObjectRecord, SquareDetector
 from aprilcam.stream import detect_tags
 
 

@@ -88,8 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # Load from calibration.json (preferred) or legacy per-camera files
         try:
-            from aprilcam.homography import load_calibration_for_camera
-            from aprilcam.camutil import get_device_name
+            from aprilcam.calibration.homography import load_calibration_for_camera
+            from aprilcam.camera.camutil import get_device_name
 
             dev_name = get_device_name(args.camera)
             cal = load_calibration_for_camera(dev_name)
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Loaded calibration for '{dev_name}'")
             else:
                 # Legacy fallback
-                from aprilcam.homography import discover_homography
+                from aprilcam.calibration.homography import discover_homography
                 import cv2 as cv
                 cap = cv.VideoCapture(args.camera)
                 if cap.isOpened():
@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:
             print(f"Warning: homography auto-discover failed: {e}")
 
-    from aprilcam.liveview import run_live_view
+    from aprilcam.ui.liveview import run_live_view
 
     run_live_view(
         camera_index=args.camera,

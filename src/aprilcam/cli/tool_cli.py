@@ -17,7 +17,7 @@ from typing import List, Optional
 
 def _get_tools():
     """Return the list of MCP tool definitions from the server."""
-    from aprilcam.mcp_server import server
+    from aprilcam.server.mcp_server import server
 
     return asyncio.run(server.list_tools())
 
@@ -92,7 +92,7 @@ def _coerce_value(value_str: str, prop_info: dict):
 
 def _run_tool(tool, args: list[str]):
     """Run a tool with key=value arguments."""
-    from aprilcam.mcp_server import server
+    from aprilcam.server.mcp_server import server
 
     props = tool.inputSchema.get("properties", {})
     required = tool.inputSchema.get("required", [])

@@ -3,7 +3,7 @@
 import time
 from unittest.mock import MagicMock, patch
 
-from aprilcam.objects import ColorCameraThread, ObjectFuser, ObjectRecord
+from aprilcam.vision.objects import ColorCameraThread, ObjectFuser, ObjectRecord
 
 
 def _make_obj(world_xy=None, color="unknown"):

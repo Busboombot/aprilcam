@@ -13,7 +13,7 @@ from aprilcam.errors import (
     CameraInUseError,
     CameraPermissionError,
 )
-from aprilcam.camutil import diagnose_camera_failure
+from aprilcam.camera.camutil import diagnose_camera_failure
 
 
 # ---------- Exception hierarchy ----------
