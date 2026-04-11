@@ -130,11 +130,12 @@ def _child_main(
 
             # Build pipeline debug images from the raw frame
             gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-            blur_lp = cv.GaussianBlur(gray, (51, 51), 0)
-            hp = cv.add(cv.subtract(gray, blur_lp), 128)
+            illum = cv.GaussianBlur(gray, (51, 51), 0).astype(np.float32)
+            illum = np.maximum(illum, 1.0)
+            flat = np.clip((gray.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
             clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(gray)
-            hp_clahe = cv.createCLAHE(3.0, (8, 8)).apply(hp)
-            _, thresh_img = cv.threshold(hp, 150, 255, cv.THRESH_BINARY)
+            flat_clahe = cv.createCLAHE(3.0, (8, 8)).apply(flat)
+            _, thresh_img = cv.threshold(flat, 150, 255, cv.THRESH_BINARY)
 
             # Always update playfield detection from the raw color frame
             display.playfield.update(frame)
@@ -147,11 +148,11 @@ def _child_main(
             elif pipe_mode == "gray":
                 view_frame = cv.cvtColor(gray, cv.COLOR_GRAY2BGR)
             elif pipe_mode == "highpass":
-                view_frame = cv.cvtColor(hp, cv.COLOR_GRAY2BGR)
+                view_frame = cv.cvtColor(flat, cv.COLOR_GRAY2BGR)
             elif pipe_mode == "clahe":
                 view_frame = cv.cvtColor(clahe_img, cv.COLOR_GRAY2BGR)
             elif pipe_mode == "hp+clahe":
-                view_frame = cv.cvtColor(hp_clahe, cv.COLOR_GRAY2BGR)
+                view_frame = cv.cvtColor(flat_clahe, cv.COLOR_GRAY2BGR)
             elif pipe_mode == "threshold":
                 view_frame = cv.cvtColor(thresh_img, cv.COLOR_GRAY2BGR)
             else:

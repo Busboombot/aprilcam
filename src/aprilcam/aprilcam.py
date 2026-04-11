@@ -268,9 +268,9 @@ class AprilCam:
         view_labels = {
             "color": "0: Color",
             "gray": "1: Grayscale",
-            "highpass": "2: High-pass",
+            "flat": "2: Flattened",
             "clahe": "3: CLAHE",
-            "hp+clahe": "4: HP+CLAHE",
+            "flat+clahe": "4: Flat+CLAHE",
             "threshold": "5: Threshold",
         }
         st.add_row("View", f"[cyan]{view_labels.get(pipe_mode, pipe_mode)}[/cyan]")
@@ -390,18 +390,25 @@ class AprilCam:
     ) -> np.ndarray:
         """Optionally apply preprocessing to a grayscale image.
 
-        High-pass filtering is on by default — it subtracts a blurred
-        version of the image, removing low-frequency glare gradients
-        while preserving the high-frequency edges that define tags.
+        Illumination flattening is on by default — estimates the low-
+        frequency illumination field via a large Gaussian blur and
+        divides it out.  Because illumination is multiplicative
+        (pixel = reflectance x illumination), division recovers the
+        reflectance: a white tag square under dim light and one under
+        bright glare both come out at the same value.
         """
         out = gray
         if use_highpass:
             k = highpass_ksize
             if k % 2 == 0:
                 k += 1
-            blurred = cv.GaussianBlur(out, (k, k), 0)
-            hp = cv.subtract(out, blurred)
-            out = cv.normalize(hp, None, 0, 255, cv.NORM_MINMAX).astype(np.uint8)
+            # Estimate the low-frequency illumination field
+            illum = cv.GaussianBlur(out, (k, k), 0).astype(np.float32)
+            # Clamp to avoid division by zero in very dark regions
+            illum = np.maximum(illum, 1.0)
+            # Divide out the illumination and rescale to 0-255
+            flat = (out.astype(np.float32) / illum) * 128.0
+            out = np.clip(flat, 0, 255).astype(np.uint8)
         if use_clahe:
             clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             out = clahe.apply(out)
@@ -691,9 +698,9 @@ class AprilCam:
         _PIPE_MODES = {
             ord("0"): "color",
             ord("1"): "gray",
-            ord("2"): "highpass",
+            ord("2"): "flat",
             ord("3"): "clahe",
-            ord("4"): "hp+clahe",
+            ord("4"): "flat+clahe",
             ord("5"): "threshold",
         }
         _pipe_mode = "color"
@@ -723,22 +730,23 @@ class AprilCam:
 
                     # 7) Build pipeline debug images
                     gray_img = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                    blur_lp = cv.GaussianBlur(gray_img, (51, 51), 0)
-                    hp_img = cv.add(cv.subtract(gray_img, blur_lp), 128)
+                    illum = cv.GaussianBlur(gray_img, (51, 51), 0).astype(np.float32)
+                    illum = np.maximum(illum, 1.0)
+                    flat_img = np.clip((gray_img.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
                     clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(gray_img)
-                    hp_clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(hp_img)
-                    _, thresh_img = cv.threshold(hp_img, 150, 255, cv.THRESH_BINARY)
+                    flat_clahe_img = cv.createCLAHE(3.0, (8, 8)).apply(flat_img)
+                    _, thresh_img = cv.threshold(flat_img, 150, 255, cv.THRESH_BINARY)
 
                     if _pipe_mode == "color":
                         view_frame = frame
                     elif _pipe_mode == "gray":
                         view_frame = cv.cvtColor(gray_img, cv.COLOR_GRAY2BGR)
-                    elif _pipe_mode == "highpass":
-                        view_frame = cv.cvtColor(hp_img, cv.COLOR_GRAY2BGR)
+                    elif _pipe_mode == "flat":
+                        view_frame = cv.cvtColor(flat_img, cv.COLOR_GRAY2BGR)
                     elif _pipe_mode == "clahe":
                         view_frame = cv.cvtColor(clahe_img, cv.COLOR_GRAY2BGR)
-                    elif _pipe_mode == "hp+clahe":
-                        view_frame = cv.cvtColor(hp_clahe_img, cv.COLOR_GRAY2BGR)
+                    elif _pipe_mode == "flat+clahe":
+                        view_frame = cv.cvtColor(flat_clahe_img, cv.COLOR_GRAY2BGR)
                     elif _pipe_mode == "threshold":
                         view_frame = cv.cvtColor(thresh_img, cv.COLOR_GRAY2BGR)
                     else:

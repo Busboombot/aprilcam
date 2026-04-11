@@ -55,7 +55,7 @@ class SquareDetector:
         self,
         min_area: int = 200,
         max_area: int = 800,
-        threshold: int = 150,
+        threshold: int = 155,
         tag_margin: float = 1.8,
         border_margin: int = 50,
         highpass_ksize: int = 51,
@@ -105,14 +105,15 @@ class SquareDetector:
             List of :class:`ObjectRecord` for each detected square-like
             contour.
         """
-        # High-pass filter removes illumination gradients (glare, uneven
-        # lighting) so cubes stand out regardless of where they sit on the
-        # playfield.  Re-center around 128 so the threshold is intensity-
-        # independent.
+        # Illumination flattening: estimate the low-frequency illumination
+        # field and divide it out.  Because illumination is multiplicative,
+        # division recovers the reflectance — a cube in a bright zone and
+        # one in a dark zone both produce the same output level.
         k = self.highpass_ksize
-        blur_lp = cv.GaussianBlur(gray, (k, k), 0)
-        hp = cv.add(cv.subtract(gray, blur_lp), 128)
-        _, thresh = cv.threshold(hp, self.threshold, 255, cv.THRESH_BINARY)
+        illum = cv.GaussianBlur(gray, (k, k), 0).astype(np.float32)
+        illum = np.maximum(illum, 1.0)
+        flat = np.clip((gray.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
+        _, thresh = cv.threshold(flat, self.threshold, 255, cv.THRESH_BINARY)
         # Light morphological open to remove specks.
         kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
         thresh = cv.morphologyEx(thresh, cv.MORPH_OPEN, kernel)

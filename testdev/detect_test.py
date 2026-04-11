@@ -64,10 +64,12 @@ def detect_tags(gray: np.ndarray):
 # ── Preprocessing strategies ──────────────────────────────────────────
 
 def preprocess_highpass_clahe(gray: np.ndarray) -> np.ndarray:
-    """High-pass filter + CLAHE. Best for edge/corner tags at native res."""
-    blur = cv.GaussianBlur(gray, (51, 51), 0)
-    hp = cv.add(cv.subtract(gray, blur), 128)
-    return cv.createCLAHE(3.0, (8, 8)).apply(hp)
+    """Illumination flattening + CLAHE. Divides out the low-frequency
+    illumination field, then applies CLAHE for local contrast."""
+    illum = cv.GaussianBlur(gray, (51, 51), 0).astype(np.float32)
+    illum = np.maximum(illum, 1.0)
+    flat = np.clip((gray.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
+    return cv.createCLAHE(3.0, (8, 8)).apply(flat)
 
 
 def preprocess_clahe(gray: np.ndarray, clip: float = 4.0) -> np.ndarray:
@@ -81,11 +83,12 @@ def preprocess_equalize(gray: np.ndarray) -> np.ndarray:
 
 
 def preprocess_strong_clahe_highpass(gray: np.ndarray) -> np.ndarray:
-    """Very strong CLAHE + highpass. Best at 3x for washed-out interior tags."""
+    """Very strong CLAHE + illumination flattening."""
     strong = cv.createCLAHE(5.0, (4, 4)).apply(gray)
-    blur = cv.GaussianBlur(strong, (151, 151), 0)
-    hp = cv.add(cv.subtract(strong, blur), 128)
-    return cv.createCLAHE(3.0, (8, 8)).apply(hp)
+    illum = cv.GaussianBlur(strong, (151, 151), 0).astype(np.float32)
+    illum = np.maximum(illum, 1.0)
+    flat = np.clip((strong.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
+    return cv.createCLAHE(3.0, (8, 8)).apply(flat)
 
 
 def preprocess_aggressive_clahe(gray: np.ndarray) -> np.ndarray:
@@ -200,7 +203,10 @@ def detect_multiscale(gray: np.ndarray, save_dir: Path | None = None, verbose=Tr
         a_str = str(sorted(tile_found_april)) if tile_found_april else "—"
         print(f"  {'tiled@4x':<22s} {dt:>6.0f}ms  AT:{a_str}")
 
-    # Filter known false ArUco IDs (ID 17 is a recurring false positive)
+    # Filter cross-dictionary false positives:
+    # - ArUco 4x4 markers (IDs 0-3) can decode as AprilTag 36h11
+    # - ArUco ID 17 is a recurring false positive from playfield edges
+    all_april -= {0, 1, 2}  # ArUco corner IDs that alias as AprilTags
     all_aruco -= {17}
 
     return all_april, all_aruco, results
@@ -213,11 +219,35 @@ def detect_cubes(frame_bgr: np.ndarray, homography: np.ndarray | None = None):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     from aprilcam.objects import SquareDetector
     from aprilcam.color_classifier import ColorClassifier
+    from aprilcam.playfield import Playfield
     from dataclasses import replace
 
     gray = cv.cvtColor(frame_bgr, cv.COLOR_BGR2GRAY)
+
+    # Detect tags for exclusion zones
+    illum = cv.GaussianBlur(gray, (51, 51), 0).astype(np.float32)
+    illum = np.maximum(illum, 1.0)
+    flat = np.clip((gray.astype(np.float32) / illum) * 128.0, 0, 255).astype(np.uint8)
+
+    tag_corners = []
+    p = make_detector_params()
+    for dict_id in [cv.aruco.DICT_APRILTAG_36H11, cv.aruco.DICT_4X4_50]:
+        d = cv.aruco.getPredefinedDictionary(dict_id)
+        det = cv.aruco.ArucoDetector(d, p)
+        corners, ids, _ = det.detectMarkers(flat)
+        if corners:
+            for c in corners:
+                tag_corners.append(c.reshape(-1, 2).astype(np.float32))
+
+    # Get playfield polygon
+    pf = Playfield()
+    pf.update(frame_bgr)
+    pf_poly = pf.get_polygon()
+
     detector = SquareDetector()
-    objects = detector.detect(gray, homography=homography)
+    objects = detector.detect(gray, homography=homography,
+                              tag_corners=tag_corners,
+                              playfield_polygon=pf_poly)
 
     classifier = ColorClassifier()
     colored = []
