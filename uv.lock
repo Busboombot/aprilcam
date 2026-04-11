@@ -38,7 +38,7 @@ wheels = [
 
 [[package]]
 name = "aprilcam"
-version = "0.20260411.1"
+version = "0.20260411.2"
 source = { editable = "." }
 dependencies = [
     { name = "cv2-enumerate-cameras" },

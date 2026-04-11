@@ -1,11 +1,14 @@
 ---
-id: "013"
-title: "Tag Position Estimation"
-status: planning
+id: '013'
+title: Tag Position Estimation
+status: done
 branch: sprint/013-tag-position-estimation
-use-cases: [SUC-001, SUC-002, SUC-003]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
 todo:
-  - tag-position-estimation-tag-estimate-t-method.md
+- tag-position-estimation-tag-estimate-t-method.md
 ---
 
 # Sprint 013: Tag Position Estimation
