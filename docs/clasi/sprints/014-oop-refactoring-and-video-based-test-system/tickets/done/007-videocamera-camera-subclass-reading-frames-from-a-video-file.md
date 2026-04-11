@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: 'VideoCamera: Camera subclass reading frames from a video file'
-status: todo
+status: done
 use-cases:
   - SUC-002
   - SUC-010

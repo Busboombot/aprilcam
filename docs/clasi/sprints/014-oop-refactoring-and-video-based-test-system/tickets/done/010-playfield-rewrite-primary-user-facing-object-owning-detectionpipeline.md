@@ -1,7 +1,7 @@
 ---
 id: '010'
 title: 'Playfield rewrite: primary user-facing object owning DetectionPipeline'
-status: todo
+status: done
 use-cases:
   - SUC-006
   - SUC-007

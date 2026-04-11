@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: 'Camera class: device discovery and VideoCapture wrapper'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002

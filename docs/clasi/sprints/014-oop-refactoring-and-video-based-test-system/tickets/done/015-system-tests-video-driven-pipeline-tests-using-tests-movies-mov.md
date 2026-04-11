@@ -1,7 +1,7 @@
 ---
 id: '015'
 title: 'System tests: video-driven pipeline tests using tests/movies/*.mov'
-status: todo
+status: done
 use-cases:
   - SUC-002
   - SUC-010

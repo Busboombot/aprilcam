@@ -1,7 +1,7 @@
 ---
 id: '011'
 title: 'CLI live loop: move AprilCam.run() to cli/live_cli.py'
-status: todo
+status: done
 use-cases:
   - SUC-008
 depends-on:

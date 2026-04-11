@@ -1,7 +1,7 @@
 ---
 id: '012'
 title: 'Update __init__.py: export Camera, Tag, calibrate; delete stream.py; shrink AprilCam shim'
-status: todo
+status: done
 use-cases:
   - SUC-001
   - SUC-006

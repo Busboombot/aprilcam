@@ -1,7 +1,7 @@
 ---
 id: "009"
 title: 'Tag class: live tag handle with flat properties and update/position_at'
-status: todo
+status: done
 use-cases:
   - SUC-006
   - SUC-007

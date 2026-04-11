@@ -1,7 +1,7 @@
 ---
 id: '013'
 title: 'Smoke tests: import and construction sanity checks'
-status: todo
+status: done
 use-cases:
   - SUC-010
 depends-on:

@@ -1,7 +1,7 @@
 ---
 id: "008"
 title: 'DetectionPipeline: background thread orchestrating detect-track-velocity-buffer'
-status: todo
+status: done
 use-cases:
   - SUC-002
   - SUC-004

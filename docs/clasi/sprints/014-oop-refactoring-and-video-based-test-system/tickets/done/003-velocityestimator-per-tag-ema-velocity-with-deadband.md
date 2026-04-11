@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: 'VelocityEstimator: per-tag EMA velocity with deadband'
-status: todo
+status: done
 use-cases:
   - SUC-005
 depends-on: []

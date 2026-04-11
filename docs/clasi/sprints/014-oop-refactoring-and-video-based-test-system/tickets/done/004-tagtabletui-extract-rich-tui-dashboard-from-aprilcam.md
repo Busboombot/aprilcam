@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'TagTableTUI: extract Rich TUI dashboard from AprilCam'
-status: todo
+status: done
 use-cases:
   - SUC-008
 depends-on: []

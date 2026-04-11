@@ -1,7 +1,7 @@
 ---
 id: '014'
 title: 'Unit tests: per-class tests for all new OOP classes'
-status: todo
+status: done
 use-cases:
   - SUC-010
 depends-on:
