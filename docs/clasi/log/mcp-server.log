@@ -71,3 +71,43 @@
 2026-04-11T09:35:54 [INFO] [team-lead] CALL review_sprint_pre_close({"sprint_id": "012"})
 2026-04-11T09:35:54 [INFO] [team-lead]   OK review_sprint_pre_close -> ([TextContent(type='text', text='{\n  "passed": true,\n  "issues": []\n}', annotations=None, meta=None)], {'result': '{\n  "passed": true,\n  "issues": []\n}'})
 2026-04-11T09:35:58 [INFO] [team-lead] CALL close_sprint({"sprint_id": "012", "branch_name": "sprint/012-object-detection-for-colored-cubes", "main_branch": "master", "push_tags": "True", "delete_branch": "True"})
+2026-04-19T16:55:16 [INFO] ============================================================
+2026-04-19T16:55:16 [INFO] CLASI MCP server starting
+2026-04-19T16:55:16 [INFO]   serving: team-lead (tier 0)
+2026-04-19T16:55:16 [INFO]   project_root: /Volumes/Proj/proj/RobotProjects/AprilTags
+2026-04-19T16:55:16 [INFO]   clasi_dir: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi
+2026-04-19T16:55:16 [INFO]   content_root: /Users/eric/.local/pipx/venvs/clasi/lib/python3.14/site-packages/clasi
+2026-04-19T16:55:16 [INFO]   python: /Users/eric/.local/pipx/venvs/clasi/bin/python
+2026-04-19T16:55:16 [INFO]   log_file: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi/log/mcp-server.log
+2026-04-19T16:55:16 [INFO]   tools registered: 30
+2026-04-19T16:55:16 [INFO] CLASI MCP server ready
+2026-04-19T18:17:32 [INFO] ============================================================
+2026-04-19T18:17:32 [INFO] CLASI MCP server starting
+2026-04-19T18:17:32 [INFO]   serving: team-lead (tier 0)
+2026-04-19T18:17:32 [INFO]   project_root: /Volumes/Proj/proj/RobotProjects/AprilTags
+2026-04-19T18:17:32 [INFO]   clasi_dir: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi
+2026-04-19T18:17:32 [INFO]   content_root: /Users/eric/.local/pipx/venvs/clasi/lib/python3.14/site-packages/clasi
+2026-04-19T18:17:32 [INFO]   python: /Users/eric/.local/pipx/venvs/clasi/bin/python
+2026-04-19T18:17:32 [INFO]   log_file: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi/log/mcp-server.log
+2026-04-19T18:17:32 [INFO]   tools registered: 30
+2026-04-19T18:17:32 [INFO] CLASI MCP server ready
+2026-04-19T19:18:00 [INFO] ============================================================
+2026-04-19T19:18:00 [INFO] CLASI MCP server starting
+2026-04-19T19:18:00 [INFO]   serving: team-lead (tier 0)
+2026-04-19T19:18:00 [INFO]   project_root: /Volumes/Proj/proj/RobotProjects/AprilTags
+2026-04-19T19:18:00 [INFO]   clasi_dir: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi
+2026-04-19T19:18:00 [INFO]   content_root: /Users/eric/.local/pipx/venvs/clasi/lib/python3.14/site-packages/clasi
+2026-04-19T19:18:00 [INFO]   python: /Users/eric/.local/pipx/venvs/clasi/bin/python
+2026-04-19T19:18:00 [INFO]   log_file: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi/log/mcp-server.log
+2026-04-19T19:18:00 [INFO]   tools registered: 30
+2026-04-19T19:18:00 [INFO] CLASI MCP server ready
+2026-04-20T08:19:52 [INFO] ============================================================
+2026-04-20T08:19:52 [INFO] CLASI MCP server starting
+2026-04-20T08:19:52 [INFO]   serving: team-lead (tier 0)
+2026-04-20T08:19:52 [INFO]   project_root: /Volumes/Proj/proj/RobotProjects/AprilTags
+2026-04-20T08:19:52 [INFO]   clasi_dir: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi
+2026-04-20T08:19:52 [INFO]   content_root: /Users/eric/.local/pipx/venvs/clasi/lib/python3.14/site-packages/clasi
+2026-04-20T08:19:52 [INFO]   python: /Users/eric/.local/pipx/venvs/clasi/bin/python
+2026-04-20T08:19:52 [INFO]   log_file: /Volumes/Proj/proj/RobotProjects/AprilTags/docs/clasi/log/mcp-server.log
+2026-04-20T08:19:52 [INFO]   tools registered: 30
+2026-04-20T08:19:52 [INFO] CLASI MCP server ready
