@@ -4,8 +4,15 @@ Spawns a child process that opens a camera, runs tag detection with
 PlayfieldDisplay overlays (house shape, direction arrow, velocity arrow,
 tag ID), and shows a deskewed live view in an OpenCV window.
 
-Detection results are sent back to the parent process via a pipe as
-JSON lines so the MCP server can populate its ring buffer.
+Three OS pipes connect parent and child:
+
+- **data pipe** (child → parent): detection results sent back as JSON
+  lines so the MCP server can populate its ring buffer.
+- **stop pipe** (parent → child): parent writes ``"stop\\n"`` to signal
+  the child to exit cleanly.
+- **command pipe** (parent → child): parent writes line-delimited JSON
+  commands (``add``, ``remove``, ``clear``) to mutate the set of
+  agent-drawn paths rendered by the child each frame.
 
 macOS requires OpenCV GUI (imshow/waitKey) on the main thread, so
 the visualization must run in a separate process — not just a thread.
@@ -39,12 +46,15 @@ def _child_main(
     stop_fd: int,
     robot_tag_id: Optional[int] = None,
     gripper_offset_cm: float = 14.0,
+    cmd_fd: int = -1,
+    initial_paths_json: str = "[]",
 ) -> None:
     """Entry point for the live-view child process.
 
     Runs on the child's main thread so OpenCV GUI works on macOS.
     Writes one JSON line per frame to *pipe_fd* with detection data.
     Exits when the window is closed (q/Esc) or *stop_fd* becomes readable.
+    Reads JSON-line commands from *cmd_fd* to mutate the paths overlay.
     """
     # Late imports so the parent process doesn't load OpenCV GUI subsystem
     from aprilcam.core.aprilcam import AprilCam
@@ -53,6 +63,14 @@ def _child_main(
 
     pipe_out = os.fdopen(pipe_fd, "w", buffering=1)  # line-buffered
     stop_in = os.fdopen(stop_fd, "r")
+    cmd_in = os.fdopen(cmd_fd, "r", buffering=1)  # line-buffered command pipe
+
+    # Seed the paths dict from initial_paths_json (keyed by path_id)
+    try:
+        _initial = json.loads(initial_paths_json)
+        paths: dict[str, dict] = {p["path_id"]: p for p in _initial}
+    except Exception:
+        paths = {}
 
     # Open camera
     cap = cv.VideoCapture(camera_index, 0 if backend is None else int(backend))
@@ -98,11 +116,33 @@ def _child_main(
 
     cam.reset_state()
 
-    def _should_stop() -> bool:
-        """Non-blocking check if the parent wants us to stop."""
+    def _drain_commands() -> bool:
+        """Drain pending commands and check the stop signal.
+
+        Uses a single select call on both pipes so neither starves the other.
+        Returns True if the stop signal is readable (child should exit).
+        Mutates *paths* in place for any command lines available on cmd_in.
+        """
         import select
-        r, _, _ = select.select([stop_in], [], [], 0)
-        return bool(r)
+        r, _, _ = select.select([stop_in, cmd_in], [], [], 0)
+        if stop_in in r:
+            return True
+        if cmd_in in r:
+            try:
+                line = cmd_in.readline()
+                if line:
+                    msg = json.loads(line.strip())
+                    op = msg.get("op")
+                    if op == "add":
+                        p = msg["path"]
+                        paths[p["path_id"]] = p
+                    elif op == "remove":
+                        paths.pop(msg["path_id"], None)
+                    elif op == "clear":
+                        paths.clear()
+            except Exception:
+                pass
+        return False
 
     # Pipeline view modes: number keys switch the displayed image
     PIPE_MODES = {
@@ -118,7 +158,7 @@ def _child_main(
 
     try:
         while True:
-            if _should_stop():
+            if _drain_commands():
                 break
 
             ok, frame = cap.read()
@@ -165,6 +205,9 @@ def _child_main(
             flows = cam.playfield.get_flows()
             tags_for_overlay = list(flows.values())
             display.draw_overlays(disp, tags_for_overlay, homography=cam.homography)
+
+            # Draw agent-defined paths (stub: T004 implements the body)
+            display.draw_paths(disp, paths, cam.playfield, cam.homography)
 
             # Status panel on right side
             display.draw_status_panel(disp, tags_for_overlay, homography=cam.homography)
@@ -222,6 +265,10 @@ def _child_main(
             stop_in.close()
         except Exception:
             pass
+        try:
+            cmd_in.close()
+        except Exception:
+            pass
 
 
 class LiveViewProcess:
@@ -258,12 +305,40 @@ class LiveViewProcess:
         self._reader_thread: Optional[threading.Thread] = None
         self._pipe_read_fd: Optional[int] = None
         self._stop_write_fd: Optional[int] = None
+        self._cmd_write_fd: Optional[int] = None
+        self._initial_paths: list[dict] = []
         self._callback: Optional[Any] = None
         self._running = False
 
     @property
     def is_running(self) -> bool:
         return self._running and self._process is not None and self._process.is_alive()
+
+    def set_initial_paths(self, paths: list[dict]) -> None:
+        """Store the initial paths to be sent to the child when start() is called.
+
+        Must be called before :meth:`start`.  Each element should be the
+        dict returned by ``Path.to_dict()``.
+        """
+        self._initial_paths = list(paths)
+
+    def send_command(self, msg: dict) -> None:
+        """Send a JSON command line to the child process.
+
+        Is a no-op if the live view is not running or the command pipe
+        file descriptor is not available.
+
+        Args:
+            msg: A dict with an ``"op"`` key (``"add"``, ``"remove"``,
+                 or ``"clear"``) and any associated payload.
+        """
+        if self._cmd_write_fd is None or not self._running:
+            return
+        try:
+            line = (json.dumps(msg) + "\n").encode()
+            os.write(self._cmd_write_fd, line)
+        except OSError:
+            pass
 
     def start(self, on_frame: Optional[Any] = None) -> None:
         """Start the live view subprocess.
@@ -281,9 +356,12 @@ class LiveViewProcess:
         data_r, data_w = os.pipe()
         # Pipe for stop signal: parent writes, child reads
         stop_r, stop_w = os.pipe()
+        # Pipe for commands: parent writes, child reads
+        cmd_r, cmd_w = os.pipe()
 
         self._pipe_read_fd = data_r
         self._stop_write_fd = stop_w
+        self._cmd_write_fd = cmd_w
 
         self._process = multiprocessing.Process(
             target=_child_main,
@@ -299,6 +377,8 @@ class LiveViewProcess:
                 stop_r,
                 self._robot_tag_id,
                 self._gripper_offset_cm,
+                cmd_r,
+                json.dumps(self._initial_paths),
             ),
             daemon=True,
         )
@@ -308,6 +388,7 @@ class LiveViewProcess:
         # Close the child's ends in the parent
         os.close(data_w)
         os.close(stop_r)
+        os.close(cmd_r)
 
         # Start reader thread
         self._reader_thread = threading.Thread(
@@ -330,6 +411,14 @@ class LiveViewProcess:
             except OSError:
                 pass
             self._stop_write_fd = None
+
+        # Close command pipe write end
+        if self._cmd_write_fd is not None:
+            try:
+                os.close(self._cmd_write_fd)
+            except OSError:
+                pass
+            self._cmd_write_fd = None
 
         # Wait for process
         if self._process is not None:

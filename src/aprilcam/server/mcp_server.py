@@ -49,6 +49,8 @@ from aprilcam.vision.image_processing import (
 from aprilcam.errors import CameraError, CameraNotFoundError, CameraInUseError
 from aprilcam.core.models import AprilTag
 from aprilcam.core.playfield import PlayfieldBoundary as Playfield
+from aprilcam.server import paths as paths_module
+from aprilcam.server.paths import PathRegistry, Waypoint
 
 # ---------------------------------------------------------------------------
 # Camera registry
@@ -152,6 +154,7 @@ class PlayfieldRegistry:
 server = FastMCP("aprilcam")
 registry = CameraRegistry()
 playfield_registry = PlayfieldRegistry()
+path_registry = PathRegistry()
 composite_manager = CompositeManager()
 frame_registry = FrameRegistry()
 
@@ -1240,6 +1243,10 @@ def _handle_start_live_view(
             robot_tag_id=robot_tag_id,
             gripper_offset_cm=gripper_offset_cm,
         )
+        # Push any paths already registered for this camera's playfield
+        pf_id = playfield_registry.find_by_camera(camera_id)
+        if pf_id is not None:
+            proc.set_initial_paths([p.to_dict() for p in path_registry.list_for(pf_id)])
         proc.start(on_frame=on_frame)
 
         live_view_registry[view_id] = LiveViewEntry(
@@ -2644,6 +2651,218 @@ async def stop_live_view(view_id: str) -> list[TextContent]:
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_stop_live_view(view_id)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+# ---------------------------------------------------------------------------
+# Live-view lookup helper
+# ---------------------------------------------------------------------------
+
+
+def _live_view_for_playfield(playfield_id: str) -> Optional[Any]:
+    """Return the LiveViewProcess for a playfield's camera, or None.
+
+    Looks up the PlayfieldEntry to obtain the camera_id, constructs
+    ``view_id = f"live_{camera_id}"``, and returns the process object
+    if a live view is running for that camera.  Returns ``None`` if the
+    playfield is unknown or no live view is running.
+    """
+    try:
+        pf_entry = playfield_registry.get(playfield_id)
+    except KeyError:
+        return None
+    view_id = f"live_{pf_entry.camera_id}"
+    lv_entry = live_view_registry.get(view_id)
+    if lv_entry is None:
+        return None
+    return lv_entry.process
+
+
+# ---------------------------------------------------------------------------
+# Path tool handlers
+# ---------------------------------------------------------------------------
+
+
+def _handle_create_path(playfield_id: str, waypoints_json: str) -> dict:
+    """Core logic for create_path — returns result dict or error dict."""
+    # 1. Validate playfield exists
+    try:
+        playfield_registry.get(playfield_id)
+    except KeyError:
+        return {"error": f"Unknown playfield_id '{playfield_id}'"}
+
+    # 2. Parse waypoints JSON
+    try:
+        raw = json.loads(waypoints_json)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return {"error": f"Invalid waypoints JSON: {exc}"}
+
+    if not isinstance(raw, list) or len(raw) == 0:
+        return {"error": "waypoints must be a non-empty list"}
+
+    # 3-6. Validate each waypoint
+    required_keys = {"x", "y", "size_cm", "symbol", "symbol_color", "line_color"}
+    waypoints: list[Waypoint] = []
+    for wp_dict in raw:
+        if not isinstance(wp_dict, dict):
+            return {"error": "waypoints must be a non-empty list"}
+
+        missing = required_keys - wp_dict.keys()
+        if missing:
+            return {"error": f"Waypoint missing required keys: {sorted(missing)}"}
+
+        # 4. Numeric finiteness / positivity
+        import math
+        for key in ("x", "y", "size_cm"):
+            val = wp_dict[key]
+            if not isinstance(val, (int, float)) or not math.isfinite(val):
+                return {"error": f"'{key}' must be a finite number"}
+        if wp_dict["size_cm"] <= 0:
+            return {"error": "size_cm must be positive"}
+
+        # 5. Symbol validation
+        symbol = wp_dict["symbol"]
+        if symbol not in paths_module.VALID_SYMBOLS:
+            return {"error": f"Invalid symbol '{symbol}'"}
+
+        # 6. Color validation
+        for color_key in ("symbol_color", "line_color"):
+            color = wp_dict[color_key]
+            if (
+                not isinstance(color, (list, tuple))
+                or len(color) != 3
+                or not all(isinstance(c, int) and 0 <= c <= 255 for c in color)
+            ):
+                return {"error": f"'{color_key}' must be a list of 3 ints in [0, 255]"}
+
+        waypoints.append(
+            Waypoint(
+                x=float(wp_dict["x"]),
+                y=float(wp_dict["y"]),
+                size_cm=float(wp_dict["size_cm"]),
+                symbol=symbol,
+                symbol_color=tuple(wp_dict["symbol_color"]),
+                line_color=tuple(wp_dict["line_color"]),
+            )
+        )
+
+    path = path_registry.create(playfield_id, waypoints)
+
+    # Notify live view if one is running
+    lv = _live_view_for_playfield(playfield_id)
+    if lv is not None:
+        lv.send_command({"op": "add", "path": path.to_dict()})
+
+    return {"path_id": path.path_id}
+
+
+def _handle_delete_path(path_id: str) -> dict:
+    """Core logic for delete_path — returns result dict or error dict."""
+    deleted = path_registry.delete(path_id)
+    if deleted is None:
+        return {"error": f"Unknown path_id '{path_id}'"}
+
+    # Notify live view if one is running for this path's playfield
+    lv = _live_view_for_playfield(deleted.playfield_id)
+    if lv is not None:
+        lv.send_command({"op": "remove", "path_id": path_id})
+
+    return {"deleted": True, "path_id": path_id}
+
+
+def _handle_list_paths(playfield_id: str) -> dict:
+    """Core logic for list_paths — returns result dict or error dict."""
+    try:
+        playfield_registry.get(playfield_id)
+    except KeyError:
+        return {"error": f"Unknown playfield_id '{playfield_id}'"}
+    paths = path_registry.list_for(playfield_id)
+    return {"playfield_id": playfield_id, "paths": [p.to_dict() for p in paths]}
+
+
+def _handle_clear_paths(playfield_id: str) -> dict:
+    """Core logic for clear_paths — returns result dict or error dict."""
+    try:
+        playfield_registry.get(playfield_id)
+    except KeyError:
+        return {"error": f"Unknown playfield_id '{playfield_id}'"}
+    cleared = path_registry.clear_for(playfield_id)
+
+    # Notify live view if one is running
+    lv = _live_view_for_playfield(playfield_id)
+    if lv is not None:
+        lv.send_command({"op": "clear"})
+
+    return {"cleared": cleared}
+
+
+# ---------------------------------------------------------------------------
+# Path MCP tools
+# ---------------------------------------------------------------------------
+
+
+@server.tool()
+async def create_path(playfield_id: str, waypoints_json: str) -> list[TextContent]:
+    """Create an agent-drawn path on a playfield.
+
+    Args:
+        playfield_id: The playfield to attach the path to.
+        waypoints_json: JSON-encoded list of waypoint dicts.  Each dict must
+            contain ``x``, ``y``, ``size_cm``, ``symbol``, ``symbol_color``,
+            and ``line_color``.  Colors are ``[R, G, B]`` with values 0-255.
+            Valid symbols: square, filled_square, circle, filled_circle,
+            triangle, filled_triangle, x, none.
+
+    Returns:
+        On success: ``{"path_id": "path_NNN"}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_create_path(playfield_id, waypoints_json)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def delete_path(path_id: str) -> list[TextContent]:
+    """Delete a previously created path by its path_id.
+
+    Args:
+        path_id: The path_id returned by ``create_path``.
+
+    Returns:
+        On success: ``{"deleted": true, "path_id": "..."}``.
+        On error: ``{"error": "Unknown path_id '<id>'"}``.
+    """
+    result = _handle_delete_path(path_id)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def list_paths(playfield_id: str) -> list[TextContent]:
+    """List all paths registered for a playfield.
+
+    Args:
+        playfield_id: The playfield whose paths should be listed.
+
+    Returns:
+        On success: ``{"playfield_id": "...", "paths": [...]}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_list_paths(playfield_id)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def clear_paths(playfield_id: str) -> list[TextContent]:
+    """Remove all paths for a playfield.
+
+    Args:
+        playfield_id: The playfield whose paths should be cleared.
+
+    Returns:
+        On success: ``{"cleared": ["path_000", ...]}``.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_clear_paths(playfield_id)
     return [TextContent(type="text", text=json.dumps(result))]
 
 

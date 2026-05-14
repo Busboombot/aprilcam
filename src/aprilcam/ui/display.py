@@ -367,6 +367,148 @@ class PlayfieldDisplay:
             pass
         cv.imshow(self.window, display)
 
+    def draw_paths(
+        self,
+        frame: np.ndarray,
+        paths: dict,
+        playfield: object,
+        homography: Optional[np.ndarray],
+    ) -> None:
+        """Draw agent-defined paths onto *frame* (in-place).
+
+        Coordinate pipeline (per waypoint):
+          1. World cm → source pixel: apply H_inv = inv(homography) to
+             homogeneous world coordinate [x, y, 1], then divide by the
+             third component.
+          2. Source pixel → display pixel: pass through
+             self._map_points_to_display(...) to handle deskew/crop modes.
+          3. Pixel radius for size_cm: map (x, y) and (x + size_cm/2, y)
+             through the same pipeline; the Euclidean distance between the two
+             display points is the symbol half-extent.
+
+        Draw order: all line segments first (so symbols cover line endpoints),
+        then all waypoint symbols.
+
+        RGB→BGR convention: colors from path dicts are RGB triples [R, G, B].
+        Convert to (B, G, R) tuple immediately before each cv.* call —
+        nowhere else.
+
+        No-op when homography is None (uncalibrated playfield) or paths is empty.
+
+        Args:
+            frame: The display image to draw onto (modified in place).
+            paths: Dict mapping path_id -> path dict (from Path.to_dict()).
+            playfield: The PlayfieldBoundary for coordinate mapping (unused
+                       directly; coordinate mapping uses homography +
+                       _map_points_to_display).
+            homography: Optional homography matrix for world-to-pixel mapping.
+                        If None, returns immediately.
+        """
+        if homography is None:
+            return
+        if not paths:
+            return
+
+        H_inv = np.linalg.inv(homography)
+
+        def _world_to_disp(x: float, y: float):
+            """Return (cx, cy) display-space int coords, or raise on failure."""
+            hvec = H_inv @ np.array([x, y, 1.0])
+            sx, sy = hvec[0] / hvec[2], hvec[1] / hvec[2]
+            src_pt = np.array([[sx, sy]], dtype=np.float32)
+            disp_pt = self._map_points_to_display(src_pt).reshape(2)
+            return disp_pt
+
+        def _compute_radius(x: float, y: float, size_cm: float, disp_pt: np.ndarray) -> int:
+            """Return pixel half-extent for size_cm at world position (x, y)."""
+            hvec2 = H_inv @ np.array([x + size_cm / 2.0, y, 1.0])
+            sx2, sy2 = hvec2[0] / hvec2[2], hvec2[1] / hvec2[2]
+            src_pt2 = np.array([[sx2, sy2]], dtype=np.float32)
+            disp_pt2 = self._map_points_to_display(src_pt2).reshape(2)
+            return max(1, int(round(float(np.linalg.norm(disp_pt2 - disp_pt)))))
+
+        for path_dict in paths.values():
+            waypoints = path_dict.get("waypoints", [])
+            if not waypoints:
+                continue
+
+            # Pre-compute display points and radii for all waypoints.
+            # Entries that fail are stored as None (skipped in both passes).
+            computed = []
+            for wp in waypoints:
+                try:
+                    x = float(wp["x"])
+                    y = float(wp["y"])
+                    size_cm = float(wp["size_cm"])
+                    disp_pt = _world_to_disp(x, y)
+                    r = _compute_radius(x, y, size_cm, disp_pt)
+                    cx = int(round(float(disp_pt[0])))
+                    cy = int(round(float(disp_pt[1])))
+                    computed.append((cx, cy, r))
+                except Exception:
+                    computed.append(None)
+
+            # Pass 1: lines (connect waypoint i to waypoint i+1, using
+            # waypoint i's line_color; last waypoint has no outgoing line).
+            for i, wp in enumerate(waypoints[:-1]):
+                pt_a = computed[i]
+                pt_b = computed[i + 1]
+                if pt_a is None or pt_b is None:
+                    continue
+                try:
+                    lc = wp["line_color"]
+                    line_bgr = (int(lc[2]), int(lc[1]), int(lc[0]))
+                    cv.line(
+                        frame,
+                        (pt_a[0], pt_a[1]),
+                        (pt_b[0], pt_b[1]),
+                        line_bgr,
+                        2,
+                        cv.LINE_AA,
+                    )
+                except Exception:
+                    pass
+
+            # Pass 2: symbols
+            for i, wp in enumerate(waypoints):
+                entry = computed[i]
+                if entry is None:
+                    continue
+                symbol = wp.get("symbol", "none")
+                if symbol == "none":
+                    continue
+                try:
+                    cx, cy, r = entry
+                    sc = wp["symbol_color"]
+                    color = (int(sc[2]), int(sc[1]), int(sc[0]))
+
+                    if symbol == "circle":
+                        cv.circle(frame, (cx, cy), r, color, thickness=2, lineType=cv.LINE_AA)
+                    elif symbol == "filled_circle":
+                        cv.circle(frame, (cx, cy), r, color, thickness=cv.FILLED, lineType=cv.LINE_AA)
+                    elif symbol == "square":
+                        cv.rectangle(frame, (cx - r, cy - r), (cx + r, cy + r), color, thickness=2, lineType=cv.LINE_AA)
+                    elif symbol == "filled_square":
+                        cv.rectangle(frame, (cx - r, cy - r), (cx + r, cy + r), color, thickness=cv.FILLED, lineType=cv.LINE_AA)
+                    elif symbol == "triangle":
+                        pts_tri = np.array(
+                            [[cx, cy - r], [cx - r, cy + r], [cx + r, cy + r]],
+                            dtype=np.int32,
+                        )
+                        cv.polylines(frame, [pts_tri], True, color, 2, cv.LINE_AA)
+                    elif symbol == "filled_triangle":
+                        pts_tri = np.array(
+                            [[cx, cy - r], [cx - r, cy + r], [cx + r, cy + r]],
+                            dtype=np.int32,
+                        )
+                        cv.fillPoly(frame, [pts_tri], color)
+                    elif symbol == "x":
+                        cv.line(frame, (cx - r, cy - r), (cx + r, cy + r), color, 2, cv.LINE_AA)
+                        cv.line(frame, (cx + r, cy - r), (cx - r, cy + r), color, 2, cv.LINE_AA)
+                    # "none" already filtered above
+                except Exception:
+                    pass
+
     def pause(self, frame: np.ndarray, text: str = " Paused: Press Space to Run") -> None:
         """Overlay a paused message onto the given frame."""
         if frame is None:
