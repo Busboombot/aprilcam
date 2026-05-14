@@ -13,7 +13,11 @@
       "Bash(find src:*)",
       "Bash(find src/aprilcam/cli -name '*.py' -exec sed -i '' -e 's|from \\\\.\\\\.camutil import|from ..camera.camutil import|g' -e 's|from \\\\.\\\\.homography import|from ..calibration.homography import|g' -e 's|from \\\\.\\\\.liveview import|from ..ui.liveview import|g' -e 's|from \\\\.\\\\.mcp_server import|from ..server.mcp_server import|g' -e 's|from \\\\.\\\\.web_server import|from ..server.web_server import|g' '{}' +)",
       "mcp__aprilcam__get_version",
-      "mcp__aprilcam__open_camera"
+      "mcp__aprilcam__open_camera",
+      "Skill(plan-sprint)",
+      "Skill(plan-sprint:*)",
+      "Skill(execute-sprint)",
+      "Skill(execute-sprint:*)"
     ]
   },
   "hooks": {
