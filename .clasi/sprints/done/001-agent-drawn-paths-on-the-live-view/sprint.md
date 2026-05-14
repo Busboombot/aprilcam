@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Agent-Drawn Paths on the Live View
-status: planning-docs
+status: done
 branch: sprint/001-agent-drawn-paths-on-the-live-view
 use-cases:
 - SUC-001
