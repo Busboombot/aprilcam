@@ -28,9 +28,9 @@ SUBCOMMANDS = {
         "help": "List, inspect, and run MCP tools from the command line",
         "module": "aprilcam.cli.tool_cli",
     },
-    "live": {
-        "help": "Open a live camera view with tag detection overlays",
-        "module": "aprilcam.cli.live_cli",
+    "view": {
+        "help": "Open a live view window fed by the AprilCam daemon",
+        "module": "aprilcam.cli.view_cli",
     },
     "web": {
         "help": "Start the HTTP/WebSocket server with REST API and MCP SSE",
