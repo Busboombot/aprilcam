@@ -1,15 +1,16 @@
 ---
-id: '009'
-title: Write unit tests for daemon components (protocol, backpressure, spawn-race, config)
-status: todo
+id: 009
+title: Write unit tests for daemon components (protocol, backpressure, spawn-race,
+  config)
+status: done
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-007
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-007
 depends-on:
-  - '008'
+- 008
 github-issue: ''
 issue: aprilcam-daemon-architecture.md
 completes_issue: false
@@ -27,35 +28,35 @@ tests still pass after all the refactoring.
 
 ## Acceptance Criteria
 
-- [ ] `tests/test_config_loader.py` — covers `Config.load()`:
-  - [ ] Default values when no config sources exist.
-  - [ ] Env var overrides file value.
-  - [ ] Project-local `.aprilcam` overrides `~/.aprilcam`.
-  - [ ] `socket_dir` created when it does not exist.
-  - [ ] `AppConfig.load()` still works (regression test).
-- [ ] `tests/test_daemon_protocol.py` — covers `encode_frame` / `decode_frame`
+- [x] `tests/test_config_loader.py` — covers `Config.load()`:
+  - [x] Default values when no config sources exist.
+  - [x] Env var overrides file value.
+  - [x] Project-local `.aprilcam` overrides `~/.aprilcam`.
+  - [x] `socket_dir` created when it does not exist.
+  - [x] `AppConfig.load()` still works (regression test).
+- [x] `tests/test_daemon_protocol.py` — covers `encode_frame` / `decode_frame`
   / `read_frame`:
-  - [ ] Round-trip with all fields populated.
-  - [ ] Round-trip with `homography=None`.
-  - [ ] `read_frame` handles partial recv (two-chunk send).
-  - [ ] `read_frame` raises `ConnectionError` on EOF.
-- [ ] `tests/test_daemon_backpressure.py` (or added to an existing file) —
+  - [x] Round-trip with all fields populated.
+  - [x] Round-trip with `homography=None`.
+  - [x] `read_frame` handles partial recv (two-chunk send).
+  - [x] `read_frame` raises `ConnectionError` on EOF.
+- [x] `tests/test_daemon_backpressure.py` (or added to an existing file) —
   covers `CameraPipeline` subscriber drop:
-  - [ ] With a subscriber queue at `maxsize=2` and the capture loop producing
+  - [x] With a subscriber queue at `maxsize=2` and the capture loop producing
     3 frames, the subscriber receives at most 2 frames (drop-on-full verified).
-  - [ ] The capture loop is not blocked by the full queue.
-- [ ] `tests/test_daemon_spawn_race.py` — covers `ensure_running` spawn guard:
-  - [ ] Two threads call `ensure_running()` concurrently with no daemon running
+  - [x] The capture loop is not blocked by the full queue.
+- [x] `tests/test_daemon_spawn_race.py` — covers `ensure_running` spawn guard:
+  - [x] Two threads call `ensure_running()` concurrently with no daemon running
     (mocked `subprocess.Popen`); assert `Popen` was called exactly once.
-  - [ ] `ensure_running()` raises `RuntimeError` if the socket does not appear
+  - [x] `ensure_running()` raises `RuntimeError` if the socket does not appear
     within the timeout (mock the socket poll).
-- [ ] `tests/test_mcp_path_tools.py` extended with:
-  - [ ] `test_path_tools_write_paths_json` — after calling the `create_path`
+- [x] `tests/test_mcp_path_tools.py` extended with:
+  - [x] `test_path_tools_write_paths_json` — after calling the `create_path`
     handler with mocked `ensure_running` and `info.json`, asserts that
     `paths.json` exists and is valid JSON matching registry state.
-- [ ] All existing sprint-001 tests pass: `test_paths.py`,
+- [x] All existing sprint-001 tests pass: `test_paths.py`,
   `test_mcp_path_tools.py` (existing cases), `test_draw_paths.py`.
-- [ ] `uv run pytest` exits 0 with no failures.
+- [x] `uv run pytest` exits 0 with no failures.
 
 ## Implementation Plan
 
