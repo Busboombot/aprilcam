@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -185,3 +186,129 @@ class AppConfig:
         except Exception:
             return None
         return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-source Config (daemon and client entry points)
+# ---------------------------------------------------------------------------
+
+
+def _find_dotfile(name: str, start: Path) -> Optional[Path]:
+    """Walk up from *start* to filesystem root looking for a file named *name*.
+
+    Returns the first match found or ``None`` if no match exists.
+    """
+    cur = start.resolve()
+    while True:
+        candidate = cur / name
+        if candidate.exists():
+            return candidate
+        parent = cur.parent
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def _parse_dotfile(path: Path) -> Dict[str, str]:
+    """Read a KEY=value dotfile, stripping ``#`` comments and blank lines.
+
+    Returns a dict of string keys to string values.
+    """
+    result: Dict[str, str] = {}
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            # Strip inline and full-line comments
+            if "#" in line:
+                line = line[: line.index("#")].strip()
+            if not line or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            result[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return result
+
+
+@dataclass
+class Config:
+    """Priority-ordered configuration for the AprilCam daemon and clients.
+
+    Loading priority (highest wins):
+      4. ``os.environ`` keys starting with ``APRILCAM_``
+      3. ``.env`` file found by walking up from *start* (via python-dotenv)
+      2. ``.aprilcam`` file found by walking up from *start* (project-local)
+      1. ``~/.aprilcam`` (user-global dotfile)
+
+    Call ``Config.load()`` at startup; do not instantiate directly.
+    """
+
+    data_dir: Path = field(default_factory=lambda: Path("./data/runtime/"))
+    socket_dir: Path = field(default_factory=lambda: Path("/tmp/aprilcam/"))
+    calibration_source: Path = field(default_factory=lambda: Path("./data/calibration.json"))
+    calibration_save_path: Optional[Path] = None
+    log_level: str = "INFO"
+    daemon_pidfile: Optional[Path] = None
+
+    def __post_init__(self) -> None:
+        # Apply dependent defaults that couldn't be set in field defaults.
+        if self.calibration_save_path is None:
+            self.calibration_save_path = self.calibration_source
+        if self.daemon_pidfile is None:
+            self.daemon_pidfile = self.socket_dir / "aprilcamd.pid"
+
+    @classmethod
+    def load(cls, start: Optional[Path] = None) -> "Config":
+        """Load configuration from all sources, highest priority last (env wins)."""
+        start = start or Path.cwd()
+
+        sources: Dict[str, str] = {}
+
+        # 1. User-global dotfile (~/.aprilcam)
+        user_dot = Path.home() / ".aprilcam"
+        if user_dot.exists():
+            sources.update(_parse_dotfile(user_dot))
+
+        # 2. Project-local dotfile (.aprilcam, walk up from start)
+        proj_dot = _find_dotfile(".aprilcam", start)
+        if proj_dot:
+            sources.update(_parse_dotfile(proj_dot))
+
+        # 3. .env file (via dotenv_values, walk up from start)
+        env_file = _find_dotfile(".env", start)
+        if env_file:
+            sources.update(
+                {k: v for k, v in dotenv_values(env_file).items() if v is not None}
+            )
+
+        # 4. Process environment (highest priority — only APRILCAM_ keys)
+        sources.update(
+            {k: v for k, v in os.environ.items() if k.startswith("APRILCAM_")}
+        )
+
+        # Build field values from merged sources
+        def _path(key: str, default: Path) -> Path:
+            return Path(sources[key]) if key in sources else default
+
+        socket_dir = _path("APRILCAM_SOCKET_DIR", Path("/tmp/aprilcam/"))
+        calibration_source = _path(
+            "APRILCAM_CALIBRATION_SOURCE", Path("./data/calibration.json")
+        )
+
+        cfg = cls(
+            data_dir=_path("APRILCAM_DATA_DIR", Path("./data/runtime/")),
+            socket_dir=socket_dir,
+            calibration_source=calibration_source,
+            calibration_save_path=_path(
+                "APRILCAM_CALIBRATION_SAVE_PATH", calibration_source
+            ),
+            log_level=sources.get("APRILCAM_LOG_LEVEL", "INFO"),
+            daemon_pidfile=_path(
+                "APRILCAM_DAEMON_PIDFILE", socket_dir / "aprilcamd.pid"
+            ),
+        )
+
+        # Ensure socket_dir exists so daemon can bind sockets immediately
+        cfg.socket_dir.mkdir(parents=True, exist_ok=True)
+
+        return cfg
