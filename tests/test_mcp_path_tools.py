@@ -11,6 +11,8 @@ registries with fresh instances (or mocks) and restoring them in a fixture.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import pytest
 
 from aprilcam.server import mcp_server
@@ -229,3 +231,53 @@ def test_clear_paths_unknown_playfield(isolated_registries):
     """clear_paths returns error when playfield is not registered."""
     result = _handle_clear_paths("pf_unknown")
     assert result == {"error": "Unknown playfield_id 'pf_unknown'"}
+
+
+# ---------------------------------------------------------------------------
+# paths.json write tests
+# ---------------------------------------------------------------------------
+
+
+def test_path_tools_write_paths_json(isolated_registries, tmp_path, monkeypatch):
+    """After create_path, paths.json is written with JSON matching the registry state.
+
+    The test wires a temporary paths.json into _cam_info so that
+    _write_paths_json() can resolve the file path without a live daemon.
+    """
+    pf_reg, path_reg = isolated_registries
+
+    # Wire a fake camera entry in _cam_info pointing at a temp paths.json
+    paths_file = tmp_path / "cam_0" / "paths.json"
+    paths_file.parent.mkdir(parents=True, exist_ok=True)
+    fake_info = {"cam_name": "cam_0", "paths_file": str(paths_file)}
+    monkeypatch.setitem(mcp_server._cam_info, "cam_0", fake_info)
+
+    # Register the playfield (camera_id == "cam_0" to match the _cam_info key)
+    entry = PlayfieldEntry(
+        playfield_id="pf_cam_0",
+        camera_id="cam_0",
+        playfield=None,  # type: ignore[arg-type]
+    )
+    pf_reg.register(entry)
+
+    # create_path should write paths.json
+    result = _handle_create_path("pf_cam_0", _make_waypoint_json())
+    assert "path_id" in result
+
+    assert paths_file.exists(), "paths.json was not written by create_path"
+    written = json.loads(paths_file.read_text())
+    assert isinstance(written, list)
+    assert len(written) == 1
+    assert written[0]["path_id"] == "path_000"
+
+    # delete_path should rewrite paths.json (now empty)
+    _handle_delete_path("path_000")
+    written_after_delete = json.loads(paths_file.read_text())
+    assert written_after_delete == []
+
+    # Add two paths then clear_paths — file should reflect cleared state
+    _handle_create_path("pf_cam_0", _make_waypoint_json())
+    _handle_create_path("pf_cam_0", _make_waypoint_json({"x": 50.0}))
+    _handle_clear_paths("pf_cam_0")
+    written_after_clear = json.loads(paths_file.read_text())
+    assert written_after_clear == []
