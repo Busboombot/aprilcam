@@ -218,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
                 display = PlayfieldDisplay(
                     playfield=boundary,
                     window_name=WINDOW,
+                    deskew_overlay=True,
                 )
 
             # 5. Update playfield polygon from message corners
@@ -226,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
                 if poly.shape == (4, 2):
                     boundary.polygon = poly
                     boundary._poly = poly
+                    display._update_deskew(frame)
 
             # 6. Convert homography
             homography: Optional[np.ndarray] = None
@@ -237,7 +239,10 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception:
                     homography = None
 
-            # 7. Convert tag dicts to AprilTag objects
+            # 7. Prepare display frame (crop or deskew to playfield)
+            disp = display.prepare_display(frame)
+
+            # 8. Convert tag dicts to AprilTag objects
             tags = []
             for td in msg.tags:
                 try:
@@ -245,17 +250,17 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception:
                     pass
 
-            # 8. Draw overlays
-            display.draw_overlays(frame, tags, homography)
+            # 9. Draw overlays onto display frame
+            display.draw_overlays(disp, tags, homography)
 
-            # 9. Draw paths (only when homography is available)
+            # 10. Draw paths (only when homography is available)
             if paths and homography is not None:
-                display.draw_paths(frame, paths, boundary, homography)
+                display.draw_paths(disp, paths, boundary, homography)
 
-            # 10. Show frame
-            cv.imshow(WINDOW, frame)
+            # 11. Show display frame
+            cv.imshow(WINDOW, disp)
 
-            # 11. Poll for keypress — exit on q (113) or Esc (27)
+            # 12. Poll for keypress — exit on q (113) or Esc (27)
             key = cv.waitKey(1) & 0xFF
             if key in (113, 27):
                 break
