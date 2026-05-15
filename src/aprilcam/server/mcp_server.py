@@ -215,10 +215,21 @@ def _ensure_daemon_client() -> ControlClient:
 def _get_paths_file(camera_id: str) -> Optional[Path]:
     """Return the paths.json :class:`~pathlib.Path` for *camera_id*, or ``None``.
 
-    Returns ``None`` when the camera was not opened via daemon RPC (e.g.
-    in unit tests that mock the registry directly).
+    Checks ``_cam_info`` first (populated by open_camera RPC); falls back to
+    reading info.json from disk so that path tools work even when the MCP
+    server was restarted after the camera was opened.
     """
     info = _cam_info.get(camera_id)
+    if info is None:
+        # Try reading info.json from disk (daemon may be running from a prior session)
+        try:
+            config = Config.load()
+            info_path = config.data_dir / camera_id / "info.json"
+            if info_path.exists():
+                info = json.loads(info_path.read_text())
+                _cam_info[camera_id] = info  # cache for future calls
+        except Exception:
+            pass
     if info is None:
         return None
     pf_str = info.get("paths_file")
