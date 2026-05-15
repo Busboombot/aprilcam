@@ -256,13 +256,24 @@ class CameraPipeline:
         paths_file = str(self.config.data_dir / self.cam_name / "paths.json")
         homography = self._april_cam.homography
 
+        # Set a read timeout so cap.read() doesn't block forever if the
+        # camera is unplugged (POSIX: CAP_PROP_READ_TIMEOUT_MSEC, best-effort).
+        self._cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
+
+        consecutive_failures = 0
         while not self._stop_event.is_set():
             ret, frame = self._cap.read()
             if not ret or frame is None:
-                log.warning(
-                    "CameraPipeline(%s): camera read failed, stopping", self.cam_name
-                )
-                break
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    log.warning(
+                        "CameraPipeline(%s): camera read failed repeatedly, stopping",
+                        self.cam_name,
+                    )
+                    break
+                time.sleep(0.05)
+                continue
+            consecutive_failures = 0
 
             now_mono = time.monotonic()
             ts_mono_ns = time.monotonic_ns()
