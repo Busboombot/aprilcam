@@ -31,7 +31,11 @@ from ..config import Config
 
 
 class ControlClient:
-    """Thin RPC client over a connected UNIX stream socket.
+    """RPC client for the aprilcamd control socket.
+
+    Opens a fresh connection for each RPC call because the daemon uses a
+    one-request-per-connection protocol (reads one JSON line, writes one
+    JSON line, closes).
 
     Intended use::
 
@@ -39,20 +43,32 @@ class ControlClient:
             result = client.rpc("list_cameras")
     """
 
-    def __init__(self, sock: socket.socket) -> None:
-        self._sock = sock
-        self._file = sock.makefile("rb")
+    def __init__(self, control_path: Path) -> None:
+        self._path = control_path
 
     def rpc(self, cmd: str, **kwargs) -> dict:
         """Send ``cmd`` with optional keyword arguments, return the response dict.
 
-        Raises :class:`RuntimeError` when the server returns ``ok: False``.
+        Opens a fresh connection, sends one request, reads one response,
+        closes.  Raises :class:`RuntimeError` when the server returns
+        ``ok: False``.
         """
         request = {"cmd": cmd, **kwargs}
         payload = (json.dumps(request) + "\n").encode("utf-8")
-        self._sock.sendall(payload)
 
-        line = self._file.readline()
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(str(self._path))
+            sock.sendall(payload)
+            f = sock.makefile("rb")
+            line = f.readline()
+            f.close()
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
         if not line:
             raise RuntimeError("Connection closed before receiving a response")
 
@@ -62,15 +78,7 @@ class ControlClient:
         return response
 
     def close(self) -> None:
-        """Close the underlying socket."""
-        try:
-            self._file.close()
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        """No-op — connections are closed after each RPC."""
 
     def __enter__(self) -> "ControlClient":
         return self
@@ -123,9 +131,8 @@ def ensure_running(config: Config) -> ControlClient:
     control_path = config.socket_dir / "control.sock"
 
     # Step 1 & 2: fast path — daemon already running
-    sock = _try_connect(control_path)
-    if sock is not None:
-        return ControlClient(sock)
+    if _try_connect(control_path) is not None:
+        return ControlClient(control_path)
 
     # Step 3: acquire spawn lock
     lock_path = config.socket_dir / "aprilcamd.spawn.lock"
@@ -135,9 +142,8 @@ def ensure_running(config: Config) -> ControlClient:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
         # Step 4: re-check now that we hold the lock
-        sock = _try_connect(control_path)
-        if sock is not None:
-            return ControlClient(sock)
+        if _try_connect(control_path) is not None:
+            return ControlClient(control_path)
 
         # Step 5: spawn the daemon
         config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -153,9 +159,8 @@ def ensure_running(config: Config) -> ControlClient:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             time.sleep(0.05)
-            sock = _try_connect(control_path)
-            if sock is not None:
-                return ControlClient(sock)
+            if _try_connect(control_path) is not None:
+                return ControlClient(control_path)
 
         raise RuntimeError("aprilcamd did not start within 5 seconds")
 

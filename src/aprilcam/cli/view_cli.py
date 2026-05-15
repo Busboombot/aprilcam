@@ -131,21 +131,13 @@ def main(argv: list[str] | None = None) -> int:
             client.close()
             return 1
 
-        # 3. Get info.json path for this camera to find data socket and paths file
+        # 3. Get camera info (data socket path, paths file path)
         info_resp = client.rpc("get_camera_info", cam_name=cam_name)
-        info_json_path = info_resp.get("info_path") or info_resp.get("info_json")
+        # Daemon returns {"ok": True, "info": {data_socket, paths_file, ...}}
+        info_data = info_resp.get("info", {})
 
-        data_socket_path: Optional[str] = None
-        paths_file_path: Optional[str] = None
-
-        if info_json_path and Path(info_json_path).exists():
-            info_data = json.loads(Path(info_json_path).read_text())
-            data_socket_path = info_data.get("data_socket")
-            paths_file_path = info_data.get("paths_file")
-        else:
-            # Fallback: try to get data_socket and paths_file directly from RPC
-            data_socket_path = info_resp.get("data_socket")
-            paths_file_path = info_resp.get("paths_file")
+        data_socket_path: Optional[str] = info_data.get("data_socket")
+        paths_file_path: Optional[str] = info_data.get("paths_file")
 
         if not data_socket_path:
             print(

@@ -141,6 +141,11 @@ class DaemonServer:
         """SIGTERM / SIGINT → request graceful shutdown."""
         log.info("aprilcamd: received signal %d, shutting down", signum)
         self._shutdown_event.set()
+        if self._control_sock is not None:
+            try:
+                self._control_sock.close()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     # Internal: shutdown
@@ -173,7 +178,7 @@ class DaemonServer:
                     pass
             self._data_socks.clear()
 
-        # Close control socket
+        # Close control socket (may already be closed by signal/RPC handler)
         if self._control_sock is not None:
             try:
                 self._control_sock.close()
@@ -315,6 +320,13 @@ class DaemonServer:
 
         if cmd == "shutdown":
             self._shutdown_event.set()
+            # Close the control socket immediately so the accept loop wakes up
+            # without waiting for the 1-second timeout.
+            if self._control_sock is not None:
+                try:
+                    self._control_sock.close()
+                except OSError:
+                    pass
             return {"ok": True}
 
         return {"ok": False, "error": "unknown command"}
