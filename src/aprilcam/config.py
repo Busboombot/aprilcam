@@ -286,9 +286,11 @@ class Config:
             {k: v for k, v in os.environ.items() if k.startswith("APRILCAM_")}
         )
 
-        # Build field values from merged sources
+        # Build field values from merged sources; resolve relative paths against
+        # the start directory so daemon and clients agree on absolute locations.
         def _path(key: str, default: Path) -> Path:
-            return Path(sources[key]) if key in sources else default
+            p = Path(sources[key]) if key in sources else default
+            return p.resolve() if not p.is_absolute() else p
 
         socket_dir = _path("APRILCAM_SOCKET_DIR", Path("/tmp/aprilcam/"))
         calibration_source = _path(

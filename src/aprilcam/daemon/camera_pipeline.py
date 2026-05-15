@@ -129,10 +129,17 @@ class CameraPipeline:
             )
         self._cap = cap
 
-        # Load calibration (may be None)
+        # Get actual OS device name (e.g. "Arducam OV9782 USB Camera") —
+        # the calibration file is keyed by device_name, not cam_name.
+        from ..camera.camutil import get_device_name
+        device_name = get_device_name(self.index)
+        if not device_name:
+            device_name = self.cam_name
+
+        # Load calibration (may be None if no calibration exists for this camera)
         cal_source = self.config.calibration_source
         self._calibration = load_calibration_for_camera(
-            self.cam_name, data_dir=cal_source.parent
+            device_name, data_dir=cal_source.parent
         )
 
         # Build AprilCam instance (headless, no display)
