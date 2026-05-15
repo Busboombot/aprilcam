@@ -329,24 +329,32 @@ def resolve_source(source_id: str) -> np.ndarray:
     # Try playfield first
     try:
         pf_entry = playfield_registry.get(source_id)
-        cap = registry.get(pf_entry.camera_id)
-        ret, frame = cap.read()
-        if not ret:
-            raise RuntimeError("Failed to read frame")
+        camera_id = pf_entry.camera_id
+        frame = _read_one_frame(camera_id)
         return pf_entry.playfield.deskew(frame)
     except KeyError:
         pass
 
-    # Try camera
-    try:
-        cap = registry.get(source_id)
-    except KeyError:
+    # Try camera (may be None sentinel when daemon owns the capture)
+    if source_id not in registry._cameras:
         raise KeyError(f"Unknown source_id '{source_id}'")
+
+    cap = registry._cameras.get(source_id)
+    if cap is None:
+        # Daemon-owned camera — read from data socket
+        return _read_one_frame(source_id)
 
     ret, frame = cap.read()
     if not ret:
         raise RuntimeError("Failed to read frame")
     return frame
+
+
+def _read_one_frame(camera_id: str) -> np.ndarray:
+    """Read a single decoded BGR frame from the daemon data socket for *camera_id*."""
+    for frame in _frames_from_daemon(camera_id, 1):
+        return frame
+    raise RuntimeError(f"No frame available from daemon for camera '{camera_id}'")
 
 
 def format_image_output(
@@ -553,24 +561,60 @@ def _handle_capture_frame(
         return {"type": "error", "error": str(exc)}
 
 
+def _frames_from_daemon(camera_id: str, count: int):
+    """Yield up to *count* decoded BGR frames from the daemon data socket.
+
+    Connects to <socket_dir>/<camera_id>/data.sock, reads msgpack frames,
+    and yields numpy arrays.  Closes the socket when done or on error.
+    """
+    import socket as _socket
+    import numpy as np
+    import cv2 as cv
+    from aprilcam.daemon.protocol import read_frame
+
+    info = _cam_info.get(camera_id)
+    if info is None:
+        return
+
+    sock_path = info.get("data_socket")
+    if not sock_path:
+        return
+
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        sock.connect(sock_path)
+        for _ in range(count):
+            try:
+                msg = read_frame(sock)
+            except ConnectionError:
+                break
+            if msg.frame_jpeg:
+                buf = np.frombuffer(bytes(msg.frame_jpeg), dtype=np.uint8)
+                frame = cv.imdecode(buf, cv.IMREAD_COLOR)
+                if frame is not None:
+                    yield frame
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def _handle_create_playfield(
     camera_id: str,
     max_frames: int = 30,
 ) -> dict:
     """Core logic for create_playfield — returns result dict or error dict."""
     try:
-        # Validate camera exists
-        try:
-            cap = registry.get(camera_id)
-        except KeyError:
+        # Validate camera exists (sentinel None is fine — daemon owns the capture)
+        if camera_id not in registry._cameras:
             return {"error": f"Unknown camera_id '{camera_id}'"}
 
         # Create playfield and try to detect corners (proc_width=0 disables downscale)
         pf = Playfield(detect_inverted=True, proc_width=0)
-        for _ in range(max(1, max_frames)):
-            ret, frame = cap.read()
-            if not ret:
-                continue
+        last_frame = None
+        for frame in _frames_from_daemon(camera_id, max(1, max_frames)):
+            last_frame = frame
             pf.update(frame)
             if pf.get_polygon() is not None:
                 break
@@ -580,10 +624,9 @@ def _handle_create_playfield(
             # Detect which corners are missing
             import cv2
 
-            ret, frame = cap.read()
             missing = [0, 1, 2, 3]
-            if ret:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if last_frame is not None:
+                gray = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
                 dets = detect_aruco_4x4(gray)
                 found_ids = [tid for _, tid in dets if tid in (0, 1, 2, 3)]
                 missing = [i for i in (0, 1, 2, 3) if i not in found_ids]
