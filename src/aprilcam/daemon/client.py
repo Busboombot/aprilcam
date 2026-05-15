@@ -1,0 +1,165 @@
+"""
+aprilcam.daemon.client — ControlClient and ensure_running().
+
+ControlClient wraps a connected UNIX socket and exposes a single
+``rpc()`` method that sends a newline-delimited JSON request and
+returns the parsed JSON response dict.
+
+``ensure_running()`` connects to the daemon's control socket, spawning
+a fresh daemon process if one is not already listening.  A spawn-lock
+file prevents a race condition where two callers start the daemon
+simultaneously.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+from ..config import Config
+
+
+# ---------------------------------------------------------------------------
+# ControlClient
+# ---------------------------------------------------------------------------
+
+
+class ControlClient:
+    """Thin RPC client over a connected UNIX stream socket.
+
+    Intended use::
+
+        with ensure_running(config) as client:
+            result = client.rpc("list_cameras")
+    """
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+        self._file = sock.makefile("rb")
+
+    def rpc(self, cmd: str, **kwargs) -> dict:
+        """Send ``cmd`` with optional keyword arguments, return the response dict.
+
+        Raises :class:`RuntimeError` when the server returns ``ok: False``.
+        """
+        request = {"cmd": cmd, **kwargs}
+        payload = (json.dumps(request) + "\n").encode("utf-8")
+        self._sock.sendall(payload)
+
+        line = self._file.readline()
+        if not line:
+            raise RuntimeError("Connection closed before receiving a response")
+
+        response: dict = json.loads(line.decode("utf-8"))
+        if not response.get("ok", False):
+            raise RuntimeError(response.get("error", "unknown error"))
+        return response
+
+    def close(self) -> None:
+        """Close the underlying socket."""
+        try:
+            self._file.close()
+        except OSError:
+            pass
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+    def __enter__(self) -> "ControlClient":
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _try_connect(path: Path) -> Optional[socket.socket]:
+    """Try to connect to the UNIX socket at *path*.
+
+    Returns the connected socket on success, or ``None`` on any failure
+    (cleans up the socket in that case).
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(str(path))
+        return sock
+    except Exception:
+        try:
+            sock.close()
+        except OSError:
+            pass
+        return None
+
+
+# ---------------------------------------------------------------------------
+# ensure_running
+# ---------------------------------------------------------------------------
+
+
+def ensure_running(config: Config) -> ControlClient:
+    """Return a connected :class:`ControlClient`, starting the daemon if needed.
+
+    Algorithm:
+    1. Attempt an immediate connection to the control socket.
+    2. If connected, return immediately.
+    3. Acquire the spawn lock (exclusive flock) so only one caller spawns.
+    4. Re-check the socket (another caller may have already spawned the daemon).
+    5. If still not running, spawn ``python -m aprilcam.daemon`` as a
+       detached background process.
+    6. Poll the socket every 50 ms for up to 5 seconds; raise on timeout.
+    7. Release the spawn lock and return the connected client.
+    """
+    control_path = config.socket_dir / "control.sock"
+
+    # Step 1 & 2: fast path — daemon already running
+    sock = _try_connect(control_path)
+    if sock is not None:
+        return ControlClient(sock)
+
+    # Step 3: acquire spawn lock
+    lock_path = config.socket_dir / "aprilcamd.spawn.lock"
+    config.socket_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "w")  # noqa: WPS515  (kept open intentionally)
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        # Step 4: re-check now that we hold the lock
+        sock = _try_connect(control_path)
+        if sock is not None:
+            return ControlClient(sock)
+
+        # Step 5: spawn the daemon
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+        log_file = open(config.data_dir / "aprilcamd.log", "a")  # noqa: WPS515
+        subprocess.Popen(
+            [sys.executable, "-m", "aprilcam.daemon"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=log_file,
+        )
+
+        # Step 6: poll until the daemon is ready
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            sock = _try_connect(control_path)
+            if sock is not None:
+                return ControlClient(sock)
+
+        raise RuntimeError("aprilcamd did not start within 5 seconds")
+
+    finally:
+        # Step 7: release the spawn lock
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
