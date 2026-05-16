@@ -83,8 +83,7 @@ def test_config_load_defaults(tmp_path, monkeypatch):
 
     assert cfg.data_dir == (tmp_path / "data/runtime").resolve()
     assert cfg.socket_dir == Path("/tmp/aprilcam/")
-    assert cfg.calibration_source == (tmp_path / "data/calibration.json").resolve()
-    assert cfg.calibration_save_path == (tmp_path / "data/calibration.json").resolve()
+    assert cfg.calibration_dir == (tmp_path / "data/calibration").resolve()
     assert cfg.log_level == "INFO"
     assert cfg.daemon_pidfile == Path("/tmp/aprilcam/aprilcamd.pid")
 

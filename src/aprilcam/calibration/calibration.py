@@ -46,6 +46,14 @@ class CameraCalibration:
 
     For cameras without barrel distortion, *camera_matrix* and
     *dist_coeffs* are ``None`` and ``undistort()`` is a no-op.
+
+    The optional *settings* dict stores hardware control values to apply
+    when the camera is opened.  Expected shape::
+
+        {
+            "program": "uvc-util",
+            "controls": {"exposure-time-abs": "10", "gain": "1", ...}
+        }
     """
 
     device_name: str
@@ -55,6 +63,8 @@ class CameraCalibration:
     dist_coeffs: Optional[np.ndarray] = None  # (k1,k2,p1,p2,k3)
     tags_used: int = 0
     rms_error: float = 0.0
+    settings: Optional[Dict] = None  # hardware control settings
+    pipeline: Optional[Dict] = None  # DetectorConfig overrides
 
     def undistort(self, frame: np.ndarray) -> np.ndarray:
         """Remove barrel distortion if calibration data is available."""
@@ -80,6 +90,10 @@ class CameraCalibration:
             d["camera_matrix"] = self.camera_matrix.tolist()
         if self.dist_coeffs is not None:
             d["dist_coeffs"] = self.dist_coeffs.tolist()
+        if self.settings is not None:
+            d["settings"] = self.settings
+        if self.pipeline is not None:
+            d["pipeline"] = self.pipeline
         return d
 
     @classmethod
@@ -95,11 +109,108 @@ class CameraCalibration:
             dist_coeffs=dc,
             tags_used=d.get("tags_used", 0),
             rms_error=d.get("rms_error", 0.0),
+            settings=d.get("settings"),
+            pipeline=d.get("pipeline"),
         )
 
 
 # ---------------------------------------------------------------------------
-# File paths
+# Per-camera calibration directory helpers (new scheme)
+# ---------------------------------------------------------------------------
+
+
+def device_name_slug(device_name: str) -> str:
+    """Slugify a camera device name for use as a filename component.
+
+    ``"Arducam OV9782 USB Camera"`` → ``"arducam-ov9782-usb-camera"``
+    """
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", device_name.lower()).strip("-")
+
+
+def calibration_file_for_camera(
+    calibration_dir: str | Path,
+    device_name: str,
+) -> Path:
+    """Return the path to the per-camera calibration file.
+
+    The filename is ``<device-slug>.json`` inside *calibration_dir*.
+    """
+    return Path(calibration_dir) / f"{device_name_slug(device_name)}.json"
+
+
+def load_calibration_from_dir(
+    device_name: str,
+    calibration_dir: str | Path,
+) -> Optional["CameraCalibration"]:
+    """Load calibration for *device_name* from a per-camera directory.
+
+    Reads ``<calibration_dir>/<device-slug>.json``.  Returns ``None``
+    if the file does not exist or cannot be parsed.
+
+    The file must contain at minimum ``"homography"``.  Optional fields
+    ``"field_width_cm"`` and ``"field_height_cm"`` are ignored here but
+    present in the file for operator reference.
+    """
+    cal_file = calibration_file_for_camera(calibration_dir, device_name)
+    if not cal_file.exists():
+        return None
+    try:
+        data = json.loads(cal_file.read_text())
+        # Per-camera file has the camera data at the top level (no "cameras" nesting).
+        data.setdefault("device_name", device_name)
+        return CameraCalibration.from_dict(data)
+    except Exception:
+        return None
+
+
+def save_calibration_for_camera(
+    cal: "CameraCalibration",
+    calibration_dir: str | Path,
+    field_width_cm: float,
+    field_height_cm: float,
+) -> Path:
+    """Write a per-camera calibration file to *calibration_dir*.
+
+    Creates ``<calibration_dir>/<device-slug>.json`` with:
+    - ``field_width_cm``, ``field_height_cm`` — playfield dimensions
+    - all fields from *cal* (homography, resolution, camera_matrix, etc.)
+
+    Returns the path written.
+    """
+    cal_file = calibration_file_for_camera(calibration_dir, cal.device_name)
+    cal_file.parent.mkdir(parents=True, exist_ok=True)
+    data = cal.to_dict()
+    data["field_width_cm"] = field_width_cm
+    data["field_height_cm"] = field_height_cm
+    cal_file.write_text(json.dumps(data, indent=2))
+    return cal_file
+
+
+def load_field_dimensions_from_dir(
+    device_name: str,
+    calibration_dir: str | Path,
+) -> Optional[tuple]:
+    """Return ``(width_cm, height_cm)`` from a per-camera calibration file.
+
+    Returns ``None`` if the file is missing or dimensions are absent.
+    """
+    cal_file = calibration_file_for_camera(calibration_dir, device_name)
+    if not cal_file.exists():
+        return None
+    try:
+        data = json.loads(cal_file.read_text())
+        w = data.get("field_width_cm")
+        h = data.get("field_height_cm")
+        if w is not None and h is not None:
+            return (float(w), float(h))
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# File paths (legacy unified-file scheme)
 # ---------------------------------------------------------------------------
 
 

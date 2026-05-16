@@ -114,23 +114,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     config = Config.load()
     client = ensure_running(config)
 
-    # Resolve calibration save path: explicit --output takes priority,
+    # Resolve calibration directory: explicit --output takes priority,
     # then the daemon's configured path.
     if args.output:
-        cal_path = Path(args.output)
+        cal_dir = Path(args.output)
     else:
-        cal_path = Path(client.rpc("get_calibration_save_path")["path"])
+        cal_dir = Path(client.rpc("get_calibration_save_path")["path"])
 
-    # Load existing calibration for defaults
-    existing = {}
-    if cal_path.exists():
-        try:
-            existing = json.loads(cal_path.read_text())
-        except Exception:
-            pass
-
-    field_width = args.width or existing.get("field_width_cm", 101.0)
-    field_height = args.height or existing.get("field_height_cm", 89.0)
+    # Load field dimension defaults from any existing per-camera file in the dir
+    field_width = args.width
+    field_height = args.height
+    if (field_width is None or field_height is None) and cal_dir.is_dir():
+        for f in cal_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                field_width = field_width or d.get("field_width_cm")
+                field_height = field_height or d.get("field_height_cm")
+                if field_width and field_height:
+                    break
+            except Exception:
+                pass
+    field_width = field_width or 101.0
+    field_height = field_height or 89.0
 
     # Resolve which cameras to calibrate
     camera_indices: list[tuple[int, str]] = []  # (index, label)
@@ -146,32 +151,37 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"  No camera matching '{spec}', skipping.")
     else:
-        # Re-calibrate all cameras already in calibration.json
-        existing_cameras = existing.get("cameras", {})
-        if not existing_cameras:
-            print(f"No cameras specified and {cal_path} has no existing entries.")
+        # Re-calibrate all cameras that already have a file in the calibration dir
+        if not cal_dir.is_dir() or not list(cal_dir.glob("*.json")):
+            print(f"No cameras specified and {cal_dir} has no existing calibration files.")
             print("Specify cameras to calibrate: aprilcam calibrate 0 2")
             return 1
-        for device_name in existing_cameras:
+        for f in sorted(cal_dir.glob("*.json")):
+            try:
+                device_name = json.loads(f.read_text()).get("device_name", "")
+            except Exception:
+                continue
+            if not device_name:
+                continue
             idx = select_camera_by_pattern(device_name, available)
             if idx is not None:
                 camera_indices.append((idx, device_name))
             else:
-                print(f"  Camera '{device_name}' from calibration.json not found, skipping.")
+                print(f"  Camera '{device_name}' from {f.name} not found, skipping.")
 
     if not camera_indices:
         print("No cameras to calibrate.")
         return 1
 
     print(f"Playfield: {field_width} x {field_height} cm")
-    print(f"Output: {cal_path}")
+    print(f"Output: {cal_dir}")
     print(f"Cameras to calibrate: {len(camera_indices)}")
     for idx, label in camera_indices:
         print(f"  [{idx}] {label}")
     print()
 
     # Run calibration for each camera via daemon
-    from ..calibration.calibration import calibrate_single, save_calibration
+    from ..calibration.calibration import calibrate_single, save_calibration_for_camera
 
     for idx, label in camera_indices:
         print(f"Calibrating [{idx}] {label} ...")
@@ -195,24 +205,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 camera_index=idx,
             )
 
-            # Merge into existing calibration file
-            if cal_path.exists():
-                try:
-                    cal_data = json.loads(cal_path.read_text())
-                except Exception:
-                    cal_data = {}
-            else:
-                cal_data = {}
-            cal_data["type"] = "playfield"
-            cal_data["field_width_cm"] = field_width
-            cal_data["field_height_cm"] = field_height
-            if "cameras" not in cal_data:
-                cal_data["cameras"] = {}
-            cal_data["cameras"][cal.device_name] = cal.to_dict()
-            cal_path.parent.mkdir(parents=True, exist_ok=True)
-            cal_path.write_text(json.dumps(cal_data, indent=2))
+            cal_file = save_calibration_for_camera(cal, cal_dir, field_width, field_height)
 
-            print(f"Calibration saved to {cal_path}")
+            print(f"Calibration saved to {cal_file}")
             print(f"  Camera: {cal.device_name} {cal.resolution}, {cal.tags_used} tags, RMS {cal.rms_error:.6f}")
             if cal.dist_coeffs is not None:
                 print(f"  Barrel distortion correction: yes")

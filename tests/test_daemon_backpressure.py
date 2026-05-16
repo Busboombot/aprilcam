@@ -24,8 +24,7 @@ def _make_pipeline(tmp_path) -> CameraPipeline:
     config = Config(
         data_dir=tmp_path / "data",
         socket_dir=tmp_path / "sockets",
-        calibration_source=tmp_path / "calibration.json",
-        calibration_save_path=tmp_path / "calibration.json",
+        calibration_dir=tmp_path / "calibration",
         log_level="INFO",
         daemon_pidfile=tmp_path / "aprilcamd.pid",
     )

@@ -403,13 +403,19 @@ class DaemonServer:
         if pipeline is None:
             return {"ok": False, "error": f"camera '{cam_name}' not open"}
 
-        from ..calibration.calibration import load_calibration_for_camera
+        from ..calibration.calibration import (
+            load_calibration_from_dir,
+            load_calibration_for_camera,
+        )
+        from ..daemon.camera_pipeline import _apply_camera_settings
 
-        cal_source = self._config.calibration_source
+        device_name = pipeline.device_name
         try:
-            calibration = load_calibration_for_camera(
-                cam_name, data_dir=cal_source.parent
+            calibration = load_calibration_from_dir(
+                device_name, self._config.calibration_dir
             )
+            if calibration is None:
+                calibration = load_calibration_for_camera(device_name)
         except Exception as exc:
             return {"ok": False, "error": f"calibration load failed: {exc}"}
 
@@ -418,6 +424,8 @@ class DaemonServer:
             if calibration is not None:
                 pipeline._april_cam.homography = calibration.homography
                 pipeline._calibration = calibration
+                if calibration.settings:
+                    _apply_camera_settings(calibration.settings, device_name, self._config)
             else:
                 pipeline._april_cam.homography = None
                 pipeline._calibration = None
@@ -448,8 +456,7 @@ class DaemonServer:
         return {"ok": True, "frame_b64": frame_b64}
 
     def _rpc_get_calibration_save_path(self) -> dict:
-        path = self._config.calibration_save_path
-        return {"ok": True, "path": str(path)}
+        return {"ok": True, "path": str(self._config.calibration_dir)}
 
     # ------------------------------------------------------------------
     # Internal: per-camera data socket

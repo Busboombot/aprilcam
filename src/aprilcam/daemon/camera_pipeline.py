@@ -20,17 +20,24 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
+import subprocess
 import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import List, Optional
+from shutil import which
+from typing import Dict, List, Optional
 
 import cv2 as cv
 import numpy as np
 
-from ..calibration.calibration import load_calibration_for_camera
+from ..calibration.calibration import (
+    load_calibration_for_camera,
+    load_calibration_from_dir,
+    load_field_dimensions_from_dir,
+)
 from ..config import Config
 from ..core.aprilcam import AprilCam
 from ..core.detection import FrameRecord, RingBuffer, TagRecord
@@ -39,6 +46,56 @@ from .protocol import FrameMessage, encode_frame
 log = logging.getLogger(__name__)
 
 _JPEG_QUALITY = 85
+
+
+def _apply_camera_settings(
+    settings: Dict,
+    device_name: str,
+    config: Config,
+) -> None:
+    """Apply hardware control settings to a camera using the configured program.
+
+    Currently supports ``"program": "uvc-util"``.  Searches for the binary
+    at ``<env_dir>/bin/uvc-util`` first, then falls back to ``PATH``.
+    Each control in ``settings["controls"]`` is applied as ``-s key=value``.
+    """
+    program = settings.get("program")
+    controls: Dict[str, str] = settings.get("controls", {})
+    if not controls:
+        return
+
+    if program != "uvc-util":
+        log.warning("Unknown camera settings program %r; skipping", program)
+        return
+
+    # Locate uvc-util binary
+    uvc: Optional[Path] = None
+    if config.env_dir:
+        candidate = config.env_dir / "bin" / "uvc-util"
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            uvc = candidate
+    if uvc is None:
+        found = which("uvc-util")
+        if found:
+            uvc = Path(found)
+    if uvc is None:
+        log.warning("uvc-util not found; skipping camera settings for %s", device_name)
+        return
+
+    log.info("Applying uvc-util settings to %s", device_name)
+    for ctrl, value in controls.items():
+        cmd = [str(uvc), "-N", device_name, "-s", f"{ctrl}={value}"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode != 0:
+                log.warning(
+                    "uvc-util %s=%s returned %d: %s",
+                    ctrl, value, result.returncode, result.stderr.strip(),
+                )
+        except Exception as exc:
+            log.warning("uvc-util error applying %s=%s: %s", ctrl, value, exc)
+
+
 _RING_BUFFER_SIZE = 300
 _FPS_WINDOW = 30  # number of recent frame timestamps to keep for rolling FPS
 
@@ -71,6 +128,7 @@ class CameraPipeline:
         self._cap: Optional[cv.VideoCapture] = None
         self._april_cam: Optional[AprilCam] = None
         self._calibration = None  # CameraCalibration | None
+        self.device_name: str = cam_name  # resolved to OS name in start()
 
         # Ring buffer for tag history
         self._ring: RingBuffer = RingBuffer(maxlen=_RING_BUFFER_SIZE)
@@ -121,6 +179,21 @@ class CameraPipeline:
             log.warning("CameraPipeline(%s): already running", self.cam_name)
             return
 
+        # Resolve device name before opening — calibration is keyed by OS name.
+        from ..camera.camutil import get_device_name
+        device_name = get_device_name(self.index)
+        if not device_name:
+            device_name = self.cam_name
+        self.device_name = device_name
+
+        # Load calibration — try the per-camera directory scheme first,
+        # then fall back to the legacy unified calibration.json.
+        self._calibration = load_calibration_from_dir(
+            device_name, self.config.calibration_dir
+        )
+        if self._calibration is None:
+            self._calibration = load_calibration_for_camera(device_name)
+
         # Open camera
         cap = cv.VideoCapture(self.index)
         if not cap.isOpened():
@@ -129,33 +202,36 @@ class CameraPipeline:
             )
         self._cap = cap
 
-        # Get actual OS device name (e.g. "Arducam OV9782 USB Camera") —
-        # the calibration file is keyed by device_name, not cam_name.
-        from ..camera.camutil import get_device_name
-        device_name = get_device_name(self.index)
-        if not device_name:
-            device_name = self.cam_name
+        # Drain a few frames so AVFoundation finishes initialising its capture
+        # session before we apply UVC controls — otherwise the OS resets them.
+        for _ in range(5):
+            cap.read()
 
-        # Load calibration (may be None if no calibration exists for this camera)
-        cal_source = self.config.calibration_source
-        self._calibration = load_calibration_for_camera(
-            device_name, data_dir=cal_source.parent
-        )
+        # Apply hardware settings now that the capture session is stable.
+        if self._calibration is not None and self._calibration.settings:
+            _apply_camera_settings(self._calibration.settings, device_name, self.config)
 
         # Build AprilCam instance (headless, no display)
         homography: Optional[np.ndarray] = None
         if self._calibration is not None:
             homography = self._calibration.homography
 
+        # Build pipeline kwargs from calibration's pipeline section (if present).
+        # All keys map directly to AprilCam constructor parameters.
+        pipeline_cfg: dict = {}
+        if self._calibration is not None and self._calibration.pipeline:
+            pipeline_cfg = dict(self._calibration.pipeline)
+
         self._april_cam = AprilCam(
             index=self.index,
             backend=None,
             speed_alpha=0.1,
-            family="36h11",
-            proc_width=640,
-            cap=self._cap,          # pass already-opened cap
+            family=pipeline_cfg.pop("family", "36h11"),
+            proc_width=pipeline_cfg.pop("proc_width", 0),
+            cap=self._cap,
             homography=homography,
             headless=True,
+            **pipeline_cfg,
         )
 
         # Determine frame size
@@ -163,7 +239,7 @@ class CameraPipeline:
         frame_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
 
         # Write info.json
-        self._write_info_json(frame_w, frame_h, homography)
+        self._write_info_json(frame_w, frame_h, homography, device_name)
 
         # Start capture thread
         self._stop_event.clear()
@@ -224,13 +300,17 @@ class CameraPipeline:
         frame_w: int,
         frame_h: int,
         homography: Optional[np.ndarray],
+        device_name: str = "",
     ) -> None:
         """Write <data_dir>/<cam_name>/info.json atomically."""
         cam_dir = self.config.data_dir / self.cam_name
         cam_dir.mkdir(parents=True, exist_ok=True)
 
-        from ..calibration.calibration import load_field_dimensions
-        dims = load_field_dimensions(self.config.calibration_source.parent)
+        lookup_name = device_name or self.cam_name
+        dims = load_field_dimensions_from_dir(lookup_name, self.config.calibration_dir)
+        if dims is None:
+            from ..calibration.calibration import load_field_dimensions
+            dims = load_field_dimensions()
         playfield = {"width_cm": dims[0], "height_cm": dims[1]} if dims else None
 
         info = {

@@ -719,7 +719,7 @@ def _handle_calibrate_playfield(
         entry.field_spec = field_spec
         entry.homography = H
 
-        # Persist per-camera homography file
+        # Persist per-camera calibration file in the new calibration_dir scheme.
         per_camera_path: str | None = None
         try:
             camera_id = entry.camera_id
@@ -736,43 +736,32 @@ def _handle_calibrate_playfield(
                 except (ValueError, IndexError):
                     pass
 
-            from aprilcam.camera.camutil import camera_slug, get_device_name
-            from aprilcam.calibration.homography import homography_path
+            from aprilcam.camera.camutil import get_device_name
+            from aprilcam.calibration.calibration import (
+                CameraCalibration,
+                save_calibration_for_camera,
+            )
+            from aprilcam.config import Config
 
             dev_name = get_device_name(cam_idx) if cam_idx is not None else None
 
             if dev_name and cap_w and cap_h:
-                from aprilcam.config import AppConfig
-                cfg = AppConfig.load()
-                slug = camera_slug(dev_name, cap_w, cap_h)
-                pc_path = homography_path(slug, cfg.data_dir)
-                pc_path.parent.mkdir(parents=True, exist_ok=True)
-
-                cal_data = {
-                    "units": "cm",
-                    "width_cm": field_spec.width_cm,
-                    "height_cm": field_spec.height_cm,
-                    "pixel_points": [list(pixel_corners[k]) for k in ("upper_left", "upper_right", "lower_left", "lower_right")],
-                    "world_points_cm": [
-                        [0.0, 0.0],
-                        [field_spec.width_cm, 0.0],
-                        [0.0, field_spec.height_cm],
-                        [field_spec.width_cm, field_spec.height_cm],
-                    ],
-                    "homography": H.tolist(),
-                    "note": "Maps [u,v,1]^T pixels to [X,Y,W]^T; use X/W,Y/W in centimeters.",
-                    "source": {
-                        "type": "camera",
-                        "index": cam_idx,
-                        "device_name": dev_name,
-                        "resolution": [cap_w, cap_h],
-                    },
-                }
-                pc_path.write_text(json.dumps(cal_data, indent=2))
+                cfg = Config.load()
+                cal = CameraCalibration(
+                    device_name=dev_name,
+                    resolution=(cap_w, cap_h),
+                    homography=H,
+                )
+                pc_path = save_calibration_for_camera(
+                    cal,
+                    cfg.calibration_dir,
+                    field_width_cm=field_spec.width_cm,
+                    field_height_cm=field_spec.height_cm,
+                )
                 per_camera_path = str(pc_path)
         except Exception as _persist_exc:
             import logging
-            logging.getLogger("aprilcam").warning("Failed to persist homography: %s", _persist_exc)
+            logging.getLogger("aprilcam").warning("Failed to persist calibration: %s", _persist_exc)
 
         result = {
             "playfield_id": playfield_id,
