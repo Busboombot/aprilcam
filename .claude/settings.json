@@ -17,7 +17,8 @@
       "Skill(plan-sprint)",
       "Skill(plan-sprint:*)",
       "Skill(execute-sprint)",
-      "Skill(execute-sprint:*)"
+      "Skill(execute-sprint:*)",
+      "Bash(kill 78648)"
     ]
   },
   "hooks": {

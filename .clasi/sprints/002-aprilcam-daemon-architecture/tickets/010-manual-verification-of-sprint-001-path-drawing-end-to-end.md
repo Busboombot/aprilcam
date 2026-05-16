@@ -1,15 +1,15 @@
 ---
 id: '010'
 title: Manual verification of sprint 001 path drawing end-to-end
-status: todo
+status: done
 use-cases:
-  - SUC-009
+- SUC-009
 depends-on:
-  - '009'
+- 009
 github-issue: ''
 issue:
-  - aprilcam-daemon-architecture.md
-  - agent-drawn-paths-on-the-aprilcam-live-view.md
+- aprilcam-daemon-architecture.md
+- agent-drawn-paths-on-the-aprilcam-live-view.md
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
