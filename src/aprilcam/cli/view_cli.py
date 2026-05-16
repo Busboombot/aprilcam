@@ -257,7 +257,14 @@ def main(argv: list[str] | None = None) -> int:
             if paths and homography is not None:
                 display.draw_paths(disp, paths, boundary, homography)
 
-            # 11. Show display frame
+            # 11. Draw status panel
+            display.draw_status_panel(
+                disp, tags, homography,
+                num_paths=len(paths),
+                fps=msg.fps,
+            )
+
+            # 12. Show display frame
             cv.imshow(WINDOW, disp)
 
             # 12. Poll for keypress — exit on q (113) or Esc (27)
