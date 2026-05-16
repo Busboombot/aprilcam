@@ -4,6 +4,10 @@ import sys
 
 
 SUBCOMMANDS = {
+    "daemon": {
+        "help": "Manage the AprilCam daemon (start, status, stop)",
+        "module": "aprilcam.cli.daemon_cli",
+    },
     "mcp": {
         "help": "Start the MCP server",
         "module": "aprilcam.server.mcp_server",
