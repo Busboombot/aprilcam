@@ -229,6 +229,10 @@ class CameraPipeline:
         cam_dir = self.config.data_dir / self.cam_name
         cam_dir.mkdir(parents=True, exist_ok=True)
 
+        from ..calibration.calibration import load_field_dimensions
+        dims = load_field_dimensions(self.config.calibration_source.parent)
+        playfield = {"width_cm": dims[0], "height_cm": dims[1]} if dims else None
+
         info = {
             "data_socket": str(
                 self.config.socket_dir / self.cam_name / "data.sock"
@@ -238,6 +242,7 @@ class CameraPipeline:
             "homography": homography.tolist() if homography is not None else None,
             "calibrated": homography is not None,
             "frame_size": [frame_w, frame_h],
+            "playfield": playfield,
         }
         dest = cam_dir / "info.json"
         tmp = cam_dir / "info.json.tmp"

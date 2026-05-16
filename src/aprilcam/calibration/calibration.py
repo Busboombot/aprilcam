@@ -113,6 +113,27 @@ def calibration_path(data_dir: str | Path = "data") -> Path:
 # ---------------------------------------------------------------------------
 
 
+def load_field_dimensions(
+    data_dir: str | Path = "data",
+) -> Optional[tuple[float, float]]:
+    """Return ``(width_cm, height_cm)`` from the top-level calibration file.
+
+    Returns ``None`` if the file is missing or the keys are absent.
+    """
+    cal_file = calibration_path(data_dir)
+    if not cal_file.exists():
+        return None
+    try:
+        data = json.loads(cal_file.read_text())
+        w = data.get("field_width_cm")
+        h = data.get("field_height_cm")
+        if w is not None and h is not None:
+            return (float(w), float(h))
+    except Exception:
+        pass
+    return None
+
+
 def load_calibration_for_camera(
     device_name: str,
     data_dir: str | Path = "data",
