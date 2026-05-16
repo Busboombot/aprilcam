@@ -120,7 +120,13 @@ def _cmd_restart(config) -> int:
     """Stop the daemon if running, then start it."""
     import time
     _cmd_stop(config)
-    time.sleep(0.5)
+    # Wait until the control socket disappears (daemon fully exited)
+    control_path = config.socket_dir / "control.sock"
+    deadline = time.monotonic() + 6.0
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        if not control_path.exists():
+            break
     return _cmd_start(config)
 
 
