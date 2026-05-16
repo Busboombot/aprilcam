@@ -266,6 +266,8 @@ class PlayfieldDisplay:
         frame: np.ndarray,
         tags: Iterable[AprilTag],
         homography: Optional[np.ndarray] = None,
+        num_paths: int = 0,
+        fps: float = 0.0,
     ) -> None:
         """Draw a status panel on the right side of the frame."""
         fh, fw = frame.shape[:2]
@@ -307,6 +309,16 @@ class PlayfieldDisplay:
         lines.append((f"Tags: {len(tag_list)}", (255, 255, 255)))
         if april_ids:
             lines.append((f"  AT: {april_ids}", (200, 200, 200)))
+
+        # Path count
+        if num_paths > 0:
+            lines.append((f"Paths: {num_paths}", (0, 200, 255)))
+        else:
+            lines.append(("Paths: none", (128, 128, 128)))
+
+        # FPS
+        if fps > 0:
+            lines.append((f"FPS: {fps:.1f}", (200, 200, 200)))
 
         # Gripper
         if self.robot_tag_id is not None:

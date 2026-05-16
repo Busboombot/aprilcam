@@ -23,3 +23,6 @@ build/
 
 data
 .env
+# dotconfig — assembled env files contain decrypted secrets
+.env.*
+!.env.example

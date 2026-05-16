@@ -10,12 +10,67 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 from typing import List, Optional
 
+import cv2 as cv
+import numpy as np
+
 from ..camera.camutil import list_cameras, select_camera_by_pattern
-from ..config import AppConfig
+from ..config import Config
+from ..daemon.client import ensure_running, ControlClient
+
+
+class _DaemonCapture:
+    """Thin VideoCapture adapter that routes frame reads through the daemon.
+
+    Exposes just enough of the cv.VideoCapture interface that
+    :func:`~aprilcam.calibration.homography.detect_all_tags` and
+    :func:`~aprilcam.calibration.calibration.calibrate_single` can use it
+    without modification.
+    """
+
+    def __init__(self, client: ControlClient, cam_name: str) -> None:
+        self._client = client
+        self._cam_name = cam_name
+        self._width: Optional[int] = None
+        self._height: Optional[int] = None
+
+    def _fetch_frame(self) -> Optional[np.ndarray]:
+        """Fetch one JPEG frame from the daemon and decode it to BGR."""
+        resp = self._client.rpc("capture_frame", cam_name=self._cam_name)
+        data = base64.b64decode(resp["frame_b64"])
+        frame = cv.imdecode(np.frombuffer(data, np.uint8), cv.IMREAD_COLOR)
+        if frame is not None and self._width is None:
+            self._height, self._width = frame.shape[:2]
+        return frame
+
+    def read(self):
+        """Mimic cv.VideoCapture.read() → (ret, frame)."""
+        frame = self._fetch_frame()
+        if frame is None:
+            return False, None
+        return True, frame
+
+    def get(self, prop_id: int) -> float:
+        """Mimic cv.VideoCapture.get() for width/height props."""
+        if prop_id == cv.CAP_PROP_FRAME_WIDTH:
+            if self._width is None:
+                self._fetch_frame()
+            return float(self._width or 0)
+        if prop_id == cv.CAP_PROP_FRAME_HEIGHT:
+            if self._height is None:
+                self._fetch_frame()
+            return float(self._height or 0)
+        return 0.0
+
+    def isOpened(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        pass
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -45,7 +100,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--output",
         type=str,
         default=None,
-        help="Output path for calibration.json (default: data/calibration.json)",
+        help="Output path for calibration.json (default: from daemon config)",
     )
     parser.add_argument(
         "--frames",
@@ -55,25 +110,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Load config for data directory
-    try:
-        cfg = AppConfig.load()
-        data_dir = cfg.data_dir
-    except Exception:
-        data_dir = Path("data")
+    # Start (or connect to) the daemon
+    config = Config.load()
+    client = ensure_running(config)
 
-    cal_path = Path(args.output) if args.output else data_dir / "calibration.json"
+    # Resolve calibration directory: explicit --output takes priority,
+    # then the daemon's configured path.
+    if args.output:
+        cal_dir = Path(args.output)
+    else:
+        cal_dir = Path(client.rpc("get_calibration_save_path")["path"])
 
-    # Load existing calibration for defaults
-    existing = {}
-    if cal_path.exists():
-        try:
-            existing = json.loads(cal_path.read_text())
-        except Exception:
-            pass
-
-    field_width = args.width or existing.get("field_width_cm", 101.0)
-    field_height = args.height or existing.get("field_height_cm", 89.0)
+    # Load field dimension defaults from any existing per-camera file in the dir
+    field_width = args.width
+    field_height = args.height
+    if (field_width is None or field_height is None) and cal_dir.is_dir():
+        for f in cal_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                field_width = field_width or d.get("field_width_cm")
+                field_height = field_height or d.get("field_height_cm")
+                if field_width and field_height:
+                    break
+            except Exception:
+                pass
+    field_width = field_width or 101.0
+    field_height = field_height or 89.0
 
     # Resolve which cameras to calibrate
     camera_indices: list[tuple[int, str]] = []  # (index, label)
@@ -89,43 +151,70 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"  No camera matching '{spec}', skipping.")
     else:
-        # Re-calibrate all cameras already in calibration.json
-        existing_cameras = existing.get("cameras", {})
-        if not existing_cameras:
-            print(f"No cameras specified and {cal_path} has no existing entries.")
+        # Re-calibrate all cameras that already have a file in the calibration dir
+        if not cal_dir.is_dir() or not list(cal_dir.glob("*.json")):
+            print(f"No cameras specified and {cal_dir} has no existing calibration files.")
             print("Specify cameras to calibrate: aprilcam calibrate 0 2")
             return 1
-        for device_name in existing_cameras:
+        for f in sorted(cal_dir.glob("*.json")):
+            try:
+                device_name = json.loads(f.read_text()).get("device_name", "")
+            except Exception:
+                continue
+            if not device_name:
+                continue
             idx = select_camera_by_pattern(device_name, available)
             if idx is not None:
                 camera_indices.append((idx, device_name))
             else:
-                print(f"  Camera '{device_name}' from calibration.json not found, skipping.")
+                print(f"  Camera '{device_name}' from {f.name} not found, skipping.")
 
     if not camera_indices:
         print("No cameras to calibrate.")
         return 1
 
     print(f"Playfield: {field_width} x {field_height} cm")
-    print(f"Output: {cal_path}")
+    print(f"Output: {cal_dir}")
     print(f"Cameras to calibrate: {len(camera_indices)}")
     for idx, label in camera_indices:
         print(f"  [{idx}] {label}")
     print()
 
-    # Run calibration for each camera
-    from ..stream import calibrate
+    # Run calibration for each camera via daemon
+    from ..calibration.calibration import calibrate_single, save_calibration_for_camera
 
     for idx, label in camera_indices:
         print(f"Calibrating [{idx}] {label} ...")
         try:
-            calibrate(
-                camera=idx,
+            # Open the camera through the daemon
+            resp = client.rpc("open_camera", index=idx)
+            cam_name = resp["cam_name"]
+
+            # Warm-up: discard initial frames (mirror stream.calibrate warm-up of 10 frames)
+            for _ in range(10):
+                client.rpc("capture_frame", cam_name=cam_name)
+
+            # Build a VideoCapture-compatible adapter backed by the daemon
+            cap = _DaemonCapture(client, cam_name)
+
+            cal = calibrate_single(
+                cap,
                 field_width_cm=field_width,
                 field_height_cm=field_height,
-                output=cal_path,
                 num_frames=args.frames,
+                camera_index=idx,
             )
+
+            cal_file = save_calibration_for_camera(cal, cal_dir, field_width, field_height)
+
+            print(f"Calibration saved to {cal_file}")
+            print(f"  Camera: {cal.device_name} {cal.resolution}, {cal.tags_used} tags, RMS {cal.rms_error:.6f}")
+            if cal.dist_coeffs is not None:
+                print(f"  Barrel distortion correction: yes")
+
+            # Notify the daemon so it hot-reloads the calibration
+            client.rpc("reload_calibration", cam_name=cam_name)
+
             print()
         except Exception as e:
             print(f"  ERROR: {e}")
