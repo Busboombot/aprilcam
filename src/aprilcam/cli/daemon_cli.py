@@ -7,17 +7,27 @@ import sys
 from typing import Optional
 
 
+def _read_pid(config) -> Optional[int]:
+    """Return the daemon PID from the pidfile, or None if unreadable."""
+    try:
+        return int(config.daemon_pidfile.read_text().strip())
+    except Exception:
+        return None
+
+
 def _cmd_start(config) -> int:
     """Ensure the daemon is running (auto-spawn if needed)."""
     from aprilcam.daemon.client import ensure_running, _try_connect
 
     already_up = _try_connect(config.socket_dir / "control.sock") is not None
     client = ensure_running(config)
+    pid = _read_pid(config)
+    pid_str = f"  pid {pid}" if pid else ""
 
     if already_up:
-        print("daemon already running")
+        print(f"daemon already running{pid_str}")
     else:
-        print(f"daemon started  (control socket: {config.socket_dir / 'control.sock'})")
+        print(f"daemon started{pid_str}  (control socket: {config.socket_dir / 'control.sock'})")
 
     try:
         resp = client.rpc("list_cameras")
@@ -45,7 +55,9 @@ def _cmd_status(config) -> int:
     sock.close()
     client = ControlClient(control_path)
 
-    print("daemon: running")
+    pid = _read_pid(config)
+    pid_str = f"  (pid {pid})" if pid else ""
+    print(f"daemon: running{pid_str}")
     print(f"control socket: {control_path}")
 
     try:
