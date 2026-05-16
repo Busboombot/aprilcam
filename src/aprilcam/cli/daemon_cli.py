@@ -71,12 +71,23 @@ def _cmd_status(config) -> int:
                 info_path = config.data_dir / cam / "info.json"
                 try:
                     import json
+                    from pathlib import Path
                     info = json.loads(info_path.read_text())
                     print(f"    data socket : {info.get('data_socket', '?')}")
-                    print(f"    paths file  : {info.get('paths_file', '?')}")
                     print(f"    calibrated  : {info.get('calibrated', False)}")
                     fw, fh = info.get("frame_size", [0, 0])
                     print(f"    frame size  : {fw}x{fh}")
+                    pf = info.get("playfield")
+                    if pf:
+                        print(f"    playfield   : {pf.get('width_cm')}cm × {pf.get('height_cm')}cm")
+                    paths_file = info.get("paths_file")
+                    print(f"    paths file  : {paths_file or '?'}")
+                    if paths_file:
+                        try:
+                            paths = json.loads(Path(paths_file).read_text())
+                            print(f"    paths       : {len(paths)} path(s) queued to draw")
+                        except Exception:
+                            print(f"    paths       : (unreadable)")
                 except Exception:
                     pass
     except Exception as exc:
@@ -105,15 +116,24 @@ def _cmd_stop(config) -> int:
     return 0
 
 
+def _cmd_restart(config) -> int:
+    """Stop the daemon if running, then start it."""
+    import time
+    _cmd_stop(config)
+    time.sleep(0.5)
+    return _cmd_start(config)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="aprilcam daemon",
         description="Manage the AprilCam daemon process",
     )
     sub = parser.add_subparsers(dest="subcmd", metavar="<subcommand>")
-    sub.add_parser("start",  help="Start the daemon (no-op if already running)")
-    sub.add_parser("status", help="Show daemon status and open cameras")
-    sub.add_parser("stop",   help="Stop the running daemon")
+    sub.add_parser("start",   help="Start the daemon (no-op if already running)")
+    sub.add_parser("status",  help="Show daemon status and open cameras")
+    sub.add_parser("stop",    help="Stop the running daemon")
+    sub.add_parser("restart", help="Stop then start the daemon")
 
     args = parser.parse_args(argv)
 
@@ -130,6 +150,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_status(config)
     if args.subcmd == "stop":
         return _cmd_stop(config)
+    if args.subcmd == "restart":
+        return _cmd_restart(config)
 
     parser.print_help()
     return 1
