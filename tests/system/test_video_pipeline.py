@@ -26,9 +26,17 @@ VIDEO_FILES = [
 ]
 
 
+def _is_lfs_pointer(path: Path) -> bool:
+    try:
+        return path.read_bytes(8).startswith(b"version ")
+    except Exception:
+        return False
+
+
 def _available_videos():
-    """Return list of available test videos."""
-    return [f for f in VIDEO_FILES if (MOVIES_DIR / f).exists()]
+    """Return list of available test videos (skips LFS pointers)."""
+    return [f for f in VIDEO_FILES
+            if (MOVIES_DIR / f).exists() and not _is_lfs_pointer(MOVIES_DIR / f)]
 
 
 def _run_detection_on_video(video_path, max_frames=60):

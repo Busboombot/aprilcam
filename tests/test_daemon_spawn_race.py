@@ -34,8 +34,7 @@ def _make_config(tmp_path: Path) -> Config:
     return Config(
         data_dir=tmp_path / "data",
         socket_dir=socket_dir,
-        calibration_source=tmp_path / "calibration.json",
-        calibration_save_path=tmp_path / "calibration.json",
+        calibration_dir=tmp_path / "calibration",
         log_level="INFO",
         daemon_pidfile=tmp_path / "aprilcamd.pid",
     )

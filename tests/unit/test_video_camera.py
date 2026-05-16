@@ -8,11 +8,18 @@ from aprilcam.camera import VideoCamera
 MOVIES_DIR = Path(__file__).parent.parent / "movies"
 
 
+def _is_lfs_pointer(path: Path) -> bool:
+    try:
+        return path.read_bytes(8).startswith(b"version ")
+    except Exception:
+        return False
+
+
 @pytest.fixture
 def bright_video():
     path = MOVIES_DIR / "bright-gsc.mov"
-    if not path.exists():
-        pytest.skip("Test video not available")
+    if not path.exists() or _is_lfs_pointer(path):
+        pytest.skip("Test video not available (LFS not checked out)")
     return path
 
 

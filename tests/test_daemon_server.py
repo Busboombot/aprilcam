@@ -41,8 +41,7 @@ def tmp_config(tmp_path: Path):  # noqa: ARG001 — tmp_path unused but keeps py
     cfg = Config(
         data_dir=data_dir,
         socket_dir=sock_dir,
-        calibration_source=data_dir / "calibration.json",
-        calibration_save_path=data_dir / "calibration.json",
+        calibration_dir=data_dir / "calibration",
         log_level="DEBUG",
         daemon_pidfile=sock_dir / "aprilcamd.pid",
     )
@@ -131,7 +130,7 @@ def test_get_calibration_save_path(running_server):
     ctrl_path = cfg.socket_dir / "control.sock"
     resp = _rpc(ctrl_path, {"cmd": "get_calibration_save_path"})
     assert resp["ok"] is True
-    assert resp["path"] == str(cfg.calibration_save_path)
+    assert resp["path"] == str(cfg.calibration_dir)
 
 
 def test_close_unknown_camera(running_server):
