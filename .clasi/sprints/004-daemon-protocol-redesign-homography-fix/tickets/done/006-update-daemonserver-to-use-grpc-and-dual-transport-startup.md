@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Update DaemonServer to use gRPC and dual-transport startup
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-002
@@ -29,19 +29,19 @@ active use (it will be formally deleted in ticket 008 when the CLI is updated).
 
 ## Acceptance Criteria
 
-- [ ] `DaemonServer` accepts transport configuration: `unix_enabled`, `tcp_enabled`,
+- [x] `DaemonServer` accepts transport configuration: `unix_enabled`, `tcp_enabled`,
       `tcp_port`, `unix_path`.
-- [ ] When `unix_enabled=True`, the gRPC server binds `unix://<unix_path>`.
-- [ ] When `tcp_enabled=True`, the gRPC server binds `[::]:<tcp_port>`.
-- [ ] When both are enabled (default), both transports are active simultaneously.
-- [ ] `--no-unix --no-tcp` causes the daemon to exit with a clear error message.
-- [ ] Pidfile/flock logic is unchanged.
-- [ ] `aprilcam daemon start` (using old client) connects successfully after this change
+- [x] When `unix_enabled=True`, the gRPC server binds `unix://<unix_path>`.
+- [x] When `tcp_enabled=True`, the gRPC server binds `[::]:<tcp_port>`.
+- [x] When both are enabled (default), both transports are active simultaneously.
+- [x] `--no-unix --no-tcp` causes the daemon to exit with a clear error message.
+- [x] Pidfile/flock logic is unchanged.
+- [x] `aprilcam daemon start` (using old client) connects successfully after this change
       (backward compatibility note: old client cannot connect to gRPC — CLI update is
       ticket 008; the daemon must be startable from `__main__.py` for manual testing).
-- [ ] `__main__.py` parses `--unix/--no-unix`, `--tcp/--no-tcp`, `--tcp-port N`,
+- [x] `__main__.py` parses `--unix/--no-unix`, `--tcp/--no-tcp`, `--tcp-port N`,
       `--unix-path PATH` flags.
-- [ ] `uv run pytest` passes.
+- [x] `uv run pytest` passes.
 
 ## Implementation Plan
 
