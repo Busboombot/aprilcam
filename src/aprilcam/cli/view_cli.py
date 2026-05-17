@@ -462,6 +462,13 @@ def main(argv: list[str] | None = None) -> int:
 
         root.after(33, _poll)
 
+    # Snap window to natural content size so it doesn't default to full-screen.
+    # Camera canvas has a fixed resolution; there's no reason for the window
+    # to be wider than canvas + right panel.
+    root.update_idletasks()
+    root.geometry(f"{root.winfo_reqwidth()}x{root.winfo_reqheight()}")
+    root.resizable(False, False)
+
     reader.start()
     root.after(33, _poll)
 
