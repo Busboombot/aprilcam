@@ -7,15 +7,40 @@ import json
 import math
 import os
 import queue
-import socket
 import sys
 import threading
 from pathlib import Path
 from typing import Optional
 
 
+def _tag_record_to_dict(tag_record) -> dict:
+    """Convert a TagRecord Pydantic model to a legacy-format dict for display helpers.
+
+    The panel formatters and _tag_dict_to_aprilcam() were written against the
+    old FrameMessage.tags dict schema.  This shim maps TagRecord fields to
+    the expected keys so the display code needs no further changes.
+    """
+    vel_px_raw = tag_record.vel_px
+    vel_world_raw = tag_record.vel_world
+    world_xy = tag_record.world_xy
+
+    # corners_px in TagRecord is list[tuple[float, float]]; flatten to list[list]
+    corners = [[c[0], c[1]] for c in tag_record.corners_px]
+
+    return {
+        "id": tag_record.id,
+        "center_px": list(tag_record.center_px),
+        "corners_px": corners,
+        "orientation_yaw": tag_record.yaw,
+        "world_xy": list(world_xy) if world_xy is not None else None,
+        "in_playfield": tag_record.in_playfield,
+        "vel_px": list(vel_px_raw) if vel_px_raw is not None else [0.0, 0.0],
+        "vel_world": list(vel_world_raw) if vel_world_raw is not None else None,
+    }
+
+
 def _tag_dict_to_aprilcam(tag_dict: dict):
-    """Convert a TagRecord dict (from FrameMessage.tags) into an AprilTag object."""
+    """Convert a TagRecord dict into an AprilTag object."""
     import numpy as np
     from aprilcam.core.models import AprilTag
 
@@ -132,90 +157,84 @@ def main(argv: list[str] | None = None) -> int:
         description="Open a live view window fed by the AprilCam daemon",
     )
     parser.add_argument("camera", metavar="CAMERA", help="Camera name or integer index")
+    parser.add_argument(
+        "--unix-path",
+        default=None,
+        metavar="PATH",
+        help="Unix socket path for the daemon control socket",
+    )
+    parser.add_argument(
+        "--tcp-port",
+        type=int,
+        default=None,
+        metavar="N",
+        help="TCP port the daemon is listening on",
+    )
     args = parser.parse_args(argv)
 
     import numpy as np
     import cv2 as cv
 
     from aprilcam.config import Config
-    from aprilcam.daemon.client import ensure_running
-    from aprilcam.daemon.protocol import read_frame
+    from aprilcam.client.control import DaemonControl
     from aprilcam.core.playfield import PlayfieldBoundary
     from aprilcam.ui.display import PlayfieldDisplay
 
     config = Config.load()
-    client = ensure_running(config)
+    dc = DaemonControl.connect_default(
+        config, unix_path=args.unix_path, tcp_port=args.tcp_port
+    )
 
     cam_name: Optional[str] = None
     try:
         camera_arg = args.camera
         try:
             cam_index = int(camera_arg)
-            resp = client.rpc("open_camera", index=cam_index)
-            cam_name = resp.get("cam_name") or resp.get("name")
+            cam_name = dc.open_camera(cam_index)
         except ValueError:
-            resp = client.rpc("get_camera_info", cam_name=camera_arg)
-            cam_name = resp.get("cam_name") or camera_arg
+            # camera_arg is a name, not an index — verify it is open
+            info = dc.get_camera_info(camera_arg)
+            cam_name = info.cam_name
 
         if cam_name is None:
             print(f"Error: could not resolve camera '{camera_arg}'", file=sys.stderr)
-            client.close()
-            return 1
-
-        info_resp = client.rpc("get_camera_info", cam_name=cam_name)
-        info_data = info_resp.get("info", {})
-        data_socket_path: Optional[str] = info_data.get("data_socket")
-        paths_file_path: Optional[str] = info_data.get("paths_file")
-
-        if not data_socket_path:
-            print(
-                f"Error: no data socket found for camera '{cam_name}'. "
-                "Is the detection loop running?",
-                file=sys.stderr,
-            )
-            client.close()
+            dc.close()
             return 1
 
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        client.close()
+        dc.close()
+        return 1
+
+    # Open image and tag streams
+    try:
+        image_consumer = dc.get_image_stream(cam_name)
+        tag_consumer = dc.get_tag_stream(cam_name)
+    except Exception as exc:
+        print(f"Error: could not open streams for camera '{cam_name}': {exc}", file=sys.stderr)
+        dc.close()
         return 1
     finally:
-        client.close()
+        # DaemonControl is no longer needed after streams are open
+        dc.close()
 
-    data_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # Read first image frame
     try:
-        data_sock.connect(data_socket_path)
-    except OSError as exc:
-        print(f"Error: cannot connect to data socket '{data_socket_path}': {exc}", file=sys.stderr)
+        first_frame = image_consumer.read()
+    except (EOFError, RuntimeError) as exc:
+        print(f"Error: could not read first frame: {exc}", file=sys.stderr)
+        image_consumer.close()
+        tag_consumer.close()
         return 1
 
-    paths: dict = {}
-    paths_file: Optional[Path] = Path(paths_file_path) if paths_file_path else None
-    paths_mtime: Optional[float] = None
-    if paths_file is not None and paths_file.exists():
-        paths = _load_paths(paths_file)
-        try:
-            paths_mtime = os.stat(paths_file).st_mtime
-        except OSError:
-            pass
-
+    # Read first tag frame (non-blocking with a short timeout via separate read)
+    first_tag_frame = None
     try:
-        first_msg = read_frame(data_sock)
-    except ConnectionError:
-        print("Data socket closed before first frame — daemon may have stopped.", file=sys.stderr)
-        data_sock.close()
-        return 1
-
-    first_frame = _decode_frame(first_msg.frame_jpeg, np, cv)
-    if first_frame is None:
-        print("Error: could not decode first frame from daemon.", file=sys.stderr)
-        data_sock.close()
-        return 1
+        first_tag_frame = tag_consumer.read()
+    except (EOFError, RuntimeError):
+        pass
 
     _DISPLAY_W = 1000  # canvas is always this wide; height scales proportionally
-
-    frame_h, frame_w = first_frame.shape[:2]
 
     boundary = PlayfieldBoundary()
     display = PlayfieldDisplay(
@@ -224,29 +243,26 @@ def main(argv: list[str] | None = None) -> int:
         deskew_overlay=True,
     )
 
-    def _process_msg(msg, frame_bgr):
-        nonlocal paths, paths_mtime
+    # State shared between reader threads and main (Tk) thread
+    _latest_tag_frame: list = [first_tag_frame]  # mutable container for thread sharing
+    _tag_lock = threading.Lock()
 
-        if paths_file is not None and paths_file.exists():
-            try:
-                mtime = os.stat(paths_file).st_mtime
-                if mtime != paths_mtime:
-                    paths = _load_paths(paths_file)
-                    paths_mtime = mtime
-            except OSError:
-                pass
+    def _process_frame_and_tags(frame_bgr: "np.ndarray", tag_frame):
+        """Apply tag overlay to frame_bgr; return (disp, status_dict, raw_tags_dicts)."""
+        nonlocal boundary
 
-        if msg.playfield_corners:
-            poly = np.array(msg.playfield_corners, dtype=np.float32)
-            if poly.shape == (4, 2):
+        if tag_frame is not None and tag_frame.playfield_corners:
+            raw_corners = tag_frame.playfield_corners
+            if len(raw_corners) == 4:
+                poly = np.array([[c[0], c[1]] for c in raw_corners], dtype=np.float32)
                 boundary.polygon = poly
                 boundary._poly = poly
                 display._update_deskew(frame_bgr)
 
         homography: Optional[np.ndarray] = None
-        if msg.homography is not None:
+        if tag_frame is not None and tag_frame.homography is not None:
             try:
-                homography = np.array(msg.homography, dtype=np.float64)
+                homography = np.array(tag_frame.homography, dtype=np.float64)
                 if homography.shape != (3, 3):
                     homography = None
             except Exception:
@@ -254,28 +270,33 @@ def main(argv: list[str] | None = None) -> int:
 
         disp = display.prepare_display(frame_bgr)
 
+        raw_tags_dicts: list[dict] = []
         tags = []
-        for td in msg.tags:
-            try:
-                tags.append(_tag_dict_to_aprilcam(td))
-            except Exception:
-                pass
+        if tag_frame is not None:
+            for tr in tag_frame.tags:
+                try:
+                    td = _tag_record_to_dict(tr)
+                    raw_tags_dicts.append(td)
+                    tags.append(_tag_dict_to_aprilcam(td))
+                except Exception:
+                    pass
 
         display.draw_overlays(disp, tags, homography)
-        if paths and homography is not None:
-            display.draw_paths(disp, paths, boundary, homography)
 
+        fps_val = tag_frame.fps if tag_frame is not None else 0.0
         calibrated = homography is not None
         deskew_mode = getattr(display, "_mode", "full") == "deskew"
         status_dict = {
-            "fps": msg.fps,
+            "fps": fps_val,
             "tag_count": len(tags),
             "calibrated": calibrated,
             "deskew_mode": deskew_mode,
         }
-        return disp, status_dict, list(msg.tags)
+        return disp, status_dict, raw_tags_dicts
 
-    first_disp, first_status, first_tags = _process_msg(first_msg, first_frame)
+    first_disp, first_status, first_raw_tags = _process_frame_and_tags(
+        first_frame, first_tag_frame
+    )
 
     # Compute initial canvas height from the first display frame's aspect ratio
     _dh, _dw = first_disp.shape[:2]
@@ -283,26 +304,42 @@ def main(argv: list[str] | None = None) -> int:
 
     frame_queue: queue.Queue = queue.Queue(maxsize=2)
     stop_event = threading.Event()
-    frame_queue.put_nowait((first_disp, first_status, first_tags))
+    frame_queue.put_nowait((first_disp, first_status, first_raw_tags))
 
-    def _reader_thread():
+    def _image_reader_thread():
+        """Continuously read image frames and push processed results to frame_queue."""
         while not stop_event.is_set():
             try:
-                msg = read_frame(data_sock)
-            except ConnectionError:
-                print("Data socket closed — daemon may have stopped.", file=sys.stderr)
+                frame_bgr = image_consumer.read()
+            except (EOFError, RuntimeError):
+                print("Image stream closed — daemon may have stopped.", file=sys.stderr)
                 stop_event.set()
                 break
-            frame_bgr = _decode_frame(msg.frame_jpeg, np, cv)
-            if frame_bgr is None:
-                continue
-            disp, status_dict, raw_tags = _process_msg(msg, frame_bgr)
+
+            with _tag_lock:
+                current_tag_frame = _latest_tag_frame[0]
+
+            disp, status_dict, raw_tags = _process_frame_and_tags(
+                frame_bgr, current_tag_frame
+            )
             try:
                 frame_queue.put_nowait((disp, status_dict, raw_tags))
             except queue.Full:
                 pass
 
-    reader = threading.Thread(target=_reader_thread, daemon=True)
+    def _tag_reader_thread():
+        """Continuously read tag frames and update _latest_tag_frame."""
+        while not stop_event.is_set():
+            try:
+                tf = tag_consumer.read()
+                with _tag_lock:
+                    _latest_tag_frame[0] = tf
+            except (EOFError, RuntimeError):
+                stop_event.set()
+                break
+
+    image_reader = threading.Thread(target=_image_reader_thread, daemon=True)
+    tag_reader = threading.Thread(target=_tag_reader_thread, daemon=True)
 
     # ── Build tkinter window ──────────────────────────────────────────────
     import tkinter as tk
@@ -334,7 +371,6 @@ def main(argv: list[str] | None = None) -> int:
     label_font = ("Helvetica", 10)
     value_font = ("Helvetica", 10, "bold")
     PANEL_BG = "#1e1e1e"
-    SECT_BG = "#252525"
     FG = "#dddddd"
     MOB_FG = "#ffcc44"
     STAT_FG = "#88ccff"
@@ -481,15 +517,13 @@ def main(argv: list[str] | None = None) -> int:
         root.after(33, _poll)
 
     # Snap window to exact content size: locked width = canvas + right panel.
-    # resizable(False, True) prevents macOS from restoring a previously saved
-    # large window width while still allowing height to adjust when homography
-    # changes the aspect ratio.
     root.update_idletasks()
     _locked_w = _DISPLAY_W + right_frame.winfo_reqwidth()
     root.geometry(f"{_locked_w}x{_display_h}")
     root.resizable(False, True)
 
-    reader.start()
+    image_reader.start()
+    tag_reader.start()
     root.after(33, _poll)
 
     try:
@@ -497,8 +531,12 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         stop_event.set()
         try:
-            data_sock.close()
-        except OSError:
+            image_consumer.close()
+        except Exception:
+            pass
+        try:
+            tag_consumer.close()
+        except Exception:
             pass
 
     return 0

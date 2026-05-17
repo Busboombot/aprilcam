@@ -6,6 +6,14 @@ Proto-generated types are confined to this module.
 
 from __future__ import annotations
 
+import fcntl
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 import numpy as np
 import cv2
 import grpc
@@ -18,6 +26,9 @@ from aprilcam.client.models import (
     TagFrame,
 )
 from aprilcam.client.stream import ImageStreamConsumer, TagStreamConsumer
+
+if TYPE_CHECKING:
+    from aprilcam.config import Config
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +65,89 @@ class DaemonControl:
     # ------------------------------------------------------------------
     # Connection management
     # ------------------------------------------------------------------
+
+    @classmethod
+    def connect_default(
+        cls,
+        config: "Config",
+        log_level: str | None = None,
+        unix_path: str | None = None,
+        tcp_port: int | None = None,
+    ) -> "DaemonControl":
+        """Return a connected DaemonControl, spawning the daemon if needed.
+
+        Mirrors the behaviour of the legacy ``ensure_running()`` function:
+
+        1. Build the gRPC target from *unix_path* / *tcp_port* or the
+           defaults derived from *config*.
+        2. Attempt an immediate gRPC probe (``ListCameras``).  If it
+           succeeds, return the connected instance.
+        3. Acquire a spawn lock, re-probe, then spawn
+           ``python -m aprilcam.daemon`` as a detached background process.
+        4. Poll every 50 ms for up to 5 seconds; raise on timeout.
+
+        *log_level* overrides ``APRILCAM_LOG_LEVEL`` for the spawned process.
+        """
+        resolved_unix = unix_path or str(config.socket_dir / "control.sock")
+        resolved_port = tcp_port  # may be None — only used if unix fails
+
+        def _try_connect() -> "DaemonControl | None":
+            dc = cls(unix_path=resolved_unix)
+            dc.connect()
+            try:
+                dc.list_cameras()
+                return dc
+            except grpc.RpcError:
+                dc.close()
+                return None
+            except Exception:
+                dc.close()
+                return None
+
+        # Fast path: daemon already running
+        result = _try_connect()
+        if result is not None:
+            return result
+
+        # Spawn lock: prevent two callers from starting the daemon simultaneously
+        lock_path = config.socket_dir / "aprilcamd.spawn.lock"
+        config.socket_dir.mkdir(parents=True, exist_ok=True)
+        lock_file = open(lock_path, "w")  # noqa: WPS515  (kept open for flock)
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+            # Re-probe after acquiring the lock (another caller may have spawned)
+            result = _try_connect()
+            if result is not None:
+                return result
+
+            # Spawn the daemon
+            config.data_dir.mkdir(parents=True, exist_ok=True)
+            log_file = open(config.data_dir / "aprilcamd.log", "a")  # noqa: WPS515
+            env = os.environ.copy()
+            if log_level:
+                env["APRILCAM_LOG_LEVEL"] = log_level
+            subprocess.Popen(
+                [sys.executable, "-m", "aprilcam.daemon"],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=log_file,
+                env=env,
+            )
+
+            # Poll until the daemon is ready
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                time.sleep(0.05)
+                result = _try_connect()
+                if result is not None:
+                    return result
+
+            raise RuntimeError("aprilcamd did not start within 5 seconds")
+
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
 
     def connect(self) -> "DaemonControl":
         """Open the gRPC channel and create the stub.

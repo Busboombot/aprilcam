@@ -34,17 +34,17 @@ auto-spawn responsibility.
 
 ## Acceptance Criteria
 
-- [ ] `daemon_cli.py` contains no imports from `aprilcam.daemon.client`.
-- [ ] `daemon_cli.py` contains no direct `socket.socket()` calls.
-- [ ] `aprilcam daemon start` works end-to-end via gRPC.
-- [ ] `aprilcam daemon status` prints running state, Unix and TCP endpoints, open cameras.
-- [ ] `aprilcam daemon stop` sends `DaemonControl.shutdown()` and exits cleanly.
-- [ ] `aprilcam daemon restart` stop + start with no errors.
-- [ ] `view_cli.py` contains no `socket.socket()` calls.
-- [ ] `view_cli.py` contains no imports from `aprilcam.daemon.client`.
-- [ ] `aprilcam view` renders live frames and tag overlays when a camera is open.
-- [ ] `src/aprilcam/daemon/client.py` is deleted.
-- [ ] `uv run pytest` passes.
+- [x] `daemon_cli.py` contains no imports from `aprilcam.daemon.client`.
+- [x] `daemon_cli.py` contains no direct `socket.socket()` calls.
+- [x] `aprilcam daemon start` works end-to-end via gRPC.
+- [x] `aprilcam daemon status` prints running state, Unix and TCP endpoints, open cameras.
+- [x] `aprilcam daemon stop` sends `DaemonControl.shutdown()` and exits cleanly.
+- [x] `aprilcam daemon restart` stop + start with no errors.
+- [x] `view_cli.py` contains no `socket.socket()` calls.
+- [x] `view_cli.py` contains no imports from `aprilcam.daemon.client`.
+- [x] `aprilcam view` renders live frames and tag overlays when a camera is open.
+- [ ] `src/aprilcam/daemon/client.py` is deleted. <!-- deferred to ticket 010 per programmer instructions -->
+- [x] `uv run pytest` passes.
 
 ## Implementation Plan
 
