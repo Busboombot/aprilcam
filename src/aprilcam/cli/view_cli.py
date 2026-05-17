@@ -312,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     root = tk.Tk()
     root.title(f"aprilcam view — {cam_name}")
     root.configure(bg="#111")
-    root.resizable(True, True)
+    root.resizable(False, True)
 
     # Top-level split: left (video, fixed size) | right (info panel, expands)
     left_frame = tk.Frame(root, bg="#111")
@@ -462,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
         if abs(dh - canvas.winfo_height()) > 2:
             canvas.config(height=dh)
             root.update_idletasks()
-            root.geometry(f"{root.winfo_reqwidth()}x{root.winfo_reqheight()}")
+            _locked_w = _DISPLAY_W + right_frame.winfo_reqwidth()
+            root.geometry(f"{_locked_w}x{root.winfo_reqheight()}")
 
         rgb = cv.cvtColor(frame_disp, cv.COLOR_BGR2RGB)
         photo = ImageTk.PhotoImage(Image.fromarray(rgb))
@@ -479,12 +480,14 @@ def main(argv: list[str] | None = None) -> int:
 
         root.after(33, _poll)
 
-    # Snap window to natural content size so it doesn't default to full-screen.
-    # Camera canvas has a fixed resolution; there's no reason for the window
-    # to be wider than canvas + right panel.
+    # Snap window to exact content size: locked width = canvas + right panel.
+    # resizable(False, True) prevents macOS from restoring a previously saved
+    # large window width while still allowing height to adjust when homography
+    # changes the aspect ratio.
     root.update_idletasks()
-    root.geometry(f"{root.winfo_reqwidth()}x{root.winfo_reqheight()}")
-    root.resizable(False, False)
+    _locked_w = _DISPLAY_W + right_frame.winfo_reqwidth()
+    root.geometry(f"{_locked_w}x{_display_h}")
+    root.resizable(False, True)
 
     reader.start()
     root.after(33, _poll)
