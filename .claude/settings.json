@@ -19,7 +19,9 @@
       "Skill(execute-sprint)",
       "Skill(execute-sprint:*)",
       "Bash(kill 78648)",
-      "Bash(rm /tmp/aprilcam/aprilcamd.pid && uv run aprilcam daemon start)"
+      "Bash(rm /tmp/aprilcam/aprilcamd.pid && uv run aprilcam daemon start)",
+      "Skill(se)",
+      "Skill(se:*)"
     ],
     "additionalDirectories": [
       "/private/tmp/aprilcam"
