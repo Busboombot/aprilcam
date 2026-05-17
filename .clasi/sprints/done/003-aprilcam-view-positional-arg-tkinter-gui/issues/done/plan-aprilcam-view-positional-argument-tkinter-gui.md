@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '003'
+tickets:
+- '002'
 ---
 
 # Plan: aprilcam view — Positional Argument + tkinter GUI

@@ -38,7 +38,7 @@ wheels = [
 
 [[package]]
 name = "aprilcam"
-version = "0.20260516.1"
+version = "0.20260517.1"
 source = { editable = "." }
 dependencies = [
     { name = "cv2-enumerate-cameras" },
@@ -49,6 +49,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "opencv-contrib-python" },
+    { name = "pillow" },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "websockets" },
@@ -74,6 +75,7 @@ requires-dist = [
     { name = "mss", specifier = ">=9.0" },
     { name = "numpy", specifier = ">=1.23" },
     { name = "opencv-contrib-python", specifier = ">=4.8" },
+    { name = "pillow", specifier = ">=10.0" },
     { name = "pygame", marker = "extra == 'playfield'", specifier = ">=2.5" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rich", specifier = ">=13.0" },

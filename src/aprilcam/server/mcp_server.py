@@ -1307,7 +1307,7 @@ def _handle_start_live_view(
 ) -> dict:
     """Core logic for start_live_view — returns status dict or error dict.
 
-    Spawns ``aprilcam view --camera <cam_name>`` as a detached subprocess.
+    Spawns ``aprilcam view <cam_name>`` as a detached subprocess.
     The viewer subscribes to the daemon's data socket directly; no pipe
     plumbing is needed from the MCP server side.
     """
@@ -1325,7 +1325,7 @@ def _handle_start_live_view(
 
         # Spawn the viewer as a detached process; it subscribes to the daemon.
         subprocess.Popen(
-            [sys.executable, "-m", "aprilcam", "view", "--camera", cam_name],
+            [sys.executable, "-m", "aprilcam", "view", cam_name],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
