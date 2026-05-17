@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import socket
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -89,16 +91,24 @@ def _load_paths(paths_file: Path) -> dict:
     return {}
 
 
+def _decode_frame(frame_bytes, np, cv):
+    """Decode JPEG bytes to a BGR numpy array. Returns None on failure."""
+    if isinstance(frame_bytes, (bytes, bytearray)):
+        buf = np.frombuffer(frame_bytes, dtype=np.uint8)
+    else:
+        buf = np.array(frame_bytes, dtype=np.uint8)
+    return cv.imdecode(buf, cv.IMREAD_COLOR)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="aprilcam view",
         description="Open a live view window fed by the AprilCam daemon",
     )
     parser.add_argument(
-        "--camera",
-        required=True,
-        metavar="NAME_OR_INDEX",
-        help="Camera name or integer index to view",
+        "camera",
+        metavar="CAMERA",
+        help="Camera name or integer index",
     )
     args = parser.parse_args(argv)
 
@@ -177,106 +187,203 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             pass
 
-    # Display state (created lazily on first frame)
-    display: Optional[PlayfieldDisplay] = None
-    boundary: Optional[PlayfieldBoundary] = None
-    WINDOW = "aprilcam view"
-
+    # 7. Bootstrap: read ONE frame synchronously to get frame dimensions
     try:
-        while True:
-            # 1. Read next frame from the data socket (blocking)
+        first_msg = read_frame(data_sock)
+    except ConnectionError:
+        print("Data socket closed before first frame — daemon may have stopped.", file=sys.stderr)
+        data_sock.close()
+        return 1
+
+    first_frame = _decode_frame(first_msg.frame_jpeg, np, cv)
+    if first_frame is None:
+        print("Error: could not decode first frame from daemon.", file=sys.stderr)
+        data_sock.close()
+        return 1
+
+    frame_h, frame_w = first_frame.shape[:2]
+
+    # 8. Build PlayfieldDisplay using the first frame
+    boundary = PlayfieldBoundary()
+    display = PlayfieldDisplay(
+        playfield=boundary,
+        window_name="aprilcam view",
+        deskew_overlay=True,
+    )
+
+    def _process_msg(msg, frame_bgr):
+        """Apply display pipeline to a frame+msg, return (disp_frame, status_dict)."""
+        nonlocal paths, paths_mtime
+
+        # Reload paths if the file has changed
+        if paths_file is not None and paths_file.exists():
+            try:
+                mtime = os.stat(paths_file).st_mtime
+                if mtime != paths_mtime:
+                    paths = _load_paths(paths_file)
+                    paths_mtime = mtime
+            except OSError:
+                pass
+
+        # Update playfield polygon from message corners
+        if msg.playfield_corners:
+            poly = np.array(msg.playfield_corners, dtype=np.float32)
+            if poly.shape == (4, 2):
+                boundary.polygon = poly
+                boundary._poly = poly
+                display._update_deskew(frame_bgr)
+
+        # Convert homography
+        homography: Optional[np.ndarray] = None
+        if msg.homography is not None:
+            try:
+                homography = np.array(msg.homography, dtype=np.float64)
+                if homography.shape != (3, 3):
+                    homography = None
+            except Exception:
+                homography = None
+
+        # Prepare display frame (crop or deskew to playfield)
+        disp = display.prepare_display(frame_bgr)
+
+        # Convert tag dicts to AprilTag objects
+        tags = []
+        for td in msg.tags:
+            try:
+                tags.append(_tag_dict_to_aprilcam(td))
+            except Exception:
+                pass
+
+        # Draw overlays onto display frame
+        display.draw_overlays(disp, tags, homography)
+
+        # Draw paths (only when homography is available)
+        if paths and homography is not None:
+            display.draw_paths(disp, paths, boundary, homography)
+
+        calibrated = homography is not None
+        deskew_mode = getattr(display, "_deskew_active", False)
+        status_dict = {
+            "fps": msg.fps,
+            "tag_count": len(tags),
+            "calibrated": calibrated,
+            "deskew_mode": deskew_mode,
+        }
+
+        return disp, status_dict
+
+    # Process the first frame
+    first_disp, first_status = _process_msg(first_msg, first_frame)
+
+    # 9. Set up shared state for reader <-> tkinter communication
+    frame_queue: queue.Queue = queue.Queue(maxsize=2)
+    stop_event = threading.Event()
+
+    # Put the first frame in the queue immediately
+    frame_queue.put_nowait((first_disp, first_status))
+
+    # 10. Reader thread: blocks on read_frame, decodes, processes, enqueues
+    def _reader_thread():
+        while not stop_event.is_set():
             try:
                 msg = read_frame(data_sock)
             except ConnectionError:
                 print("Data socket closed — daemon may have stopped.", file=sys.stderr)
+                stop_event.set()
                 break
 
-            # 2. JPEG decode
-            frame_bytes = msg.frame_jpeg
-            if isinstance(frame_bytes, (bytes, bytearray)):
-                buf = np.frombuffer(frame_bytes, dtype=np.uint8)
-            else:
-                # msgpack may decode as list of ints
-                buf = np.array(frame_bytes, dtype=np.uint8)
-            frame = cv.imdecode(buf, cv.IMREAD_COLOR)
-            if frame is None:
+            frame_bgr = _decode_frame(msg.frame_jpeg, np, cv)
+            if frame_bgr is None:
                 continue
 
-            # 3. Reload paths if the file has changed
-            if paths_file is not None and paths_file.exists():
-                try:
-                    mtime = os.stat(paths_file).st_mtime
-                    if mtime != paths_mtime:
-                        paths = _load_paths(paths_file)
-                        paths_mtime = mtime
-                except OSError:
-                    pass
+            disp, status_dict = _process_msg(msg, frame_bgr)
 
-            # 4. Create PlayfieldDisplay on first frame
-            if display is None:
-                boundary = PlayfieldBoundary()
-                display = PlayfieldDisplay(
-                    playfield=boundary,
-                    window_name=WINDOW,
-                    deskew_overlay=True,
-                )
+            try:
+                frame_queue.put_nowait((disp, status_dict))
+            except queue.Full:
+                pass  # Drop frame — tkinter is catching up
 
-            # 5. Update playfield polygon from message corners
-            if msg.playfield_corners:
-                poly = np.array(msg.playfield_corners, dtype=np.float32)
-                if poly.shape == (4, 2):
-                    boundary.polygon = poly
-                    boundary._poly = poly
-                    display._update_deskew(frame)
+    reader = threading.Thread(target=_reader_thread, daemon=True)
 
-            # 6. Convert homography
-            homography: Optional[np.ndarray] = None
-            if msg.homography is not None:
-                try:
-                    homography = np.array(msg.homography, dtype=np.float64)
-                    if homography.shape != (3, 3):
-                        homography = None
-                except Exception:
-                    homography = None
+    # 11. Build tkinter window
+    import tkinter as tk
+    from PIL import Image, ImageTk
 
-            # 7. Prepare display frame (crop or deskew to playfield)
-            disp = display.prepare_display(frame)
+    root = tk.Tk()
+    root.title(f"aprilcam view — {cam_name}")
 
-            # 8. Convert tag dicts to AprilTag objects
-            tags = []
-            for td in msg.tags:
-                try:
-                    tags.append(_tag_dict_to_aprilcam(td))
-                except Exception:
-                    pass
+    canvas = tk.Canvas(root, width=frame_w, height=frame_h, bg="black", highlightthickness=0)
+    canvas.pack()
 
-            # 9. Draw overlays onto display frame
-            display.draw_overlays(disp, tags, homography)
+    # Status bar below canvas
+    status_bar = tk.Frame(root, bg="#222")
+    status_bar.pack(fill=tk.X)
 
-            # 10. Draw paths (only when homography is available)
-            if paths and homography is not None:
-                display.draw_paths(disp, paths, boundary, homography)
+    lbl_fps = tk.Label(status_bar, text="FPS: --", fg="white", bg="#222", padx=8)
+    lbl_fps.pack(side=tk.LEFT)
 
-            # 11. Draw status panel
-            display.draw_status_panel(
-                disp, tags, homography,
-                num_paths=len(paths),
-                fps=msg.fps,
-            )
+    lbl_tags = tk.Label(status_bar, text="Tags: --", fg="white", bg="#222", padx=8)
+    lbl_tags.pack(side=tk.LEFT)
 
-            # 12. Show display frame
-            cv.imshow(WINDOW, disp)
+    lbl_cal = tk.Label(status_bar, text="Calibrated: --", fg="white", bg="#222", padx=8)
+    lbl_cal.pack(side=tk.LEFT)
 
-            # 12. Poll for keypress — exit on q (113) or Esc (27)
-            key = cv.waitKey(1) & 0xFF
-            if key in (113, 27):
-                break
+    lbl_deskew = tk.Label(status_bar, text="Deskew: --", fg="white", bg="#222", padx=8)
+    lbl_deskew.pack(side=tk.LEFT)
 
+    # Place initial blank image on canvas
+    img_item = canvas.create_image(0, 0, anchor=tk.NW)
+
+    def _on_close():
+        stop_event.set()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+    root.bind("<q>", lambda _e: _on_close())
+    root.bind("<Escape>", lambda _e: _on_close())
+
+    def _poll():
+        if stop_event.is_set():
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
+            return
+
+        try:
+            frame_bgr, status_dict = frame_queue.get_nowait()
+        except queue.Empty:
+            root.after(33, _poll)
+            return
+
+        # Convert BGR -> RGB -> PIL -> PhotoImage
+        rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+        photo = ImageTk.PhotoImage(pil_img)
+        canvas.itemconfig(img_item, image=photo)
+        canvas._photo_ref = photo  # prevent GC
+
+        # Update status labels
+        fps_val = status_dict.get("fps")
+        fps_str = f"{fps_val:.1f}" if isinstance(fps_val, (int, float)) else "--"
+        lbl_fps.config(text=f"FPS: {fps_str}")
+        lbl_tags.config(text=f"Tags: {status_dict.get('tag_count', 0)}")
+        lbl_cal.config(text=f"Calibrated: {'Yes' if status_dict.get('calibrated') else 'No'}")
+        lbl_deskew.config(text=f"Deskew: {'On' if status_dict.get('deskew_mode') else 'Off'}")
+
+        root.after(33, _poll)
+
+    # 12. Start reader thread and tkinter main loop
+    reader.start()
+    root.after(33, _poll)
+
+    try:
+        root.mainloop()
     finally:
+        stop_event.set()
         try:
             data_sock.close()
         except OSError:
             pass
-        cv.destroyAllWindows()
 
     return 0
