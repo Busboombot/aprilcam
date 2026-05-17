@@ -12,12 +12,17 @@ from aprilcam.client.models import (
     TagFrame,
     TagRecord,
 )
+from aprilcam.client.control import DaemonControl
+from aprilcam.client.stream import ImageStreamConsumer, TagStreamConsumer
 
 __all__ = [
     "CameraInfo",
+    "DaemonControl",
     "ImageFrame",
+    "ImageStreamConsumer",
     "PathRecord",
     "StreamEndpoint",
     "TagFrame",
     "TagRecord",
+    "TagStreamConsumer",
 ]

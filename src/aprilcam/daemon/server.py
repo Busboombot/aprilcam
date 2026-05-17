@@ -94,6 +94,9 @@ class DaemonServer:
         # gRPC servicer (set in run(), kept for shutdown)
         self._servicer = None
 
+        # mDNS advertiser (set in run() when tcp_enabled=True)
+        self._mdns_advertiser = None
+
         # Set once the gRPC server has started — useful for tests / readiness checks
         self.started_event = threading.Event()
 
@@ -182,7 +185,14 @@ class DaemonServer:
         # Signal that the server is ready (for tests and readiness checks)
         self.started_event.set()
 
-        # 5. Wait for shutdown event --------------------------------------
+        # 5. Start mDNS advertisement (TCP transport only) -----------------
+        if self._tcp_enabled:
+            from .mdns import MDNSAdvertiser
+
+            self._mdns_advertiser = MDNSAdvertiser()
+            self._mdns_advertiser.start(tcp_port=self._tcp_port)
+
+        # 6. Wait for shutdown event --------------------------------------
         # Block until SIGTERM/SIGINT or the Shutdown RPC sets the event.
         self._shutdown_event.wait()
 
@@ -230,6 +240,14 @@ class DaemonServer:
                 except Exception:
                     log.exception("Error stopping pipeline %s", pipeline.cam_name)
             self._cameras.clear()
+
+        # Stop mDNS advertisement
+        if self._mdns_advertiser is not None:
+            try:
+                self._mdns_advertiser.stop()
+            except Exception:
+                log.exception("Error stopping mDNS advertiser")
+            self._mdns_advertiser = None
 
         # Release pidfile
         self._release_pidfile()
