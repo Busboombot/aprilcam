@@ -1,18 +1,18 @@
 ---
 id: '002'
 title: AprilCam Daemon Architecture
-status: planning-docs
+status: done
 branch: sprint/002-aprilcam-daemon-architecture
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
-  - SUC-004
-  - SUC-005
-  - SUC-006
-  - SUC-007
-  - SUC-008
-  - SUC-009
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
+- SUC-008
+- SUC-009
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

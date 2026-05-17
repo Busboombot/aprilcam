@@ -53,8 +53,8 @@ planning. Multiple sprints can be planned in a single session.
 2. **Mine the issues directory**: Scan `.clasi/issues/` for ideas relevant
    to the sprint. Discuss relevant issues with the stakeholder.
 
-   For each TODO claimed by this sprint, set `sprint: "NNN"` in the
-   TODO's YAML frontmatter (using `write_artifact_frontmatter`).
+   For each issue claimed by this sprint, set `sprint: "NNN"` in the
+   issue's YAML frontmatter (using `write_artifact_frontmatter`).
 
 3. **Create sprint directory**: Use the `create_sprint` MCP tool. This
    creates the directory structure and registers the sprint.
@@ -131,6 +131,14 @@ planning artifacts for one sprint at a time.
 
 11. **Advance to ticketing**: If stakeholder approved, call
     `advance_sprint_phase` to move to `ticketing`.
+
+11b. **Split partial-scope issues**: Before creating tickets, review
+    each issue claimed by this sprint. If an issue covers more work than
+    fits in this sprint, call `split_issue(filename, new_filename,
+    new_title, new_body)` to carve out the in-scope piece. The new file
+    is a sibling of the original in the same directory. Then reference
+    `new_filename` in the ticket's `issue` field. The original issue
+    retains the out-of-scope portion for a future sprint.
 
 12. **Create tickets**: Create tickets inline. Tickets are created in
     the sprint's `tickets/` directory with per-sprint numbering (001, 002, ...).
