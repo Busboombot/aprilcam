@@ -164,6 +164,61 @@ def load_calibration_from_dir(
         return None
 
 
+def load_calibration_from_camera_dir(
+    camera_dir: str | Path,
+) -> Optional["CameraCalibration"]:
+    """Load calibration from ``<camera_dir>/calibration.json``.
+
+    Returns ``None`` if the file does not exist or cannot be parsed.
+    """
+    cal_file = Path(camera_dir) / "calibration.json"
+    if not cal_file.exists():
+        return None
+    try:
+        data = json.loads(cal_file.read_text())
+        return CameraCalibration.from_dict(data)
+    except Exception:
+        return None
+
+
+def save_calibration_to_camera_dir(
+    cal: "CameraCalibration",
+    camera_dir: str | Path,
+    field_width_cm: float,
+    field_height_cm: float,
+) -> Path:
+    """Write calibration to ``<camera_dir>/calibration.json``.
+
+    Creates the directory if needed.  Returns the path written.
+    """
+    camera_dir = Path(camera_dir)
+    camera_dir.mkdir(parents=True, exist_ok=True)
+    cal_file = camera_dir / "calibration.json"
+    data = cal.to_dict()
+    data["field_width_cm"] = field_width_cm
+    data["field_height_cm"] = field_height_cm
+    cal_file.write_text(json.dumps(data, indent=2))
+    return cal_file
+
+
+def load_field_dimensions_from_camera_dir(
+    camera_dir: str | Path,
+) -> Optional[tuple]:
+    """Return ``(width_cm, height_cm)`` from ``<camera_dir>/calibration.json``."""
+    cal_file = Path(camera_dir) / "calibration.json"
+    if not cal_file.exists():
+        return None
+    try:
+        data = json.loads(cal_file.read_text())
+        w = data.get("field_width_cm")
+        h = data.get("field_height_cm")
+        if w is not None and h is not None:
+            return (float(w), float(h))
+    except Exception:
+        pass
+    return None
+
+
 def save_calibration_for_camera(
     cal: "CameraCalibration",
     calibration_dir: str | Path,

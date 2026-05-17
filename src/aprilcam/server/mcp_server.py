@@ -224,7 +224,7 @@ def _get_paths_file(camera_id: str) -> Optional[Path]:
         # Try reading info.json from disk (daemon may be running from a prior session)
         try:
             config = Config.load()
-            info_path = config.data_dir / camera_id / "info.json"
+            info_path = config.cameras_dir / camera_id / "info.json"
             if info_path.exists():
                 info = json.loads(info_path.read_text())
                 _cam_info[camera_id] = info  # cache for future calls
@@ -440,13 +440,14 @@ def _handle_open_camera(
         else:
             idx = 0
 
-        # Deterministic handle
-        handle = f"cam_{idx}"
+        # Use the daemon's cam_name (device slug) as handle after RPC
+        handle = None  # resolved below after daemon open
 
         # Delegate to daemon via RPC — no direct cv.VideoCapture here
         client = _ensure_daemon_client()
         resp = client.rpc("open_camera", index=idx)
-        cam_name: str = resp["cam_name"]
+        cam_name: str = resp["cam_name"]  # device slug, e.g. "arducam-ov9782-usb-camera"
+        handle = cam_name
         info_json_path: str = resp["info_json_path"]
 
         # Read info.json to get paths_file and other per-camera metadata

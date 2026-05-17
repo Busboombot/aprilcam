@@ -351,11 +351,15 @@ class DaemonServer:
         return {"ok": True, "cameras": cameras}
 
     def _rpc_open_camera(self, index: int) -> dict:
-        cam_name = f"cam_{index}"
+        from ..camera.camutil import get_device_name
+        from ..calibration.calibration import device_name_slug
+
+        device_name = get_device_name(index)
+        cam_name = device_name_slug(device_name) if device_name else f"cam-{index}"
+
         with self._cam_lock:
             if cam_name in self._cameras:
-                # Already open — return existing info
-                info_path = self._config.data_dir / cam_name / "info.json"
+                info_path = self._config.cameras_dir / cam_name / "info.json"
                 return {
                     "ok": True,
                     "cam_name": cam_name,
@@ -370,10 +374,9 @@ class DaemonServer:
 
             self._cameras[cam_name] = pipeline
 
-        # Start the per-camera data socket (outside cam_lock to keep lock scope small)
         self._start_data_socket(cam_name, pipeline)
 
-        info_path = self._config.data_dir / cam_name / "info.json"
+        info_path = self._config.cameras_dir / cam_name / "info.json"
         return {
             "ok": True,
             "cam_name": cam_name,
@@ -403,19 +406,13 @@ class DaemonServer:
         if pipeline is None:
             return {"ok": False, "error": f"camera '{cam_name}' not open"}
 
-        from ..calibration.calibration import (
-            load_calibration_from_dir,
-            load_calibration_for_camera,
-        )
+        from ..calibration.calibration import load_calibration_from_camera_dir
         from ..daemon.camera_pipeline import _apply_camera_settings
 
         device_name = pipeline.device_name
+        camera_dir = self._config.cameras_dir / cam_name
         try:
-            calibration = load_calibration_from_dir(
-                device_name, self._config.calibration_dir
-            )
-            if calibration is None:
-                calibration = load_calibration_for_camera(device_name)
+            calibration = load_calibration_from_camera_dir(camera_dir)
         except Exception as exc:
             return {"ok": False, "error": f"calibration load failed: {exc}"}
 
@@ -433,7 +430,7 @@ class DaemonServer:
         return {"ok": True}
 
     def _rpc_get_camera_info(self, cam_name: str) -> dict:
-        info_path = self._config.data_dir / cam_name / "info.json"
+        info_path = self._config.cameras_dir / cam_name / "info.json"
         if not info_path.exists():
             return {"ok": False, "error": f"info.json not found for '{cam_name}'"}
         try:
@@ -456,7 +453,7 @@ class DaemonServer:
         return {"ok": True, "frame_b64": frame_b64}
 
     def _rpc_get_calibration_save_path(self) -> dict:
-        return {"ok": True, "path": str(self._config.calibration_dir)}
+        return {"ok": True, "path": str(self._config.cameras_dir)}
 
     # ------------------------------------------------------------------
     # Internal: per-camera data socket

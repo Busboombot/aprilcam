@@ -34,9 +34,8 @@ import cv2 as cv
 import numpy as np
 
 from ..calibration.calibration import (
-    load_calibration_for_camera,
-    load_calibration_from_dir,
-    load_field_dimensions_from_dir,
+    load_calibration_from_camera_dir,
+    load_field_dimensions_from_camera_dir,
 )
 from ..config import Config
 from ..core.aprilcam import AprilCam
@@ -186,13 +185,9 @@ class CameraPipeline:
             device_name = self.cam_name
         self.device_name = device_name
 
-        # Load calibration — try the per-camera directory scheme first,
-        # then fall back to the legacy unified calibration.json.
-        self._calibration = load_calibration_from_dir(
-            device_name, self.config.calibration_dir
-        )
-        if self._calibration is None:
-            self._calibration = load_calibration_for_camera(device_name)
+        # Load calibration from <cameras_dir>/<cam_name>/calibration.json
+        camera_dir = self.config.cameras_dir / self.cam_name
+        self._calibration = load_calibration_from_camera_dir(camera_dir)
 
         # Open camera
         cap = cv.VideoCapture(self.index)
@@ -302,27 +297,13 @@ class CameraPipeline:
         homography: Optional[np.ndarray],
         device_name: str = "",
     ) -> None:
-        """Write <data_dir>/<cam_name>/info.json atomically."""
-        cam_dir = self.config.data_dir / self.cam_name
+        """Write <cameras_dir>/<cam_name>/info.json atomically."""
+        cam_dir = self.config.cameras_dir / self.cam_name
         cam_dir.mkdir(parents=True, exist_ok=True)
 
-        lookup_name = device_name or self.cam_name
-        dims = load_field_dimensions_from_dir(lookup_name, self.config.calibration_dir)
-        if dims is None:
-            from ..calibration.calibration import load_field_dimensions
-            dims = load_field_dimensions()
-        playfield = {"width_cm": dims[0], "height_cm": dims[1]} if dims else None
-
         info = {
-            "data_socket": str(
-                self.config.socket_dir / self.cam_name / "data.sock"
-            ),
-            "paths_file": str(self.config.data_dir / self.cam_name / "paths.json"),
-            "device_name": self.cam_name,
-            "homography": homography.tolist() if homography is not None else None,
-            "calibrated": homography is not None,
-            "frame_size": [frame_w, frame_h],
-            "playfield": playfield,
+            "data_socket": str(self.config.socket_dir / self.cam_name / "data.sock"),
+            "paths_file": str(cam_dir / "paths.json"),
         }
         dest = cam_dir / "info.json"
         tmp = cam_dir / "info.json.tmp"
@@ -345,7 +326,7 @@ class CameraPipeline:
         assert self._cap is not None
         assert self._april_cam is not None
 
-        paths_file = str(self.config.data_dir / self.cam_name / "paths.json")
+        paths_file = str(self.config.cameras_dir / self.cam_name / "paths.json")
         homography = self._april_cam.homography
 
         # Set a read timeout so cap.read() doesn't block forever if the

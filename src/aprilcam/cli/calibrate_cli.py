@@ -114,20 +114,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     config = Config.load()
     client = ensure_running(config)
 
-    # Resolve calibration directory: explicit --output takes priority,
-    # then the daemon's configured path.
+    # cameras_dir is <data_dir>/cameras — each camera has its own subdir
     if args.output:
-        cal_dir = Path(args.output)
+        cameras_dir = Path(args.output)
     else:
-        cal_dir = Path(client.rpc("get_calibration_save_path")["path"])
+        cameras_dir = Path(client.rpc("get_calibration_save_path")["path"])
 
-    # Load field dimension defaults from any existing per-camera file in the dir
+    # Load field dimension defaults from any existing calibration.json in a subdir
     field_width = args.width
     field_height = args.height
-    if (field_width is None or field_height is None) and cal_dir.is_dir():
-        for f in cal_dir.glob("*.json"):
+    if (field_width is None or field_height is None) and cameras_dir.is_dir():
+        for cal_file in cameras_dir.glob("*/calibration.json"):
             try:
-                d = json.loads(f.read_text())
+                d = json.loads(cal_file.read_text())
                 field_width = field_width or d.get("field_width_cm")
                 field_height = field_height or d.get("field_height_cm")
                 if field_width and field_height:
@@ -142,7 +141,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     available = list_cameras()
 
     if args.cameras:
-        # User specified cameras by index or name pattern
         for spec in args.cameras:
             idx = select_camera_by_pattern(spec, available)
             if idx is not None:
@@ -151,14 +149,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"  No camera matching '{spec}', skipping.")
     else:
-        # Re-calibrate all cameras that already have a file in the calibration dir
-        if not cal_dir.is_dir() or not list(cal_dir.glob("*.json")):
-            print(f"No cameras specified and {cal_dir} has no existing calibration files.")
+        # Re-calibrate all cameras that already have a calibration.json subdir
+        cal_subdirs = list(cameras_dir.glob("*/calibration.json")) if cameras_dir.is_dir() else []
+        if not cal_subdirs:
+            print(f"No cameras specified and {cameras_dir} has no existing calibration files.")
             print("Specify cameras to calibrate: aprilcam calibrate 0 2")
             return 1
-        for f in sorted(cal_dir.glob("*.json")):
+        for cal_file in sorted(cal_subdirs):
             try:
-                device_name = json.loads(f.read_text()).get("device_name", "")
+                device_name = json.loads(cal_file.read_text()).get("device_name", "")
             except Exception:
                 continue
             if not device_name:
@@ -167,34 +166,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             if idx is not None:
                 camera_indices.append((idx, device_name))
             else:
-                print(f"  Camera '{device_name}' from {f.name} not found, skipping.")
+                print(f"  Camera '{device_name}' in {cal_file.parent.name}/ not found, skipping.")
 
     if not camera_indices:
         print("No cameras to calibrate.")
         return 1
 
     print(f"Playfield: {field_width} x {field_height} cm")
-    print(f"Output: {cal_dir}")
+    print(f"Output: {cameras_dir}")
     print(f"Cameras to calibrate: {len(camera_indices)}")
     for idx, label in camera_indices:
         print(f"  [{idx}] {label}")
     print()
 
     # Run calibration for each camera via daemon
-    from ..calibration.calibration import calibrate_single, save_calibration_for_camera
+    from ..calibration.calibration import calibrate_single, save_calibration_to_camera_dir
 
     for idx, label in camera_indices:
         print(f"Calibrating [{idx}] {label} ...")
         try:
-            # Open the camera through the daemon
             resp = client.rpc("open_camera", index=idx)
             cam_name = resp["cam_name"]
 
-            # Warm-up: discard initial frames (mirror stream.calibrate warm-up of 10 frames)
             for _ in range(10):
                 client.rpc("capture_frame", cam_name=cam_name)
 
-            # Build a VideoCapture-compatible adapter backed by the daemon
             cap = _DaemonCapture(client, cam_name)
 
             cal = calibrate_single(
@@ -205,7 +201,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 camera_index=idx,
             )
 
-            cal_file = save_calibration_for_camera(cal, cal_dir, field_width, field_height)
+            camera_dir = cameras_dir / cam_name
+            cal_file = save_calibration_to_camera_dir(cal, camera_dir, field_width, field_height)
 
             print(f"Calibration saved to {cal_file}")
             print(f"  Camera: {cal.device_name} {cal.resolution}, {cal.tags_used} tags, RMS {cal.rms_error:.6f}")

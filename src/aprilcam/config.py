@@ -244,23 +244,23 @@ class Config:
 
     Key directories
     ---------------
-    ``config_dir``
-        Root aprilcam config directory (``APRILCAM_CONFIG_DIR``).
     ``data_dir``
-        Per-camera runtime data: ``info.json``, ``paths.json``, daemon log
-        (``APRILCAM_RUNTIME_DIR``, falls back to ``APRILCAM_DATA_DIR``).
-    ``calibration_dir``
-        Directory that holds one calibration file per camera, named
-        ``<device-slug>.json`` (``APRILCAM_CALIBRATION_DIR``).
+        Root AprilCam data directory (``APRILCAM_DATA_DIR``).
+    ``cameras_dir``
+        Per-camera subdirectory: ``<data_dir>/cameras/<slug>/``.
+        Each camera directory contains ``calibration.json`` and ``paths.json``.
     """
 
-    data_dir: Path = field(default_factory=lambda: Path("./data/runtime/"))
+    data_dir: Path = field(default_factory=lambda: Path("./data/aprilcam/"))
     socket_dir: Path = field(default_factory=lambda: Path("/tmp/aprilcam/"))
-    calibration_dir: Path = field(default_factory=lambda: Path("./data/calibration/"))
-    config_dir: Optional[Path] = None
     env_dir: Optional[Path] = None  # directory containing the .env file (project root)
     log_level: str = "INFO"
     daemon_pidfile: Optional[Path] = None
+
+    @property
+    def cameras_dir(self) -> Path:
+        """Directory containing one subdirectory per camera keyed by slug."""
+        return self.data_dir / "cameras"
 
     def __post_init__(self) -> None:
         if self.daemon_pidfile is None:
@@ -308,18 +308,11 @@ class Config:
             return p.resolve() if not p.is_absolute() else p
 
         socket_dir = _path("APRILCAM_SOCKET_DIR", Path("/tmp/aprilcam/"))
-
-        # APRILCAM_RUNTIME_DIR is the new name; APRILCAM_DATA_DIR is the old fallback.
-        if "APRILCAM_RUNTIME_DIR" in sources:
-            data_dir = _path("APRILCAM_RUNTIME_DIR", Path("./data/runtime/"))
-        else:
-            data_dir = _path("APRILCAM_DATA_DIR", Path("./data/runtime/"))
+        data_dir = _path("APRILCAM_DATA_DIR", Path("./data/aprilcam/"))
 
         cfg = cls(
             data_dir=data_dir,
             socket_dir=socket_dir,
-            calibration_dir=_path("APRILCAM_CALIBRATION_DIR", Path("./data/calibration/")),
-            config_dir=_opt_path("APRILCAM_CONFIG_DIR"),
             env_dir=env_file.parent.resolve() if env_file else None,
             log_level=sources.get("APRILCAM_LOG_LEVEL", "INFO"),
             daemon_pidfile=_path(
