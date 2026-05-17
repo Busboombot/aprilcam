@@ -81,14 +81,14 @@ class DaemonServer:
         try:
             fd = os.open(str(pidfile), os.O_RDWR | os.O_CREAT, 0o644)
         except OSError as exc:
-            print(f"aprilcamd: cannot open pidfile {pidfile}: {exc}", file=sys.stderr)
+            log.error("cannot open pidfile %s: %s", pidfile, exc)
             return
 
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             os.close(fd)
-            print("aprilcamd already running", file=sys.stderr)
+            log.error("already running")
             return
         except OSError:
             # Stale pidfile with no live lock — remove and retry once
@@ -98,7 +98,7 @@ class DaemonServer:
                 fd = os.open(str(pidfile), os.O_RDWR | os.O_CREAT, 0o644)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except Exception as exc:
-                print(f"aprilcamd: cannot acquire pidfile lock: {exc}", file=sys.stderr)
+                log.error("cannot acquire pidfile lock: %s", exc)
                 return
 
         self._pidfile_fd = fd

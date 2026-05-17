@@ -55,7 +55,7 @@ class DetectionPipeline:
         self._tracker = tracker
         self._homography = homography
         self._boundary = boundary  # PlayfieldBoundary for polygon filtering
-        self._ring_buffer = ring_buffer or RingBuffer()
+        self._ring_buffer = ring_buffer if ring_buffer is not None else RingBuffer()
         self._ema_alpha = ema_alpha
         self._deadband = deadband
 

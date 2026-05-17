@@ -266,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             display.draw_paths(disp, paths, boundary, homography)
 
         calibrated = homography is not None
-        deskew_mode = getattr(display, "_deskew_active", False)
+        deskew_mode = getattr(display, "_mode", "full") == "deskew"
         status_dict = {
             "fps": msg.fps,
             "tag_count": len(tags),

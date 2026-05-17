@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -115,7 +116,7 @@ def _try_connect(path: Path) -> Optional[socket.socket]:
 # ---------------------------------------------------------------------------
 
 
-def ensure_running(config: Config) -> ControlClient:
+def ensure_running(config: Config, log_level: str | None = None) -> ControlClient:
     """Return a connected :class:`ControlClient`, starting the daemon if needed.
 
     Algorithm:
@@ -127,6 +128,8 @@ def ensure_running(config: Config) -> ControlClient:
        detached background process.
     6. Poll the socket every 50 ms for up to 5 seconds; raise on timeout.
     7. Release the spawn lock and return the connected client.
+
+    *log_level* overrides ``APRILCAM_LOG_LEVEL`` for the spawned process.
     """
     control_path = config.socket_dir / "control.sock"
 
@@ -148,11 +151,15 @@ def ensure_running(config: Config) -> ControlClient:
         # Step 5: spawn the daemon
         config.data_dir.mkdir(parents=True, exist_ok=True)
         log_file = open(config.data_dir / "aprilcamd.log", "a")  # noqa: WPS515
+        env = os.environ.copy()
+        if log_level:
+            env["APRILCAM_LOG_LEVEL"] = log_level
         subprocess.Popen(
             [sys.executable, "-m", "aprilcam.daemon"],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=log_file,
+            env=env,
         )
 
         # Step 6: poll until the daemon is ready

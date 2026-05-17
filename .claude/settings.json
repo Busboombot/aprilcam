@@ -21,7 +21,10 @@
       "Bash(kill 78648)",
       "Bash(rm /tmp/aprilcam/aprilcamd.pid && uv run aprilcam daemon start)",
       "Skill(se)",
-      "Skill(se:*)"
+      "Skill(se:*)",
+      "Bash(dotconfig version *)",
+      "Bash(which dotconfig *)",
+      "Read(//Volumes/Proj/proj/code-projects/dotconfig/**)"
     ],
     "additionalDirectories": [
       "/private/tmp/aprilcam"
