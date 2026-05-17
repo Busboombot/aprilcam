@@ -89,48 +89,39 @@ def _vel_mag(t: dict) -> float:
     return math.hypot(float(vp[0]), float(vp[1]))
 
 
-def _fmt_wxy(t: dict) -> tuple[str, str]:
-    wxy = t.get("world_xy")
-    if wxy:
-        return f"{float(wxy[0]):7.1f}", f"{float(wxy[1]):7.1f}"
-    return "     --", "     --"
-
-
-def _fmt_vel(t: dict) -> tuple[str, str]:
-    vw = t.get("vel_world")
-    vp = t.get("vel_px", [0, 0])
-    if vw is not None:
-        return f"{float(vw[0]):7.2f}", f"{float(vw[1]):7.2f}"
-    return f"{float(vp[0]):7.1f}", f"{float(vp[1]):7.1f}"
-
 
 _MOB_HDR = (
-    f"{'ID':>3}  {'Px-X':>5} {'Px-Y':>5}  {'Wld-X':>7} {'Wld-Y':>7}"
-    f"  {'Ang°':>6}  {'Vel-X':>7} {'Vel-Y':>7}\n"
-    + "-" * 62 + "\n"
+    f"{'ID':>2} {'PxX':>4} {'PxY':>4} {'WldX':>6} {'WldY':>6} {'Ang':>4} {'VelX':>5} {'VelY':>5}\n"
+    + "-" * 43 + "\n"
 )
 
 _STAT_HDR = (
-    f"{'ID':>3}  {'Px-X':>5} {'Px-Y':>5}  {'Wld-X':>7} {'Wld-Y':>7}  {'Ang°':>6}\n"
-    + "-" * 46 + "\n"
+    f"{'ID':>2} {'PxX':>4} {'PxY':>4} {'WldX':>6} {'WldY':>6} {'Ang':>4}\n"
+    + "-" * 31 + "\n"
 )
 
 
 def _fmt_mobile_row(t: dict) -> str:
     tid = int(t.get("id", 0))
     cx, cy = t.get("center_px", [0, 0])
-    wx, wy = _fmt_wxy(t)
+    wxy = t.get("world_xy")
+    wx = f"{float(wxy[0]):6.1f}" if wxy else "    --"
+    wy = f"{float(wxy[1]):6.1f}" if wxy else "    --"
     ang = math.degrees(float(t.get("orientation_yaw", 0.0)))
-    vx, vy = _fmt_vel(t)
-    return f"{tid:>3}  {int(cx):>5} {int(cy):>5}  {wx} {wy}  {ang:6.1f}  {vx} {vy}\n"
+    vw = t.get("vel_world")
+    vp = t.get("vel_px", [0, 0])
+    vx, vy = (float(vw[0]), float(vw[1])) if vw is not None else (float(vp[0]), float(vp[1]))
+    return f"{tid:>2} {int(cx):>4} {int(cy):>4} {wx} {wy} {ang:>4.0f} {vx:>5.1f} {vy:>5.1f}\n"
 
 
 def _fmt_stat_row(t: dict) -> str:
     tid = int(t.get("id", 0))
     cx, cy = t.get("center_px", [0, 0])
-    wx, wy = _fmt_wxy(t)
+    wxy = t.get("world_xy")
+    wx = f"{float(wxy[0]):6.1f}" if wxy else "    --"
+    wy = f"{float(wxy[1]):6.1f}" if wxy else "    --"
     ang = math.degrees(float(t.get("orientation_yaw", 0.0)))
-    return f"{tid:>3}  {int(cx):>5} {int(cy):>5}  {wx} {wy}  {ang:6.1f}\n"
+    return f"{tid:>2} {int(cx):>4} {int(cy):>4} {wx} {wy} {ang:>4.0f}\n"
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -322,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     left_frame.pack(side=tk.LEFT, fill=tk.Y)
 
     right_frame = tk.Frame(root, bg="#1e1e1e")
-    right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    right_frame.pack(side=tk.LEFT, fill=tk.Y)  # fixed width — no horizontal expansion
 
     # ── Left: canvas only (camera has fixed resolution) ──────────────────
     canvas = tk.Canvas(
@@ -373,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
 
     mobile_text = tk.Text(
         mob_frame, font=mono, bg="#111", fg=MOB_FG,
-        state=tk.DISABLED, height=8, width=62,
+        state=tk.DISABLED, height=8, width=44,
         relief=tk.FLAT, padx=4, pady=2, wrap=tk.NONE,
     )
     mob_sb = tk.Scrollbar(mob_frame, command=mobile_text.yview)
@@ -391,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
 
     stat_text = tk.Text(
         stat_outer, font=mono, bg="#111", fg=STAT_FG,
-        state=tk.DISABLED, height=8, width=62,
+        state=tk.DISABLED, height=8, width=44,
         relief=tk.FLAT, padx=4, pady=2, wrap=tk.NONE,
     )
     stat_sb = tk.Scrollbar(stat_outer, command=stat_text.yview)
