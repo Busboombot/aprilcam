@@ -288,6 +288,7 @@ class Playfield:
         calibration: Optional[str] = "auto",
         proc_width: int = 960,
         detect_interval: int = 3,
+        data_dir: str = "data",
     ) -> None:
         from .detector import TagDetector, DetectorConfig
         from .tracker import OpticalFlowTracker
@@ -297,12 +298,14 @@ class Playfield:
         self._camera = camera
         self._width_cm = width_cm
         self._height_cm = height_cm
+        self._calibration = calibration
+        self._data_dir = data_dir
 
-        # Load calibration / homography
+        # Homography is loaded eagerly only when an explicit path is provided.
+        # When calibration=="auto", discovery is deferred to start() so that
+        # the camera is already open and device_name/resolution are available.
         self._homography: Optional[np.ndarray] = None
-        if calibration == "auto":
-            self._homography = self._auto_discover_homography()
-        elif calibration is not None:
+        if calibration not in ("auto", None):
             self._homography = self._load_homography(calibration)
 
         # Internal components
@@ -424,7 +427,17 @@ class Playfield:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start the background detection pipeline."""
+        """Start the background detection pipeline.
+
+        When ``calibration='auto'`` was specified at construction time, the
+        camera is opened here so that device_name and resolution are available
+        for homography discovery before the pipeline thread starts.
+        """
+        if self._calibration == "auto" and self._homography is None:
+            self._homography = self._auto_discover_homography_from_camera()
+            if self._homography is not None:
+                # Propagate the discovered homography into the running pipeline.
+                self._pipeline._homography = self._homography
         self._pipeline.start()
 
     def stop(self) -> None:
@@ -475,12 +488,44 @@ class Playfield:
     # Homography discovery
     # ------------------------------------------------------------------
 
-    def _auto_discover_homography(self) -> Optional[np.ndarray]:
+    def _auto_discover_homography(
+        self,
+        device_name: str,
+        width: int,
+        height: int,
+    ) -> Optional[np.ndarray]:
+        """Discover and load a homography for *device_name* at *width*x*height*.
+
+        Returns a 3x3 numpy array if a calibration file is found, else None.
+        """
         try:
             from ..calibration.homography import discover_homography
-            result = discover_homography()
-            if result is not None:
-                return np.array(result, dtype=float) if not isinstance(result, np.ndarray) else result
+            found = discover_homography(device_name, width, height, self._data_dir)
+            if found is not None:
+                return self._load_homography(str(found))
+        except Exception:
+            pass
+        return None
+
+    def _auto_discover_homography_from_camera(self) -> Optional[np.ndarray]:
+        """Open the camera (if not already open), read device_name and resolution,
+        then delegate to :meth:`_auto_discover_homography`.
+        """
+        try:
+            camera = self._camera
+            # Open the camera so that resolution is queryable.
+            if hasattr(camera, "open") and not getattr(camera, "is_open", True):
+                camera.open()
+            device_name: str
+            width: int
+            height: int
+            if hasattr(camera, "name") and hasattr(camera, "resolution"):
+                device_name = camera.name
+                width, height = camera.resolution
+            else:
+                # Fallback for duck-typed cameras that expose .read()
+                return None
+            return self._auto_discover_homography(device_name, width, height)
         except Exception:
             pass
         return None

@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package aprilcam;
+
+// ---------------------------------------------------------------------------
+// AprilCam gRPC service
+// ---------------------------------------------------------------------------
+
+service AprilCam {
+  // Camera lifecycle
+  rpc ListCameras       (Empty)               returns (ListCamerasResponse);
+  rpc OpenCamera        (OpenCameraRequest)   returns (OpenCameraResponse);
+  rpc CloseCamera       (CameraRequest)       returns (Empty);
+  rpc ReloadCalibration (CameraRequest)       returns (Empty);
+  rpc Shutdown          (Empty)               returns (Empty);
+
+  // One-shot queries (no streaming required)
+  rpc GetCameraInfo     (CameraRequest)       returns (CameraInfoResponse);
+  rpc CaptureFrame      (CameraRequest)       returns (CaptureFrameResponse);
+  rpc GetTags           (CameraRequest)       returns (TagFrameResponse);
+
+  // Stream discovery — allocates a socket/port pair on demand
+  rpc GetImageStream    (StreamRequest)       returns (StreamEndpoint);
+  rpc GetTagStream      (StreamRequest)       returns (StreamEndpoint);
+}
+
+// ---------------------------------------------------------------------------
+// Generic / shared messages
+// ---------------------------------------------------------------------------
+
+message Empty {}
+
+// ---------------------------------------------------------------------------
+// Camera lifecycle messages
+// ---------------------------------------------------------------------------
+
+message ListCamerasResponse {
+  repeated string cameras = 1;
+}
+
+message OpenCameraRequest {
+  int32 index = 1;
+}
+
+message OpenCameraResponse {
+  string cam_name = 1;
+}
+
+message CameraRequest {
+  string cam_name = 1;
+}
+
+// ---------------------------------------------------------------------------
+// One-shot query messages
+// ---------------------------------------------------------------------------
+
+message CameraInfoResponse {
+  string cam_name   = 1;
+  bool   calibrated = 2;
+  int32  frame_w    = 3;
+  int32  frame_h    = 4;
+  float  fps        = 5;
+}
+
+message CaptureFrameResponse {
+  bytes jpeg = 1;
+}
+
+// TagMsg — a single detected tag in a frame.
+message TagMsg {
+  int32  id           = 1;
+  float  cx_px        = 2;   // pixel center X
+  float  cy_px        = 3;   // pixel center Y
+  repeated float corners_px = 4;  // 8 floats: x0,y0, x1,y1, x2,y2, x3,y3
+  float  yaw          = 5;   // orientation, radians
+  float  wx           = 6;   // world X (cm); 0 = uncalibrated
+  float  wy           = 7;   // world Y (cm); 0 = uncalibrated
+  bool   in_playfield = 8;
+  float  vx_px        = 9;   // pixel velocity X
+  float  vy_px        = 10;  // pixel velocity Y
+  float  speed_px     = 11;  // pixel speed
+  float  vx_world     = 12;  // world velocity X
+  float  vy_world     = 13;  // world velocity Y
+  float  speed_world  = 14;  // world speed
+  float  heading_rad  = 15;
+  float  age          = 16;  // seconds since last detected (0 = this frame)
+}
+
+message TagFrameResponse {
+  uint64         frame_id          = 1;
+  repeated TagMsg tags             = 2;
+  // 9 floats, row-major 3x3 homography matrix; empty = uncalibrated
+  repeated float homography        = 3;
+  // 8 floats: x0,y0, x1,y1, x2,y2, x3,y3 (UL/UR/LR/LL)
+  repeated float playfield_corners = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Stream discovery messages
+// ---------------------------------------------------------------------------
+
+message StreamRequest {
+  string cam_name = 1;
+  uint32 max_hz   = 2;  // 0 = use default (20); client asks for its preferred cap
+}
+
+message StreamEndpoint {
+  string socket_path = 1;  // non-empty when using Unix sockets
+  uint32 tcp_port    = 2;  // non-zero when using TCP
+}
+
+// ---------------------------------------------------------------------------
+// Binary stream wire messages (length-prefixed, sent over stream sockets)
+// These are NOT used as gRPC responses but are included here so all message
+// types live in one place and can be imported from a single generated module.
+// ---------------------------------------------------------------------------
+
+// TagFrame — published on the tag stream socket for every detected change
+// or at the heartbeat interval (1 s).
+message TagFrame {
+  uint64          frame_id          = 1;
+  uint64          ts_mono_ns        = 2;
+  uint64          ts_wall_ms        = 3;
+  repeated TagMsg tags              = 4;
+  // 9 floats, row-major 3x3 homography; empty = uncalibrated
+  repeated float  homography        = 5;
+  // 8 floats: x0,y0, x1,y1, x2,y2, x3,y3 (UL/UR/LR/LL)
+  repeated float  playfield_corners = 6;
+  float           fps               = 7;
+}
+
+// ImageFrame — published on the image stream socket for every camera frame.
+message ImageFrame {
+  uint64 frame_id    = 1;  // matches the TagFrame captured at the same instant
+  uint64 ts_mono_ns  = 2;
+  bytes  jpeg        = 3;
+  int32  width       = 4;
+  int32  height      = 5;
+}
