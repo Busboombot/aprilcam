@@ -5,15 +5,15 @@ The daemon owns:
   - An exclusive flock on the pidfile (prevents duplicate daemons).
   - A UNIX control socket at <socket_dir>/control.sock.
   - One CameraPipeline per opened camera.
-  - One data socket per opened camera at <socket_dir>/<cam_name>/data.sock.
 
 Control protocol: newline-delimited JSON, one request → one response
 per TCP-style UNIX connection. See _handle_rpc() for the full command
 set.
 
-Data sockets: each subscriber connection gets a queue registered with
-the pipeline; a sender thread writes encoded FrameMessage bytes from
-the queue to the socket until the connection closes.
+Stream sockets are managed by ImageStreamProducer / TagStreamProducer
+(see daemon.stream).  The gRPC servicer (daemon.grpc_server) wires the
+producers to the pipeline via pipeline.set_producers() and returns
+stream endpoints to clients via GetImageStream / GetTagStream RPC calls.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ import fcntl
 import json
 import logging
 import os
-import queue
 import signal
 import socket
 import sys
@@ -63,10 +62,6 @@ class DaemonServer:
 
         # Control socket
         self._control_sock: Optional[socket.socket] = None
-
-        # Data sockets: cam_name → socket.socket (the listening socket)
-        self._data_socks: Dict[str, socket.socket] = {}
-        self._data_sock_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -173,20 +168,6 @@ class DaemonServer:
                 except Exception:
                     log.exception("Error stopping pipeline %s", pipeline.cam_name)
             self._cameras.clear()
-
-        # Close data listening sockets
-        with self._data_sock_lock:
-            for cam_name, sock in self._data_socks.items():
-                try:
-                    sock.close()
-                except OSError:
-                    pass
-                sock_path = self._config.socket_dir / cam_name / "data.sock"
-                try:
-                    sock_path.unlink()
-                except OSError:
-                    pass
-            self._data_socks.clear()
 
         # Close control socket (may already be closed by signal/RPC handler)
         if self._control_sock is not None:
@@ -374,8 +355,6 @@ class DaemonServer:
 
             self._cameras[cam_name] = pipeline
 
-        self._start_data_socket(cam_name, pipeline)
-
         info_path = self._config.cameras_dir / cam_name / "info.json"
         return {
             "ok": True,
@@ -388,9 +367,6 @@ class DaemonServer:
             pipeline = self._cameras.pop(cam_name, None)
         if pipeline is None:
             return {"ok": False, "error": f"camera '{cam_name}' not open"}
-
-        # Stop the data socket listener first so no new subscribers attach
-        self._stop_data_socket(cam_name)
 
         try:
             pipeline.stop()
@@ -455,93 +431,3 @@ class DaemonServer:
     def _rpc_get_calibration_save_path(self) -> dict:
         return {"ok": True, "path": str(self._config.cameras_dir)}
 
-    # ------------------------------------------------------------------
-    # Internal: per-camera data socket
-    # ------------------------------------------------------------------
-
-    def _start_data_socket(self, cam_name: str, pipeline: CameraPipeline) -> None:
-        """Create the data socket for *cam_name* and start an acceptor thread."""
-        sock_path = self._config.socket_dir / cam_name / "data.sock"
-        sock_path.parent.mkdir(parents=True, exist_ok=True)
-
-        data_sock = self._bind_unix_socket(sock_path)
-        if data_sock is None:
-            log.error("Cannot bind data socket for %s", cam_name)
-            return
-
-        with self._data_sock_lock:
-            self._data_socks[cam_name] = data_sock
-
-        t = threading.Thread(
-            target=self._data_accept_loop,
-            args=(cam_name, data_sock, pipeline),
-            daemon=True,
-            name=f"aprilcam-data-accept-{cam_name}",
-        )
-        t.start()
-
-    def _stop_data_socket(self, cam_name: str) -> None:
-        """Close the data socket listener for *cam_name*."""
-        with self._data_sock_lock:
-            sock = self._data_socks.pop(cam_name, None)
-        if sock is not None:
-            try:
-                sock.close()
-            except OSError:
-                pass
-        sock_path = self._config.socket_dir / cam_name / "data.sock"
-        try:
-            sock_path.unlink()
-        except OSError:
-            pass
-
-    def _data_accept_loop(
-        self,
-        cam_name: str,
-        server_sock: socket.socket,
-        pipeline: CameraPipeline,
-    ) -> None:
-        """Accept subscriber connections on the data socket for *cam_name*."""
-        server_sock.settimeout(1.0)
-        while not self._shutdown_event.is_set():
-            try:
-                conn, _ = server_sock.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-
-            sub_q: queue.Queue[bytes] = queue.Queue(maxsize=2)
-            pipeline.add_subscriber(sub_q)
-
-            t = threading.Thread(
-                target=self._data_sender,
-                args=(conn, sub_q, pipeline),
-                daemon=True,
-                name=f"aprilcam-data-send-{cam_name}",
-            )
-            t.start()
-
-    def _data_sender(
-        self,
-        conn: socket.socket,
-        sub_q: queue.Queue,
-        pipeline: CameraPipeline,
-    ) -> None:
-        """Dequeue encoded FrameMessage bytes and write them to *conn*."""
-        try:
-            while not self._shutdown_event.is_set():
-                try:
-                    data: bytes = sub_q.get(timeout=1.0)
-                except queue.Empty:
-                    continue
-                try:
-                    conn.sendall(data)
-                except OSError:
-                    break
-        finally:
-            pipeline.remove_subscriber(sub_q)
-            try:
-                conn.close()
-            except OSError:
-                pass
