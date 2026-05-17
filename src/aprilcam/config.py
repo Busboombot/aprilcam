@@ -256,6 +256,7 @@ class Config:
     env_dir: Optional[Path] = None  # directory containing the .env file (project root)
     log_level: str = "INFO"
     daemon_pidfile: Optional[Path] = None
+    calibration_dir: Optional[Path] = None
 
     @property
     def cameras_dir(self) -> Path:
@@ -265,6 +266,8 @@ class Config:
     def __post_init__(self) -> None:
         if self.daemon_pidfile is None:
             self.daemon_pidfile = self.socket_dir / "aprilcamd.pid"
+        if self.calibration_dir is None:
+            self.calibration_dir = self.data_dir / "calibration"
 
     @classmethod
     def load(cls, start: Optional[Path] = None) -> "Config":

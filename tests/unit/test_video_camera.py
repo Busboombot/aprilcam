@@ -10,7 +10,7 @@ MOVIES_DIR = Path(__file__).parent.parent / "movies"
 
 def _is_lfs_pointer(path: Path) -> bool:
     try:
-        return path.read_bytes(8).startswith(b"version ")
+        return path.read_bytes()[:8].startswith(b"version ")
     except Exception:
         return False
 
