@@ -280,6 +280,72 @@ class CameraPipeline:
         with self._raw_lock:
             return self._latest_raw_jpeg
 
+    def get_current_tags(self) -> "aprilcam_pb2.TagFrameResponse":
+        """Return a ``TagFrameResponse`` built from the latest ring-buffer entry.
+
+        Returns an empty ``TagFrameResponse`` when no frames have been
+        captured yet.
+        """
+        latest = self._ring.get_latest()
+        if latest is None:
+            return aprilcam_pb2.TagFrameResponse()
+
+        tag_records = latest.tags
+        homography = (
+            self._april_cam.homography if self._april_cam is not None else None
+        )
+
+        # Homography: flatten 3×3 → 9 floats, row-major
+        homo_flat: list = []
+        if homography is not None:
+            homo_flat = homography.flatten().tolist()
+
+        # Playfield corners: flatten 4×2 → 8 floats
+        corners_flat: list = []
+        if self._april_cam is not None:
+            poly = self._april_cam.playfield.get_polygon()
+            if poly is not None:
+                for pt in poly:
+                    corners_flat.extend([float(pt[0]), float(pt[1])])
+
+        # Build TagMsg list
+        tag_msgs = []
+        for tr in tag_records:
+            cx, cy = tr.center_px
+            wx, wy = tr.world_xy if tr.world_xy is not None else (0.0, 0.0)
+            vx_px, vy_px = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
+            vx_w, vy_w = tr.vel_world if tr.vel_world is not None else (0.0, 0.0)
+            corners_flat_tag: list = []
+            for corner in tr.corners_px:
+                corners_flat_tag.extend([float(corner[0]), float(corner[1])])
+            tag_msgs.append(
+                aprilcam_pb2.TagMsg(
+                    id=tr.id,
+                    cx_px=float(cx),
+                    cy_px=float(cy),
+                    corners_px=corners_flat_tag,
+                    yaw=float(tr.orientation_yaw),
+                    wx=float(wx),
+                    wy=float(wy),
+                    in_playfield=bool(tr.in_playfield),
+                    vx_px=float(vx_px),
+                    vy_px=float(vy_px),
+                    speed_px=float(tr.speed_px) if tr.speed_px is not None else 0.0,
+                    vx_world=float(vx_w),
+                    vy_world=float(vy_w),
+                    speed_world=float(tr.speed_world) if tr.speed_world is not None else 0.0,
+                    heading_rad=float(tr.heading_rad) if tr.heading_rad is not None else 0.0,
+                    age=float(tr.age),
+                )
+            )
+
+        return aprilcam_pb2.TagFrameResponse(
+            frame_id=latest.frame_index,
+            tags=tag_msgs,
+            homography=homo_flat,
+            playfield_corners=corners_flat,
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
