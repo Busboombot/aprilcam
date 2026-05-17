@@ -213,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         data_sock.close()
         return 1
 
+    _DISPLAY_W = 1000  # canvas is always this wide; height scales proportionally
+
     frame_h, frame_w = first_frame.shape[:2]
 
     boundary = PlayfieldBoundary()
@@ -275,6 +277,10 @@ def main(argv: list[str] | None = None) -> int:
 
     first_disp, first_status, first_tags = _process_msg(first_msg, first_frame)
 
+    # Compute initial canvas height from the first display frame's aspect ratio
+    _dh, _dw = first_disp.shape[:2]
+    _display_h = int(round(_dh * _DISPLAY_W / _dw))
+
     frame_queue: queue.Queue = queue.Queue(maxsize=2)
     stop_event = threading.Event()
     frame_queue.put_nowait((first_disp, first_status, first_tags))
@@ -315,9 +321,9 @@ def main(argv: list[str] | None = None) -> int:
     right_frame = tk.Frame(root, bg="#1e1e1e")
     right_frame.pack(side=tk.LEFT, fill=tk.Y)  # fixed width — no horizontal expansion
 
-    # ── Left: canvas only (camera has fixed resolution) ──────────────────
+    # ── Left: canvas — always DISPLAY_W wide, height proportional ────────
     canvas = tk.Canvas(
-        left_frame, width=frame_w, height=frame_h,
+        left_frame, width=_DISPLAY_W, height=_display_h,
         bg="black", highlightthickness=0,
     )
     canvas.pack()
@@ -447,7 +453,18 @@ def main(argv: list[str] | None = None) -> int:
             root.after(33, _poll)
             return
 
-        rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
+        # Scale to fixed display width, maintaining aspect ratio
+        fh, fw = frame_bgr.shape[:2]
+        dh = int(round(fh * _DISPLAY_W / fw))
+        frame_disp = cv.resize(frame_bgr, (_DISPLAY_W, dh), interpolation=cv.INTER_AREA)
+
+        # Resize canvas + window if the display height changed (e.g. homography engaged)
+        if abs(dh - canvas.winfo_height()) > 2:
+            canvas.config(height=dh)
+            root.update_idletasks()
+            root.geometry(f"{root.winfo_reqwidth()}x{root.winfo_reqheight()}")
+
+        rgb = cv.cvtColor(frame_disp, cv.COLOR_BGR2RGB)
         photo = ImageTk.PhotoImage(Image.fromarray(rgb))
         canvas.itemconfig(img_item, image=photo)
         canvas._photo_ref = photo
