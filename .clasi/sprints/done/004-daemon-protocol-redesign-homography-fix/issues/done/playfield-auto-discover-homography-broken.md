@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '004'
+tickets:
+- 004-001
 ---
 
 # Fix Playfield._auto_discover_homography always returning None

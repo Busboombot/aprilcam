@@ -8,12 +8,14 @@ CameraPipeline owns one camera index.  It:
       * reads frames from the camera
       * calls AprilCam.process_frame()
       * JPEG-encodes the result
-      * builds a FrameMessage and encodes it
-      * fans out the encoded bytes to all registered subscriber queues
+      * calls ImageStreamProducer.publish() if a producer is set
+      * builds a TagFrame protobuf and calls TagStreamProducer.publish_if_changed()
+        if a tag producer is set
   - writes info.json atomically to <data_dir>/<cam_name>/info.json
 
-The data socket itself is managed by daemon.server.  This module only
-manages subscriber queues (add_subscriber / remove_subscriber).
+Stream producers (ImageStreamProducer / TagStreamProducer) are injected via
+set_producers() after the pipeline is created.  If no producers are set the
+pipeline runs silently (useful for capture_frame() RPC-only use).
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import queue
 import subprocess
 import threading
 import time
@@ -40,7 +41,7 @@ from ..calibration.calibration import (
 from ..config import Config
 from ..core.aprilcam import AprilCam
 from ..core.detection import FrameRecord, RingBuffer, TagRecord
-from .protocol import FrameMessage, encode_frame
+from ..proto import aprilcam_pb2
 
 log = logging.getLogger(__name__)
 
@@ -100,28 +101,39 @@ _FPS_WINDOW = 30  # number of recent frame timestamps to keep for rolling FPS
 
 
 class CameraPipeline:
-    """Capture, detect, encode, and fan-out for a single camera.
+    """Capture, detect, encode, and publish for a single camera.
 
     Lifecycle::
 
         pipeline = CameraPipeline("cam0", 0, config)
-        pipeline.add_subscriber(q)
+        pipeline.set_producers(image_producer, tag_producer)
         pipeline.start()
         ...
         pipeline.stop()
+
+    If no producers are set, the pipeline runs without publishing frames
+    (useful for capture_frame() RPC-only use).
     """
 
-    def __init__(self, cam_name: str, index: int, config: Config) -> None:
+    def __init__(
+        self,
+        cam_name: str,
+        index: int,
+        config: Config,
+        detection_fps: int = 10,
+    ) -> None:
         """Set up state only.  Does NOT open the camera.
 
         Args:
-            cam_name: Human-readable camera name (used as directory key).
-            index:    OpenCV camera index.
-            config:   Daemon configuration (paths, etc.).
+            cam_name:       Human-readable camera name (used as directory key).
+            index:          OpenCV camera index.
+            config:         Daemon configuration (paths, etc.).
+            detection_fps:  Target detection loop rate in Hz (default 10).
         """
         self.cam_name = cam_name
         self.index = index
         self.config = config
+        self._detection_fps = max(1, detection_fps)
 
         # Camera and detection state (populated on start())
         self._cap: Optional[cv.VideoCapture] = None
@@ -136,9 +148,10 @@ class CameraPipeline:
         self._latest_raw_jpeg: Optional[bytes] = None
         self._raw_lock = threading.Lock()
 
-        # Subscriber fan-out
-        self._subscribers: List[queue.Queue] = []
-        self._sub_lock = threading.Lock()
+        # Stream producers (optional — injected after construction)
+        self._image_producer = None   # ImageStreamProducer | None
+        self._tag_producer = None     # TagStreamProducer | None
+        self._producers_lock = threading.Lock()
 
         # Frame counter
         self._frame_id: int = 0
@@ -151,22 +164,19 @@ class CameraPipeline:
         self._thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
-    # Subscriber management
+    # Producer injection
     # ------------------------------------------------------------------
 
-    def add_subscriber(self, q: queue.Queue) -> None:
-        """Register a queue to receive encoded FrameMessage bytes."""
-        with self._sub_lock:
-            if q not in self._subscribers:
-                self._subscribers.append(q)
+    def set_producers(self, image_producer, tag_producer) -> None:
+        """Attach stream producers.
 
-    def remove_subscriber(self, q: queue.Queue) -> None:
-        """Unregister a subscriber queue."""
-        with self._sub_lock:
-            try:
-                self._subscribers.remove(q)
-            except ValueError:
-                pass
+        Args:
+            image_producer: ``ImageStreamProducer`` or ``None``.
+            tag_producer:   ``TagStreamProducer`` or ``None``.
+        """
+        with self._producers_lock:
+            self._image_producer = image_producer
+            self._tag_producer = tag_producer
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -264,14 +274,6 @@ class CameraPipeline:
                 pass
             self._cap = None
 
-        # Remove data socket file if present
-        sock_path = self.config.socket_dir / self.cam_name / "data.sock"
-        if sock_path.exists():
-            try:
-                sock_path.unlink()
-            except OSError:
-                pass
-
         log.info("CameraPipeline(%s): stopped", self.cam_name)
 
     # ------------------------------------------------------------------
@@ -285,6 +287,72 @@ class CameraPipeline:
         """
         with self._raw_lock:
             return self._latest_raw_jpeg
+
+    def get_current_tags(self) -> "aprilcam_pb2.TagFrameResponse":
+        """Return a ``TagFrameResponse`` built from the latest ring-buffer entry.
+
+        Returns an empty ``TagFrameResponse`` when no frames have been
+        captured yet.
+        """
+        latest = self._ring.get_latest()
+        if latest is None:
+            return aprilcam_pb2.TagFrameResponse()
+
+        tag_records = latest.tags
+        homography = (
+            self._april_cam.homography if self._april_cam is not None else None
+        )
+
+        # Homography: flatten 3×3 → 9 floats, row-major
+        homo_flat: list = []
+        if homography is not None:
+            homo_flat = homography.flatten().tolist()
+
+        # Playfield corners: flatten 4×2 → 8 floats
+        corners_flat: list = []
+        if self._april_cam is not None:
+            poly = self._april_cam.playfield.get_polygon()
+            if poly is not None:
+                for pt in poly:
+                    corners_flat.extend([float(pt[0]), float(pt[1])])
+
+        # Build TagMsg list
+        tag_msgs = []
+        for tr in tag_records:
+            cx, cy = tr.center_px
+            wx, wy = tr.world_xy if tr.world_xy is not None else (0.0, 0.0)
+            vx_px, vy_px = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
+            vx_w, vy_w = tr.vel_world if tr.vel_world is not None else (0.0, 0.0)
+            corners_flat_tag: list = []
+            for corner in tr.corners_px:
+                corners_flat_tag.extend([float(corner[0]), float(corner[1])])
+            tag_msgs.append(
+                aprilcam_pb2.TagMsg(
+                    id=tr.id,
+                    cx_px=float(cx),
+                    cy_px=float(cy),
+                    corners_px=corners_flat_tag,
+                    yaw=float(tr.orientation_yaw),
+                    wx=float(wx),
+                    wy=float(wy),
+                    in_playfield=bool(tr.in_playfield),
+                    vx_px=float(vx_px),
+                    vy_px=float(vy_px),
+                    speed_px=float(tr.speed_px) if tr.speed_px is not None else 0.0,
+                    vx_world=float(vx_w),
+                    vy_world=float(vy_w),
+                    speed_world=float(tr.speed_world) if tr.speed_world is not None else 0.0,
+                    heading_rad=float(tr.heading_rad) if tr.heading_rad is not None else 0.0,
+                    age=float(tr.age),
+                )
+            )
+
+        return aprilcam_pb2.TagFrameResponse(
+            frame_id=latest.frame_index,
+            tags=tag_msgs,
+            homography=homo_flat,
+            playfield_corners=corners_flat,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -302,7 +370,6 @@ class CameraPipeline:
         cam_dir.mkdir(parents=True, exist_ok=True)
 
         info = {
-            "data_socket": str(self.config.socket_dir / self.cam_name / "data.sock"),
             "paths_file": str(cam_dir / "paths.json"),
         }
         dest = cam_dir / "info.json"
@@ -321,12 +388,74 @@ class CameraPipeline:
             return 0.0
         return (len(self._ts_deque) - 1) / elapsed
 
+    def _build_tag_frame(
+        self,
+        tag_records: List[TagRecord],
+        homography,  # np.ndarray | None
+        fps: float,
+        ts_mono_ns: int,
+        ts_wall_ms: int,
+    ) -> "aprilcam_pb2.TagFrame":
+        """Build a protobuf TagFrame from the current detection results."""
+        assert self._april_cam is not None
+
+        # Homography: flatten 3x3 → 9 floats, row-major
+        homo_flat: list = []
+        if homography is not None:
+            homo_flat = homography.flatten().tolist()
+
+        # Playfield corners: flatten 4×2 → 8 floats
+        poly = self._april_cam.playfield.get_polygon()
+        corners_flat: list = []
+        if poly is not None:
+            for pt in poly:
+                corners_flat.extend([float(pt[0]), float(pt[1])])
+
+        # Build TagMsg list
+        tag_msgs = []
+        for tr in tag_records:
+            cx, cy = tr.center_px
+            wx, wy = tr.world_xy if tr.world_xy is not None else (0.0, 0.0)
+            vx_px, vy_px = tr.vel_px if tr.vel_px is not None else (0.0, 0.0)
+            vx_w, vy_w = tr.vel_world if tr.vel_world is not None else (0.0, 0.0)
+            corners_flat_tag: list = []
+            for corner in tr.corners_px:
+                corners_flat_tag.extend([float(corner[0]), float(corner[1])])
+            tag_msg = aprilcam_pb2.TagMsg(
+                id=tr.id,
+                cx_px=float(cx),
+                cy_px=float(cy),
+                corners_px=corners_flat_tag,
+                yaw=float(tr.orientation_yaw),
+                wx=float(wx),
+                wy=float(wy),
+                in_playfield=bool(tr.in_playfield),
+                vx_px=float(vx_px),
+                vy_px=float(vy_px),
+                speed_px=float(tr.speed_px) if tr.speed_px is not None else 0.0,
+                vx_world=float(vx_w),
+                vy_world=float(vy_w),
+                speed_world=float(tr.speed_world) if tr.speed_world is not None else 0.0,
+                heading_rad=float(tr.heading_rad) if tr.heading_rad is not None else 0.0,
+                age=float(tr.age),
+            )
+            tag_msgs.append(tag_msg)
+
+        return aprilcam_pb2.TagFrame(
+            frame_id=self._frame_id,
+            ts_mono_ns=ts_mono_ns,
+            ts_wall_ms=ts_wall_ms,
+            tags=tag_msgs,
+            homography=homo_flat,
+            playfield_corners=corners_flat,
+            fps=float(fps),
+        )
+
     def _capture_loop(self) -> None:
-        """Background thread: read → detect → encode → fan-out."""
+        """Background thread: read → detect → encode → publish."""
         assert self._cap is not None
         assert self._april_cam is not None
 
-        paths_file = str(self.config.cameras_dir / self.cam_name / "paths.json")
         homography = self._april_cam.homography
 
         # Set a read timeout so cap.read() doesn't block forever if the
@@ -335,6 +464,7 @@ class CameraPipeline:
 
         consecutive_failures = 0
         while not self._stop_event.is_set():
+            frame_start = time.monotonic()
             ret, frame = self._cap.read()
             if not ret or frame is None:
                 consecutive_failures += 1
@@ -385,48 +515,48 @@ class CameraPipeline:
             # Frame size
             frame_h, frame_w = frame.shape[:2]
 
-            # JPEG-encode frame (same raw JPEG for wire — lightweight)
-            if ok_raw:
-                frame_jpeg = raw_buf.tobytes()
-            else:
-                frame_jpeg = b""
+            # JPEG bytes (already encoded above; reuse for image stream)
+            frame_jpeg = raw_buf.tobytes() if ok_raw else b""
 
-            # Build playfield corners
-            poly = self._april_cam.playfield.get_polygon()
-            if poly is not None:
-                playfield_corners: list = poly.tolist()
-            else:
-                playfield_corners = []
+            # Publish JPEG frame via image producer (if set)
+            with self._producers_lock:
+                image_prod = self._image_producer
+                tag_prod = self._tag_producer
 
-            # Build homography list for wire format
-            homography_list: Optional[list] = None
-            if homography is not None:
-                homography_list = homography.tolist()
+            if image_prod is not None and frame_jpeg:
+                try:
+                    image_prod.publish(
+                        self._frame_id,
+                        ts_mono_ns,
+                        ts_wall_ms,
+                        frame_jpeg,
+                        frame_w,
+                        frame_h,
+                    )
+                except Exception:
+                    log.exception(
+                        "CameraPipeline(%s): image_producer.publish error",
+                        self.cam_name,
+                    )
 
-            # Assemble FrameMessage
-            msg = FrameMessage(
-                schema=1,
-                frame_id=self._frame_id,
-                ts_mono_ns=ts_mono_ns,
-                ts_wall_ms=ts_wall_ms,
-                frame_jpeg=frame_jpeg,
-                frame_w=frame_w,
-                frame_h=frame_h,
-                tags=[tr.to_dict() for tr in tag_records],
-                homography=homography_list,
-                playfield_corners=playfield_corners,
-                paths_file=paths_file,
-                fps=fps,
-            )
+            # Build and publish TagFrame protobuf (if tag producer is set)
+            if tag_prod is not None:
+                try:
+                    tag_frame_proto = self._build_tag_frame(
+                        tag_records, homography, fps, ts_mono_ns, ts_wall_ms
+                    )
+                    tag_prod.publish_if_changed(tag_frame_proto)
+                except Exception:
+                    log.exception(
+                        "CameraPipeline(%s): tag_producer.publish_if_changed error",
+                        self.cam_name,
+                    )
 
-            encoded = encode_frame(msg)
             self._frame_id += 1
 
-            # Fan-out to subscribers
-            with self._sub_lock:
-                subs = list(self._subscribers)
-            for sub_q in subs:
-                try:
-                    sub_q.put_nowait(encoded)
-                except queue.Full:
-                    pass  # silent drop
+            # Throttle detection to the configured target rate
+            elapsed = time.monotonic() - frame_start
+            target_interval = 1.0 / self._detection_fps
+            sleep_time = target_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)

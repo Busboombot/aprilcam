@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '004'
 ---
 
 # AprilCam Daemon Protocol Specification
@@ -117,9 +118,10 @@ queue (maxsize=2); frames are dropped silently if the subscriber lags.
 - **Streams are discovered via gRPC, not at well-known paths.** The daemon allocates
   stream endpoints on demand; clients call a gRPC method to get the socket path or
   TCP port.
-- **Transport-agnostic.** The gRPC endpoint and the stream sockets can each be
-  Unix domain sockets (default) or TCP. For TCP, the daemon opens a port on demand
-  and returns it.
+- **Dual transport by default.** The daemon always binds both a Unix socket and a
+  TCP port at startup. Either transport can be disabled via startup flags. This
+  means any client — local or remote — can connect without reconfiguration, and
+  TCP also serves as a discovery mechanism (mDNS advertises the TCP port).
 - **Daemon-side producer classes / client-side consumer classes.** The only code
   that creates or reads a socket lives in the producer or consumer class for that
   socket type. Daemon code creates producers; client code creates consumers.
@@ -131,21 +133,41 @@ queue (maxsize=2); frames are dropped silently if the subscriber lags.
 
 ### 2.1 Endpoints
 
-| Endpoint | Transport | Path / Port | Purpose |
-|----------|-----------|-------------|---------|
-| gRPC control | Unix or TCP | `/tmp/aprilcam/control.sock` or `tcpport` | All RPC calls |
-| Image stream | Unix (temp) or TCP (dynamic port) | Returned by gRPC | Per-camera JPEG stream |
-| Tag stream | Unix (temp) or TCP (dynamic port) | Returned by gRPC | Per-camera tag/homography stream |
+The daemon binds **both** transports at startup by default.
 
-**Default Unix paths:**
-- gRPC: `/tmp/aprilcam/control.sock`
-- Image stream: `/tmp/aprilcam/<cam_name>/images-<uuid>.sock`
-- Tag stream: `/tmp/aprilcam/<cam_name>/tags-<uuid>.sock`
+| Endpoint | Unix path (default) | TCP port (default) | Purpose |
+|----------|--------------------|--------------------|---------|
+| gRPC control | `/tmp/aprilcam/control.sock` | 5280 | All RPC calls |
+| Image stream | `/tmp/aprilcam/<cam_name>/images-<uuid>.sock` | dynamic (returned by gRPC) | Per-camera JPEG stream |
+| Tag stream | `/tmp/aprilcam/<cam_name>/tags-<uuid>.sock` | dynamic (returned by gRPC) | Per-camera tag/homography stream |
 
-**TCP mode:** gRPC on a configurable `tcpport` (default e.g. 5280). Stream sockets
-are allocated on dynamic ports; the daemon returns the port number in the
-`GetStreamInfo` response. The daemon does not open a stream port until a client
-requests it.
+Stream endpoints are allocated on demand: the daemon creates the socket when a
+client calls `GetImageStream` or `GetTagStream`, and returns the path/port in the
+`StreamEndpoint` response.
+
+---
+
+### 2.1a Startup Transport Flags
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--unix` / `--no-unix` | `--unix` | Enable/disable the Unix socket transport |
+| `--tcp` / `--no-tcp` | `--tcp` | Enable/disable the TCP transport |
+| `--tcp-port N` | `5280` | TCP port for the gRPC control endpoint |
+| `--unix-path PATH` | `/tmp/aprilcam/control.sock` | Path for the Unix socket control endpoint |
+
+**Valid combinations:**
+
+| `--unix` | `--tcp` | Result |
+|----------|---------|--------|
+| on | on | Both transports active (default) |
+| on | off | Unix only — local clients only, no mDNS advertisement |
+| off | on | TCP only — useful for remote access or containerized setups |
+| off | off | Invalid — daemon exits with an error |
+
+Stream sockets inherit the active transport(s): if both are enabled the daemon
+creates both a Unix socket and a TCP socket for each stream, and returns both
+in `StreamEndpoint`. The client chooses whichever it prefers.
 
 ---
 
@@ -421,11 +443,55 @@ control classes. Application code never touches proto-generated types.
 | `src/aprilcam/daemon/client.py` | **Remove** — replaced by `aprilcam.client.control` |
 | `src/aprilcam/cli/view_cli.py` | **Update** — use `DaemonControl` + consumers |
 | `src/aprilcam/cli/daemon_cli.py` | **Update** — use `DaemonControl` |
-| `pyproject.toml` | Add `grpcio`, `grpcio-tools`, `protobuf` dependencies |
+| `pyproject.toml` | Add `grpcio`, `grpcio-tools`, `grpcio-reflection`, `protobuf` dependencies |
 
 ---
 
-### 2.10 Open Questions (Resolved from Conversation)
+### 2.10 Service Discovery / Interface Reflection
+
+**Schema discovery: gRPC Server Reflection.**
+
+The daemon enables the standard gRPC reflection service at startup:
+
+```python
+from grpc_reflection.v1alpha import reflection
+reflection.enable_server_reflection(
+    [aprilcam_pb2.DESCRIPTOR.services_by_name["AprilCam"].full_name,
+     reflection.SERVICE_NAME],
+    grpc_server,
+)
+```
+
+This lets any client query the live server for its full service schema — methods,
+message types, field names and types — without distributing `.proto` files separately.
+
+**What this enables:**
+
+- `grpcurl -plaintext localhost:5280 list` — enumerate services
+- `grpcurl -plaintext localhost:5280 describe aprilcam.AprilCam` — dump the schema
+- `grpcui` — browser UI that auto-generates a form for every method
+- Programmatic introspection in client code to validate version compatibility at
+  connect time
+
+**Endpoint discovery (how clients find the daemon):**
+
+| Scenario | Mechanism |
+|----------|-----------|
+| Same machine | Well-known Unix socket path from config (`.aprilcam` / `~/.aprilcam`) |
+| Same LAN, TCP mode | mDNS/Bonjour: daemon registers `_aprilcam._tcp.local.` at startup; clients browse with `zeroconf` |
+| Explicit override | `APRILCAM_HOST` + `APRILCAM_PORT` env vars, or config file values |
+
+`DaemonControl.connect_default(config)` tries these in order: env vars → config file →
+Unix socket → mDNS browse.
+
+The daemon only registers an mDNS record when bound to TCP; Unix-socket-only mode
+stays invisible on the network.
+
+**Additional dependency:** `grpcio-reflection`, `zeroconf`
+
+---
+
+### 2.11 Open Questions (Resolved from Conversation)
 
 | Question | Decision |
 |----------|----------|

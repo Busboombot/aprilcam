@@ -15,7 +15,13 @@ def _read_pid(config) -> Optional[int]:
         return None
 
 
-def _cmd_start(config, verbosity: int = 0, detach: bool = False) -> int:
+def _cmd_start(
+    config,
+    verbosity: int = 0,
+    detach: bool = False,
+    unix_path: Optional[str] = None,
+    tcp_port: Optional[int] = None,
+) -> int:
     """Ensure the daemon is running (auto-spawn if needed)."""
     foreground = verbosity > 0 and not detach
 
@@ -31,110 +37,174 @@ def _cmd_start(config, verbosity: int = 0, detach: bool = False) -> int:
         DaemonServer(config).run()
         return 0
 
-    from aprilcam.daemon.client import ensure_running, _try_connect
+    from aprilcam.client.control import DaemonControl
 
-    already_up = _try_connect(config.socket_dir / "control.sock") is not None
+    resolved_unix = unix_path or str(config.socket_dir / "control.sock")
+
+    # Check if daemon is already up before spawning
+    dc_probe = DaemonControl(unix_path=resolved_unix)
+    dc_probe.connect()
+    already_up = False
+    try:
+        dc_probe.list_cameras()
+        already_up = True
+    except Exception:
+        pass
+    finally:
+        dc_probe.close()
+
     log_level = "DEBUG" if verbosity >= 2 else "INFO" if verbosity == 1 else None
-    client = ensure_running(config, log_level=log_level)
+    dc = DaemonControl.connect_default(
+        config, log_level=log_level, unix_path=unix_path, tcp_port=tcp_port
+    )
     pid = _read_pid(config)
     pid_str = f"  pid {pid}" if pid else ""
 
     if already_up:
         print(f"daemon already running{pid_str}")
     else:
-        print(f"daemon started{pid_str}  (control socket: {config.socket_dir / 'control.sock'})")
+        print(f"daemon started{pid_str}  (control socket: {resolved_unix})")
 
     try:
-        resp = client.rpc("list_cameras")
-        cameras = resp.get("cameras", [])
+        cameras = dc.list_cameras()
         if cameras:
             print(f"open cameras: {', '.join(cameras)}")
         else:
             print("no cameras open")
     except Exception:
         pass
+    finally:
+        dc.close()
 
     return 0
 
 
-def _cmd_status(config) -> int:
+def _cmd_status(
+    config,
+    unix_path: Optional[str] = None,
+    tcp_port: Optional[int] = None,
+) -> int:
     """Print daemon status: running/stopped, open cameras, data sockets."""
-    from aprilcam.daemon.client import _try_connect, ControlClient
+    from aprilcam.client.control import DaemonControl
 
-    control_path = config.socket_dir / "control.sock"
-    sock = _try_connect(control_path)
-    if sock is None:
+    resolved_unix = unix_path or str(config.socket_dir / "control.sock")
+
+    dc = DaemonControl(unix_path=resolved_unix)
+    dc.connect()
+    try:
+        dc.list_cameras()
+    except Exception:
         print("daemon: stopped")
+        dc.close()
         return 1
-
-    sock.close()
-    client = ControlClient(control_path)
 
     pid = _read_pid(config)
     pid_str = f"  (pid {pid})" if pid else ""
     print(f"daemon: running{pid_str}")
-    print(f"control socket: {control_path}")
+    print(f"control socket (unix): {resolved_unix}")
+    if tcp_port is not None:
+        print(f"control socket (tcp):  localhost:{tcp_port}")
 
     try:
-        resp = client.rpc("list_cameras")
-        cameras = resp.get("cameras", [])
+        cameras = dc.list_cameras()
         if not cameras:
             print("cameras: none open")
         else:
             for cam in cameras:
                 print(f"  camera: {cam}")
-                info_path = config.data_dir / cam / "info.json"
                 try:
-                    import json
-                    from pathlib import Path
-                    info = json.loads(info_path.read_text())
-                    print(f"    data socket : {info.get('data_socket', '?')}")
-                    print(f"    calibrated  : {info.get('calibrated', False)}")
-                    fw, fh = info.get("frame_size", [0, 0])
+                    info = dc.get_camera_info(cam)
+                    fw, fh = info.frame_size
                     print(f"    frame size  : {fw}x{fh}")
-                    pf = info.get("playfield")
-                    if pf:
-                        print(f"    playfield   : {pf.get('width_cm')}cm × {pf.get('height_cm')}cm")
-                    paths_file = info.get("paths_file")
-                    print(f"    paths file  : {paths_file or '?'}")
-                    if paths_file:
-                        try:
-                            paths = json.loads(Path(paths_file).read_text())
-                            print(f"    paths       : {len(paths)} path(s) queued to draw")
-                        except Exception:
-                            print(f"    paths       : (unreadable)")
+                    print(f"    calibrated  : {info.calibrated}")
+                    print(f"    fps         : {info.fps:.1f}")
                 except Exception:
                     pass
     except Exception as exc:
         print(f"warning: could not query cameras: {exc}")
+    finally:
+        dc.close()
 
     return 0
 
 
-def _cmd_stop(config) -> int:
-    """Send a shutdown RPC to the running daemon."""
-    from aprilcam.daemon.client import _try_connect, ControlClient
+def _cmd_stop(
+    config,
+    unix_path: Optional[str] = None,
+    tcp_port: Optional[int] = None,
+) -> int:
+    """Send a shutdown RPC to the running daemon; fall back to SIGTERM by PID."""
+    import os
+    import signal
+    import time
+    from aprilcam.client.control import DaemonControl
 
-    control_path = config.socket_dir / "control.sock"
-    if _try_connect(control_path) is None:
+    resolved_unix = unix_path or str(config.socket_dir / "control.sock")
+
+    # Try clean gRPC shutdown first.
+    grpc_ok = False
+    dc = DaemonControl(unix_path=resolved_unix)
+    dc.connect()
+    try:
+        dc.list_cameras()
+        grpc_ok = True
+    except Exception:
+        pass
+
+    if grpc_ok:
+        try:
+            dc.shutdown()
+        except Exception:
+            pass  # daemon may drop the connection before replying
+        finally:
+            dc.close()
+        print("daemon: shutdown requested")
+        return 0
+
+    dc.close()
+
+    # gRPC failed — fall back to SIGTERM via pidfile.
+    pid = _read_pid(config)
+    if pid is None:
         print("daemon: not running")
         return 0
 
-    client = ControlClient(control_path)
     try:
-        client.rpc("shutdown")
-        print("daemon: shutdown requested")
-    except Exception:
-        # The daemon closes the socket before we read the response sometimes
-        print("daemon: shutdown requested")
+        os.kill(pid, 0)  # check process exists
+    except ProcessLookupError:
+        print("daemon: not running (stale pidfile)")
+        return 0
+    except PermissionError:
+        pass  # process exists but owned by another user; try anyway
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # Wait up to 5 s for the process to exit.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        print(f"daemon: stopped (pid {pid})")
+    except Exception as exc:
+        print(f"daemon: could not stop pid {pid}: {exc}")
+        return 1
 
     return 0
 
 
-def _cmd_restart(config, verbosity: int = 0, detach: bool = False) -> int:
+def _cmd_restart(
+    config,
+    verbosity: int = 0,
+    detach: bool = False,
+    unix_path: Optional[str] = None,
+    tcp_port: Optional[int] = None,
+) -> int:
     """Stop the daemon if running, then start it."""
     import time
-    _cmd_stop(config)
+    _cmd_stop(config, unix_path=unix_path, tcp_port=tcp_port)
     # Wait until the control socket disappears (daemon fully exited)
     control_path = config.socket_dir / "control.sock"
     deadline = time.monotonic() + 6.0
@@ -142,7 +212,10 @@ def _cmd_restart(config, verbosity: int = 0, detach: bool = False) -> int:
         time.sleep(0.1)
         if not control_path.exists():
             break
-    return _cmd_start(config, verbosity=verbosity, detach=detach)
+    return _cmd_start(
+        config, verbosity=verbosity, detach=detach,
+        unix_path=unix_path, tcp_port=tcp_port,
+    )
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -169,9 +242,38 @@ def main(argv: Optional[list[str]] = None) -> int:
             action="store_true",
             help="Detach even when -v/-vv given; logs go to aprilcamd.log",
         )
+        p.add_argument(
+            "--unix-path",
+            default=None,
+            metavar="PATH",
+            help="Unix socket path for the daemon control socket",
+        )
+        p.add_argument(
+            "--tcp-port",
+            type=int,
+            default=None,
+            metavar="N",
+            help="TCP port the daemon is/will be listening on",
+        )
 
-    sub.add_parser("status",  help="Show daemon status and open cameras")
-    sub.add_parser("stop",    help="Stop the running daemon")
+    for name, help_text in [
+        ("status", "Show daemon status and open cameras"),
+        ("stop",   "Stop the running daemon"),
+    ]:
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument(
+            "--unix-path",
+            default=None,
+            metavar="PATH",
+            help="Unix socket path for the daemon control socket",
+        )
+        p.add_argument(
+            "--tcp-port",
+            type=int,
+            default=None,
+            metavar="N",
+            help="TCP port the daemon is listening on",
+        )
 
     args = parser.parse_args(argv)
 
@@ -182,14 +284,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     from aprilcam.config import Config
     config = Config.load()
 
+    unix_path = getattr(args, "unix_path", None)
+    tcp_port = getattr(args, "tcp_port", None)
+
     if args.subcmd == "start":
-        return _cmd_start(config, verbosity=args.verbosity, detach=args.detach)
+        return _cmd_start(
+            config, verbosity=args.verbosity, detach=args.detach,
+            unix_path=unix_path, tcp_port=tcp_port,
+        )
     if args.subcmd == "status":
-        return _cmd_status(config)
+        return _cmd_status(config, unix_path=unix_path, tcp_port=tcp_port)
     if args.subcmd == "stop":
-        return _cmd_stop(config)
+        return _cmd_stop(config, unix_path=unix_path, tcp_port=tcp_port)
     if args.subcmd == "restart":
-        return _cmd_restart(config, verbosity=args.verbosity, detach=args.detach)
+        return _cmd_restart(
+            config, verbosity=args.verbosity, detach=args.detach,
+            unix_path=unix_path, tcp_port=tcp_port,
+        )
 
     parser.print_help()
     return 1

@@ -7,7 +7,7 @@ operations. It is the primary entry point for the ``aprilcam mcp``
 subcommand and the ``aprilcam-mcp`` standalone script.
 
 Camera management is delegated to the AprilCam daemon via
-:func:`aprilcam.daemon.client.ensure_running`.  Path mutations
+:class:`aprilcam.client.control.DaemonControl`.  Path mutations
 (create_path, delete_path, clear_paths) write the current path list
 atomically to ``paths.json`` inside the camera's data directory so the
 ``aprilcam view`` subscriber process can reload them without IPC.
@@ -35,7 +35,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
 from aprilcam.config import Config
-from aprilcam.daemon.client import ControlClient, ensure_running
+from aprilcam.client.control import DaemonControl
 from aprilcam.core.aprilcam import AprilCam
 from aprilcam.camera.composite import (
     CompositeManager,
@@ -180,11 +180,11 @@ composite_manager = CompositeManager()
 frame_registry = FrameRegistry()
 
 # ---------------------------------------------------------------------------
-# Daemon client (initialised lazily on first use; None until ensure_running
-# is called successfully — e.g. in tests that do not need the daemon).
+# Daemon client (initialised lazily on first use via DaemonControl.connect_default;
+# None until first call — e.g. in tests that do not need the daemon).
 # ---------------------------------------------------------------------------
 
-_daemon_client: Optional[ControlClient] = None
+_daemon_client: Optional[DaemonControl] = None
 
 # Per-camera info read from info.json after open_camera RPC.
 # Keys are camera_id strings (e.g. "cam_0"); values are the parsed
@@ -192,18 +192,12 @@ _daemon_client: Optional[ControlClient] = None
 _cam_info: dict[str, dict] = {}
 
 
-def _ensure_daemon_client() -> ControlClient:
-    """Return the module-level daemon client, starting the daemon if needed.
-
-    On first call this loads :class:`~aprilcam.config.Config` and calls
-    :func:`~aprilcam.daemon.client.ensure_running`.  On MCP server startup
-    the client will already have been initialised; this is a safety net for
-    handlers that are called before explicit initialisation.
-    """
+def _ensure_daemon_client() -> DaemonControl:
+    """Return the module-level daemon client, starting the daemon if needed."""
     global _daemon_client
     if _daemon_client is None:
         config = Config.load()
-        _daemon_client = ensure_running(config)
+        _daemon_client = DaemonControl.connect_default(config)
     return _daemon_client
 
 
@@ -443,18 +437,16 @@ def _handle_open_camera(
         # Use the daemon's cam_name (device slug) as handle after RPC
         handle = None  # resolved below after daemon open
 
-        # Delegate to daemon via RPC — no direct cv.VideoCapture here
+        # Delegate to daemon via gRPC — no direct cv.VideoCapture here
         client = _ensure_daemon_client()
-        resp = client.rpc("open_camera", index=idx)
-        cam_name: str = resp["cam_name"]  # device slug, e.g. "arducam-ov9782-usb-camera"
+        cam_name: str = client.open_camera(idx)
         handle = cam_name
-        info_json_path: str = resp["info_json_path"]
 
-        # Read info.json to get paths_file and other per-camera metadata
-        try:
-            info: dict = json.loads(Path(info_json_path).read_text())
-        except OSError:
-            info = {"paths_file": str(Path(info_json_path).parent / "paths.json")}
+        # Derive the per-camera data directory from config (daemon no longer
+        # writes info.json; paths.json lives alongside calibration data).
+        _config = Config.load()
+        cam_data_dir = _config.data_dir / "cameras" / cam_name
+        info: dict = {"paths_file": str(cam_data_dir / "paths.json")}
 
         # Store a sentinel (None) in the registry so other code that checks
         # "is this camera_id registered?" still works.  Close any stale entry first.

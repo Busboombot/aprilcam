@@ -1,36 +1,34 @@
-"""Tests for aprilcam.daemon.server — DaemonServer control socket and RPC."""
+"""Tests for aprilcam.daemon.server — DaemonServer gRPC startup and pidfile."""
 
 from __future__ import annotations
 
-import json
 import os
-import socket
 import threading
 import time
 from pathlib import Path
 
+import grpc
 import pytest
 
 from aprilcam.config import Config
 from aprilcam.daemon.server import DaemonServer
+from aprilcam.proto import aprilcam_pb2, aprilcam_pb2_grpc
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture()
-def tmp_config(tmp_path: Path):  # noqa: ARG001 — tmp_path unused but keeps pytest happy
-    """Return a Config that uses short paths to satisfy AF_UNIX length limits.
+def tmp_config(tmp_path: Path):
+    """Return a Config backed by /tmp directories with short paths.
 
-    macOS limits AF_UNIX socket paths to ~104 characters.  pytest's tmp_path
-    under /private/var/folders/… is too long, so we create a short-named
-    sub-directory under /tmp instead.
+    macOS limits AF_UNIX socket paths to ~104 characters.  Use short paths
+    under /tmp to stay within that limit.
     """
-    import tempfile, stat
+    import stat
+    import tempfile
 
-    # Use a fresh dir under /tmp with a short name
-    base = Path(tempfile.mkdtemp(prefix="act_", dir="/tmp"))
-    # Make it world-accessible so socket permissions don't block tests
+    base = Path(tempfile.mkdtemp(prefix="ads_", dir="/tmp"))
     base.chmod(base.stat().st_mode | stat.S_IRWXO)
 
     sock_dir = base / "s"
@@ -47,204 +45,198 @@ def tmp_config(tmp_path: Path):  # noqa: ARG001 — tmp_path unused but keeps py
     )
     yield cfg
 
-    # Cleanup
     import shutil
     shutil.rmtree(base, ignore_errors=True)
 
 
+def _make_server(cfg: Config, *, unix_enabled=True, tcp_enabled=True,
+                 unix_path: str | None = None, tcp_port: int = 15280) -> DaemonServer:
+    """Build a DaemonServer pointed at a unique TCP port to avoid conflicts."""
+    kw = dict(unix_enabled=unix_enabled, tcp_enabled=tcp_enabled, tcp_port=tcp_port)
+    if unix_path is not None:
+        kw["unix_path"] = unix_path
+    else:
+        kw["unix_path"] = str(cfg.socket_dir / "control.sock")
+    return DaemonServer(cfg, **kw)
+
+
 @pytest.fixture()
 def running_server(tmp_config: Config):
-    """Start DaemonServer in a background thread; yield; then shut it down."""
-    server = DaemonServer(tmp_config)
+    """Start DaemonServer in a background thread; yield (server, config); then shut down."""
+    unix_path = str(tmp_config.socket_dir / "control.sock")
+    server = _make_server(tmp_config, unix_path=unix_path, tcp_port=15281)
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
 
-    # Wait for the control socket to appear (up to 2 s)
-    ctrl_path = tmp_config.socket_dir / "control.sock"
-    deadline = time.monotonic() + 2.0
-    while not ctrl_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
-
-    assert ctrl_path.exists(), "DaemonServer did not bind control socket in time"
+    # Wait for the gRPC server to be ready (up to 3 s)
+    assert server.started_event.wait(timeout=3.0), "DaemonServer did not start in time"
 
     yield server, tmp_config
 
-    # Trigger shutdown via the shutdown RPC, then wait for thread to finish
-    try:
-        _rpc(ctrl_path, {"cmd": "shutdown"})
-    except Exception:
-        pass
+    # Trigger shutdown and wait for the thread to finish
     server._shutdown_event.set()
     t.join(timeout=5.0)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Constructor validation ─────────────────────────────────────────────────────
 
 
-def _rpc(ctrl_path: Path, request: dict) -> dict:
-    """Send one JSON RPC to the control socket and return the parsed response."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        sock.connect(str(ctrl_path))
-        sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
-        data = b""
-        while b"\n" not in data:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-    finally:
-        sock.close()
-    return json.loads(data.split(b"\n")[0])
+def test_both_transports_disabled_raises():
+    """DaemonServer raises ValueError when both unix_enabled and tcp_enabled are False."""
+    from aprilcam.config import Config
+
+    cfg = Config()
+    with pytest.raises(ValueError, match="at least one transport"):
+        DaemonServer(cfg, unix_enabled=False, tcp_enabled=False)
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# ── Startup and readiness ─────────────────────────────────────────────────────
 
 
-def test_server_binds_control_socket(running_server):
-    """The daemon creates control.sock in the socket directory."""
-    _, cfg = running_server
-    assert (cfg.socket_dir / "control.sock").exists()
+def test_server_starts_and_sets_started_event(running_server):
+    """DaemonServer sets started_event once the gRPC server is accepting."""
+    server, _ = running_server
+    assert server.started_event.is_set()
 
 
-def test_list_cameras_empty(running_server):
-    """list_cameras returns empty list when no cameras are open."""
-    _, cfg = running_server
+def test_server_binds_unix_socket(running_server):
+    """The Unix socket path exists after the server starts."""
+    server, cfg = running_server
     ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "list_cameras"})
-    assert resp == {"ok": True, "cameras": []}
+    assert ctrl_path.exists()
 
 
-def test_unknown_command(running_server):
-    """Unknown command returns ok=False with an error message."""
+def test_grpc_list_cameras_empty(running_server):
+    """ListCameras via gRPC returns an empty list when no cameras are open."""
     _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "xyzzy"})
-    assert resp["ok"] is False
-    assert "unknown" in resp["error"].lower()
+    ctrl_path = str(cfg.socket_dir / "control.sock")
+
+    with grpc.insecure_channel(f"unix:{ctrl_path}") as channel:
+        stub = aprilcam_pb2_grpc.AprilCamStub(channel)
+        response = stub.ListCameras(aprilcam_pb2.Empty(), timeout=5)
+
+    assert list(response.cameras) == []
 
 
-def test_get_calibration_save_path(running_server):
-    """get_calibration_save_path returns the configured path."""
+def test_grpc_close_unknown_camera(running_server):
+    """CloseCamera for an unknown camera returns NOT_FOUND status."""
     _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "get_calibration_save_path"})
-    assert resp["ok"] is True
-    assert resp["path"] == str(cfg.calibration_dir)
+    ctrl_path = str(cfg.socket_dir / "control.sock")
+
+    with grpc.insecure_channel(f"unix:{ctrl_path}") as channel:
+        stub = aprilcam_pb2_grpc.AprilCamStub(channel)
+        try:
+            stub.CloseCamera(
+                aprilcam_pb2.CameraRequest(cam_name="cam_99"), timeout=5
+            )
+            pytest.fail("Expected gRPC NOT_FOUND error")
+        except grpc.RpcError as exc:
+            assert exc.code() == grpc.StatusCode.NOT_FOUND
 
 
-def test_close_unknown_camera(running_server):
-    """close_camera for a camera that was never opened returns ok=False."""
-    _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "close_camera", "cam_name": "cam_99"})
-    assert resp["ok"] is False
-    assert "cam_99" in resp["error"]
-
-
-def test_get_camera_info_missing(running_server):
-    """get_camera_info for a camera with no info.json returns ok=False."""
-    _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "get_camera_info", "cam_name": "cam_99"})
-    assert resp["ok"] is False
-
-
-def test_capture_frame_unknown_camera(running_server):
-    """capture_frame for an unknown camera returns ok=False."""
-    _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "capture_frame", "cam_name": "cam_99"})
-    assert resp["ok"] is False
-    assert "cam_99" in resp["error"]
-
-
-def test_open_camera_invalid_index_type(running_server):
-    """open_camera with a non-integer index returns ok=False."""
-    _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "open_camera", "index": "not-an-int"})
-    assert resp["ok"] is False
-
-
-def test_reload_calibration_unknown_camera(running_server):
-    """reload_calibration for an unknown camera returns ok=False."""
-    _, cfg = running_server
-    ctrl_path = cfg.socket_dir / "control.sock"
-    resp = _rpc(ctrl_path, {"cmd": "reload_calibration", "cam_name": "cam_99"})
-    assert resp["ok"] is False
-
-
-def test_shutdown_rpc(tmp_config: Config):
-    """The 'shutdown' RPC causes the server to exit cleanly."""
-    server = DaemonServer(tmp_config)
+def test_grpc_shutdown_rpc(tmp_config: Config):
+    """The Shutdown RPC causes the daemon to exit cleanly."""
+    unix_path = str(tmp_config.socket_dir / "ctrl.sock")
+    server = DaemonServer(
+        tmp_config,
+        unix_enabled=True,
+        tcp_enabled=False,
+        unix_path=unix_path,
+    )
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
 
-    ctrl_path = tmp_config.socket_dir / "control.sock"
-    deadline = time.monotonic() + 2.0
-    while not ctrl_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
+    assert server.started_event.wait(timeout=3.0), "Server did not start"
 
-    resp = _rpc(ctrl_path, {"cmd": "shutdown"})
-    assert resp["ok"] is True
+    with grpc.insecure_channel(f"unix:{unix_path}") as channel:
+        stub = aprilcam_pb2_grpc.AprilCamStub(channel)
+        stub.Shutdown(aprilcam_pb2.Empty(), timeout=5)
 
     t.join(timeout=5.0)
-    assert not t.is_alive(), "Server thread did not exit after shutdown RPC"
+    assert not t.is_alive(), "Server thread did not exit after Shutdown RPC"
 
 
-def test_pidfile_lock_prevents_duplicate(tmp_config: Config):
+# ── Pidfile locking ───────────────────────────────────────────────────────────
+
+
+def test_pidfile_lock_prevents_duplicate(tmp_config: Config, caplog):
     """A second DaemonServer with the same config cannot acquire the pidfile."""
-    results = []
+    import logging
 
-    server1 = DaemonServer(tmp_config)
+    unix_path = str(tmp_config.socket_dir / "ctrl.sock")
+    server1 = DaemonServer(
+        tmp_config, unix_enabled=True, tcp_enabled=False, unix_path=unix_path
+    )
     t1 = threading.Thread(target=server1.run, daemon=True)
     t1.start()
 
-    # Wait for server1 to hold the lock
-    ctrl_path = tmp_config.socket_dir / "control.sock"
-    deadline = time.monotonic() + 2.0
-    while not ctrl_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
+    assert server1.started_event.wait(timeout=3.0), "server1 did not start"
 
-    # server2 should detect "already running" and return quickly
-    import sys
-    from io import StringIO
+    # server2 should detect "already running" and return without blocking
+    with caplog.at_level(logging.ERROR, logger="aprilcam.daemon.server"):
+        server2 = DaemonServer(
+            tmp_config, unix_enabled=True, tcp_enabled=False, unix_path=unix_path + "2"
+        )
+        server2.run()  # should return quickly — pidfile is held by server1
 
-    old_stderr = sys.stderr
-    sys.stderr = buf = StringIO()
-    try:
-        server2 = DaemonServer(tmp_config)
-        server2.run()  # should return without blocking
-        results.append(buf.getvalue())
-    finally:
-        sys.stderr = old_stderr
-
-    assert "already running" in results[0], f"Expected 'already running', got: {results[0]}"
+    assert any(
+        "already running" in record.message
+        for record in caplog.records
+    ), f"Expected 'already running' in log, got: {[r.message for r in caplog.records]}"
 
     # Shut down server1
-    _rpc(ctrl_path, {"cmd": "shutdown"})
+    server1._shutdown_event.set()
     t1.join(timeout=5.0)
 
 
-def test_stale_control_socket_removed(tmp_config: Config):
-    """A stale control.sock left from a previous run is cleaned up on start."""
-    # Create a stale socket file
-    ctrl_path = tmp_config.socket_dir / "control.sock"
-    ctrl_path.parent.mkdir(parents=True, exist_ok=True)
-    ctrl_path.write_bytes(b"stale")
+# ── __main__ argument parsing ─────────────────────────────────────────────────
 
-    server = DaemonServer(tmp_config)
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
 
-    deadline = time.monotonic() + 2.0
-    while not ctrl_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
+def test_main_parse_args_defaults():
+    """Default args have both transports enabled and standard port/path."""
+    from aprilcam.daemon.__main__ import _parse_args
+    from aprilcam.daemon.server import _DEFAULT_TCP_PORT, _DEFAULT_UNIX_PATH
 
-    # Should be able to connect and get a valid response
-    resp = _rpc(ctrl_path, {"cmd": "list_cameras"})
-    assert resp["ok"] is True
+    args = _parse_args([])
+    assert args.unix_enabled is True
+    assert args.tcp_enabled is True
+    assert args.tcp_port == _DEFAULT_TCP_PORT
+    assert args.unix_path == _DEFAULT_UNIX_PATH
 
-    _rpc(ctrl_path, {"cmd": "shutdown"})
-    t.join(timeout=5.0)
+
+def test_main_parse_args_no_unix():
+    """--no-unix disables the unix transport."""
+    from aprilcam.daemon.__main__ import _parse_args
+
+    args = _parse_args(["--no-unix"])
+    assert args.unix_enabled is False
+    assert args.tcp_enabled is True
+
+
+def test_main_parse_args_no_tcp():
+    """--no-tcp disables the tcp transport."""
+    from aprilcam.daemon.__main__ import _parse_args
+
+    args = _parse_args(["--no-tcp"])
+    assert args.tcp_enabled is False
+    assert args.unix_enabled is True
+
+
+def test_main_parse_args_custom_port_and_path():
+    """--tcp-port and --unix-path override the defaults."""
+    from aprilcam.daemon.__main__ import _parse_args
+
+    args = _parse_args(["--tcp-port", "9999", "--unix-path", "/tmp/my.sock"])
+    assert args.tcp_port == 9999
+    assert args.unix_path == "/tmp/my.sock"
+
+
+def test_main_both_disabled_exits(capsys):
+    """--no-unix --no-tcp causes sys.exit(1) with a clear error message."""
+    from aprilcam.daemon.__main__ import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--no-unix", "--no-tcp"])
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "at least one transport" in captured.err
