@@ -186,17 +186,33 @@ def save_calibration_to_camera_dir(
     camera_dir: str | Path,
     field_width_cm: float,
     field_height_cm: float,
+    detection_fps: int = 10,
 ) -> Path:
     """Write calibration to ``<camera_dir>/calibration.json``.
 
     Creates the directory if needed.  Returns the path written.
+
+    *detection_fps* is written only when the file does not already
+    contain a ``"detection_fps"`` key, preserving per-camera overrides.
     """
     camera_dir = Path(camera_dir)
     camera_dir.mkdir(parents=True, exist_ok=True)
     cal_file = camera_dir / "calibration.json"
+
+    # Preserve existing detection_fps if already set
+    existing_fps: Optional[int] = None
+    if cal_file.exists():
+        try:
+            existing_data = json.loads(cal_file.read_text())
+            if "detection_fps" in existing_data:
+                existing_fps = int(existing_data["detection_fps"])
+        except Exception:
+            pass
+
     data = cal.to_dict()
     data["field_width_cm"] = field_width_cm
     data["field_height_cm"] = field_height_cm
+    data["detection_fps"] = existing_fps if existing_fps is not None else detection_fps
     cal_file.write_text(json.dumps(data, indent=2))
     return cal_file
 

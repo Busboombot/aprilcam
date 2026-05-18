@@ -101,7 +101,19 @@ class AprilCamServicer(aprilcam_pb2_grpc.AprilCamServicer):
             if cam_name in self._cameras:
                 return aprilcam_pb2.OpenCameraResponse(cam_name=cam_name)
 
-            pipeline = CameraPipeline(cam_name, index, self._config)
+            # Determine detection_fps: calibration.json > config default
+            import json as _json
+            detection_fps = self._config.detection_fps
+            cal_file = self._config.cameras_dir / cam_name / "calibration.json"
+            if cal_file.exists():
+                try:
+                    _cal_data = _json.loads(cal_file.read_text())
+                    if "detection_fps" in _cal_data:
+                        detection_fps = int(_cal_data["detection_fps"])
+                except Exception:
+                    pass
+
+            pipeline = CameraPipeline(cam_name, index, self._config, detection_fps=detection_fps)
             try:
                 pipeline.start()
             except RuntimeError as exc:

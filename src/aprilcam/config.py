@@ -257,6 +257,7 @@ class Config:
     log_level: str = "INFO"
     daemon_pidfile: Optional[Path] = None
     calibration_dir: Optional[Path] = None
+    detection_fps: int = 10
 
     @property
     def cameras_dir(self) -> Path:
@@ -313,6 +314,13 @@ class Config:
         socket_dir = _path("APRILCAM_SOCKET_DIR", Path("/tmp/aprilcam/"))
         data_dir = _path("APRILCAM_DATA_DIR", Path("./data/aprilcam/"))
 
+        # Parse detection_fps — default 10, must be a positive integer
+        _fps_raw = sources.get("APRILCAM_DETECTION_FPS", "10")
+        try:
+            _fps = max(1, int(_fps_raw))
+        except (ValueError, TypeError):
+            _fps = 10
+
         cfg = cls(
             data_dir=data_dir,
             socket_dir=socket_dir,
@@ -321,6 +329,7 @@ class Config:
             daemon_pidfile=_path(
                 "APRILCAM_DAEMON_PIDFILE", socket_dir / "aprilcamd.pid"
             ),
+            detection_fps=_fps,
         )
 
         # Ensure socket_dir exists so daemon can bind sockets immediately

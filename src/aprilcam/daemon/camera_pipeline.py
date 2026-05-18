@@ -115,17 +115,25 @@ class CameraPipeline:
     (useful for capture_frame() RPC-only use).
     """
 
-    def __init__(self, cam_name: str, index: int, config: Config) -> None:
+    def __init__(
+        self,
+        cam_name: str,
+        index: int,
+        config: Config,
+        detection_fps: int = 10,
+    ) -> None:
         """Set up state only.  Does NOT open the camera.
 
         Args:
-            cam_name: Human-readable camera name (used as directory key).
-            index:    OpenCV camera index.
-            config:   Daemon configuration (paths, etc.).
+            cam_name:       Human-readable camera name (used as directory key).
+            index:          OpenCV camera index.
+            config:         Daemon configuration (paths, etc.).
+            detection_fps:  Target detection loop rate in Hz (default 10).
         """
         self.cam_name = cam_name
         self.index = index
         self.config = config
+        self._detection_fps = max(1, detection_fps)
 
         # Camera and detection state (populated on start())
         self._cap: Optional[cv.VideoCapture] = None
@@ -456,6 +464,7 @@ class CameraPipeline:
 
         consecutive_failures = 0
         while not self._stop_event.is_set():
+            frame_start = time.monotonic()
             ret, frame = self._cap.read()
             if not ret or frame is None:
                 consecutive_failures += 1
@@ -544,3 +553,10 @@ class CameraPipeline:
                     )
 
             self._frame_id += 1
+
+            # Throttle detection to the configured target rate
+            elapsed = time.monotonic() - frame_start
+            target_interval = 1.0 / self._detection_fps
+            sleep_time = target_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
