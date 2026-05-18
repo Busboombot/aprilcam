@@ -10,7 +10,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 from pathlib import Path
 from typing import List, Optional
@@ -20,7 +19,7 @@ import numpy as np
 
 from ..camera.camutil import list_cameras, select_camera_by_pattern
 from ..config import Config
-from ..daemon.client import ensure_running, ControlClient
+from ..client.control import DaemonControl
 
 
 class _DaemonCapture:
@@ -32,17 +31,15 @@ class _DaemonCapture:
     without modification.
     """
 
-    def __init__(self, client: ControlClient, cam_name: str) -> None:
-        self._client = client
+    def __init__(self, dc: DaemonControl, cam_name: str) -> None:
+        self._dc = dc
         self._cam_name = cam_name
         self._width: Optional[int] = None
         self._height: Optional[int] = None
 
     def _fetch_frame(self) -> Optional[np.ndarray]:
         """Fetch one JPEG frame from the daemon and decode it to BGR."""
-        resp = self._client.rpc("capture_frame", cam_name=self._cam_name)
-        data = base64.b64decode(resp["frame_b64"])
-        frame = cv.imdecode(np.frombuffer(data, np.uint8), cv.IMREAD_COLOR)
+        frame = self._dc.capture_frame(self._cam_name)
         if frame is not None and self._width is None:
             self._height, self._width = frame.shape[:2]
         return frame
@@ -112,13 +109,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Start (or connect to) the daemon
     config = Config.load()
-    client = ensure_running(config)
+    dc = DaemonControl.connect_default(config)
 
     # cameras_dir is <data_dir>/cameras — each camera has its own subdir
     if args.output:
         cameras_dir = Path(args.output)
     else:
-        cameras_dir = Path(client.rpc("get_calibration_save_path")["path"])
+        cameras_dir = config.data_dir / "cameras"
 
     # Load field dimension defaults from any existing calibration.json in a subdir
     field_width = args.width
@@ -185,13 +182,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     for idx, label in camera_indices:
         print(f"Calibrating [{idx}] {label} ...")
         try:
-            resp = client.rpc("open_camera", index=idx)
-            cam_name = resp["cam_name"]
+            cam_name = dc.open_camera(idx)
 
             for _ in range(10):
-                client.rpc("capture_frame", cam_name=cam_name)
+                dc.capture_frame(cam_name)
 
-            cap = _DaemonCapture(client, cam_name)
+            cap = _DaemonCapture(dc, cam_name)
 
             cal = calibrate_single(
                 cap,
@@ -210,7 +206,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"  Barrel distortion correction: yes")
 
             # Notify the daemon so it hot-reloads the calibration
-            client.rpc("reload_calibration", cam_name=cam_name)
+            dc.reload_calibration(cam_name)
 
             print()
         except Exception as e:
