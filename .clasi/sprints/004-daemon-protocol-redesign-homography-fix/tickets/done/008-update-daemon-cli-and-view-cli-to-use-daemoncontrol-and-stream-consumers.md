@@ -1,7 +1,7 @@
 ---
 id: '008'
 title: Update daemon_cli and view_cli to use DaemonControl and stream consumers
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-005

@@ -1,7 +1,7 @@
 ---
 id: '010'
 title: Integration smoke tests and regression test for homography fix
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-002

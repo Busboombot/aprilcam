@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Implement gRPC servicer (daemon/grpc_server.py)
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-002

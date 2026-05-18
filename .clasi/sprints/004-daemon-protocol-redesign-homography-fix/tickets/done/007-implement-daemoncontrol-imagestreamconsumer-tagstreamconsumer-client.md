@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: Implement DaemonControl, ImageStreamConsumer, TagStreamConsumer (client/)
-status: open
+status: done
 use-cases:
   - SUC-001
   - SUC-002

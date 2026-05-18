@@ -1,7 +1,7 @@
 ---
 id: '011'
 title: Add configurable detection_fps with per-camera calibration.json override
-status: open
+status: done
 use-cases: []
 depends-on: []
 github-issue: ''

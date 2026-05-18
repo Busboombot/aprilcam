@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Add Pydantic domain models (client/models.py)
-status: open
+status: done
 use-cases:
   - SUC-002
   - SUC-003

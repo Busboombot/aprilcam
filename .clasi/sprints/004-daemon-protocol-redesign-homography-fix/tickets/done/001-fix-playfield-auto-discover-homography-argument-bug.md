@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Fix Playfield._auto_discover_homography argument bug
-status: open
+status: done
 use-cases:
   - SUC-008
 depends-on: []

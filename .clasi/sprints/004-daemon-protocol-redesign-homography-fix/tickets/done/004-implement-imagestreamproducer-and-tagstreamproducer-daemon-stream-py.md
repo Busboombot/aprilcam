@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Implement ImageStreamProducer and TagStreamProducer (daemon/stream.py)
-status: open
+status: done
 use-cases:
   - SUC-003
   - SUC-004

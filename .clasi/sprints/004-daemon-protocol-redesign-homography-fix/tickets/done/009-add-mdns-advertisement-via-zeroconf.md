@@ -1,7 +1,7 @@
 ---
 id: '009'
 title: Add mDNS advertisement via zeroconf
-status: open
+status: done
 use-cases:
   - SUC-007
 depends-on:
