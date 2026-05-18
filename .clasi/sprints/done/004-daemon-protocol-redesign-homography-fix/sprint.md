@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Daemon Protocol Redesign & Homography Fix
-status: planning-docs
+status: done
 branch: sprint/004-daemon-protocol-redesign-homography-fix
 use-cases: []
 issues:

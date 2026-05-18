@@ -24,7 +24,8 @@
       "Skill(se:*)",
       "Bash(dotconfig version *)",
       "Bash(which dotconfig *)",
-      "Read(//Volumes/Proj/proj/code-projects/dotconfig/**)"
+      "Read(//Volumes/Proj/proj/code-projects/dotconfig/**)",
+      "Bash(wait)"
     ],
     "additionalDirectories": [
       "/private/tmp/aprilcam"
