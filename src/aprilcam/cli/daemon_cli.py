@@ -133,28 +133,64 @@ def _cmd_stop(
     unix_path: Optional[str] = None,
     tcp_port: Optional[int] = None,
 ) -> int:
-    """Send a shutdown RPC to the running daemon."""
+    """Send a shutdown RPC to the running daemon; fall back to SIGTERM by PID."""
+    import os
+    import signal
+    import time
     from aprilcam.client.control import DaemonControl
 
     resolved_unix = unix_path or str(config.socket_dir / "control.sock")
 
+    # Try clean gRPC shutdown first.
+    grpc_ok = False
     dc = DaemonControl(unix_path=resolved_unix)
     dc.connect()
     try:
         dc.list_cameras()
+        grpc_ok = True
     except Exception:
+        pass
+
+    if grpc_ok:
+        try:
+            dc.shutdown()
+        except Exception:
+            pass  # daemon may drop the connection before replying
+        finally:
+            dc.close()
+        print("daemon: shutdown requested")
+        return 0
+
+    dc.close()
+
+    # gRPC failed — fall back to SIGTERM via pidfile.
+    pid = _read_pid(config)
+    if pid is None:
         print("daemon: not running")
-        dc.close()
         return 0
 
     try:
-        dc.shutdown()
-        print("daemon: shutdown requested")
-    except Exception:
-        # The daemon may close the connection before we get a response
-        print("daemon: shutdown requested")
-    finally:
-        dc.close()
+        os.kill(pid, 0)  # check process exists
+    except ProcessLookupError:
+        print("daemon: not running (stale pidfile)")
+        return 0
+    except PermissionError:
+        pass  # process exists but owned by another user; try anyway
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # Wait up to 5 s for the process to exit.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        print(f"daemon: stopped (pid {pid})")
+    except Exception as exc:
+        print(f"daemon: could not stop pid {pid}: {exc}")
+        return 1
 
     return 0
 
