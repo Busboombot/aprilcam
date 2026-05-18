@@ -265,7 +265,13 @@ class AprilCamServicer(aprilcam_pb2_grpc.AprilCamServicer):
             context.set_details(f"camera '{cam_name}' not open")
             return aprilcam_pb2.CaptureFrameResponse()
 
-        jpeg = pipeline.capture_frame()
+        import time as _time
+        jpeg = None
+        deadline = _time.monotonic() + 3.0
+        while jpeg is None and _time.monotonic() < deadline:
+            jpeg = pipeline.capture_frame()
+            if jpeg is None:
+                _time.sleep(0.05)
         if jpeg is None:
             context.set_code(grpc.StatusCode.UNAVAILABLE)
             context.set_details("no frame captured yet")
