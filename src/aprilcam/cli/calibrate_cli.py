@@ -145,6 +145,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.cameras:
         for spec in args.cameras:
+            if spec.lstrip("-").isdigit():
+                print(
+                    f"  WARNING: '{spec}' is a numeric index — camera indices change when "
+                    f"devices are plugged/unplugged. Use a name pattern instead "
+                    f"(e.g. 'Global Shutter', 'Arducam')."
+                )
             idx = select_camera_by_pattern(spec, available)
             if idx is not None:
                 label = next((c.device_name or c.name for c in available if c.index == idx), f"Camera {idx}")
@@ -156,7 +162,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cal_subdirs = list(cameras_dir.glob("*/calibration.json")) if cameras_dir.is_dir() else []
         if not cal_subdirs:
             print(f"No cameras specified and {cameras_dir} has no existing calibration files.")
-            print("Specify cameras to calibrate: aprilcam calibrate 0 2")
+            print("Specify cameras to calibrate: aprilcam calibrate 'Global Shutter' 'Arducam'")
             return 1
         for cal_file in sorted(cal_subdirs):
             try:
