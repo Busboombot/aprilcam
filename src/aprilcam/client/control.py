@@ -135,15 +135,16 @@ class DaemonControl:
                 env=env,
             )
 
-            # Poll until the daemon is ready
-            deadline = time.monotonic() + 5.0
+            # Poll until the daemon is ready.  OpenCV + gRPC module loading
+            # can take 10+ seconds on a cold start, so allow 20 seconds.
+            deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
-                time.sleep(0.05)
+                time.sleep(0.1)
                 result = _try_connect()
                 if result is not None:
                     return result
 
-            raise RuntimeError("aprilcamd did not start within 5 seconds")
+            raise RuntimeError("aprilcamd did not start within 20 seconds")
 
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
