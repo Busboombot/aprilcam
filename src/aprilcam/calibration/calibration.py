@@ -717,14 +717,11 @@ def calibrate_secondary(
             [obj_pts_3d], [img_pts], (sec_w, sec_h), None, None
         )
         dist_coeffs = dist_coeffs.flatten()
-        undist_pts = cv.undistortPoints(
-            sec_px.reshape(-1, 1, 2), camera_matrix, dist_coeffs, P=camera_matrix
-        ).reshape(-1, 2)
-        H = compute_homography(undist_pts, world)
-        rms = _reprojection_rms(H, undist_pts, world)  # world-space cm, consistent with single
-    else:
-        H = compute_homography(sec_px, world)
-        rms = _reprojection_rms(H, sec_px, world)
+
+    # Always compute H from raw pixel coordinates.  Every caller applies H
+    # directly to raw (non-undistorted) pixels, so H must be built the same way.
+    H = compute_homography(sec_px, world)
+    rms = _reprojection_rms(H, sec_px, world)
 
     from ..camera.camutil import get_device_name
 
