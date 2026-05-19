@@ -105,6 +105,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=30,
         help="Number of frames to accumulate for tag detection (default: 30)",
     )
+    parser.add_argument(
+        "--joint",
+        action="store_true",
+        help="With exactly 2 cameras: calibrate the first as primary (ArUco corners), "
+             "then calibrate the second using the first camera's homography as reference.",
+    )
     args = parser.parse_args(argv)
 
     # Start (or connect to) the daemon
@@ -176,42 +182,118 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  [{idx}] {label}")
     print()
 
-    # Run calibration for each camera via daemon
-    from ..calibration.calibration import calibrate_single, save_calibration_to_camera_dir
+    from ..calibration.calibration import (
+        calibrate_single,
+        calibrate_secondary,
+        save_calibration_to_camera_dir,
+    )
 
-    for idx, label in camera_indices:
-        print(f"Calibrating [{idx}] {label} ...")
+    if args.joint:
+        if len(camera_indices) != 2:
+            print("--joint requires exactly 2 cameras.")
+            return 1
+
+        pri_idx, pri_label = camera_indices[0]
+        sec_idx, sec_label = camera_indices[1]
+
+        print(f"Joint calibration: [{pri_idx}] {pri_label} → primary, [{sec_idx}] {sec_label} → secondary")
+        print()
+
         try:
-            cam_name = dc.open_camera(idx)
+            # Open both cameras
+            pri_name = dc.open_camera(pri_idx)
+            sec_name = dc.open_camera(sec_idx)
 
+            # Warm up
             for _ in range(10):
-                dc.capture_frame(cam_name)
+                dc.capture_frame(pri_name)
+                dc.capture_frame(sec_name)
 
-            cap = _DaemonCapture(dc, cam_name)
+            pri_cap = _DaemonCapture(dc, pri_name)
+            sec_cap = _DaemonCapture(dc, sec_name)
 
-            cal = calibrate_single(
-                cap,
+            # Calibrate primary with ArUco corner assignment.
+            # Distortion correction is skipped for the primary: cv.calibrateCamera
+            # requires multiple views to reliably estimate distortion, and a single
+            # planar capture produces degenerate coefficients that hurt accuracy.
+            print(f"Calibrating primary [{pri_idx}] {pri_label} ...")
+            pri_cal = calibrate_single(
+                pri_cap,
                 field_width_cm=field_width,
                 field_height_cm=field_height,
                 num_frames=args.frames,
-                camera_index=idx,
+                camera_index=pri_idx,
+                correct_distortion=False,
             )
-
-            camera_dir = cameras_dir / cam_name
-            cal_file = save_calibration_to_camera_dir(cal, camera_dir, field_width, field_height)
-
-            print(f"Calibration saved to {cal_file}")
-            print(f"  Camera: {cal.device_name} {cal.resolution}, {cal.tags_used} tags, RMS {cal.rms_error:.6f}")
-            if cal.dist_coeffs is not None:
+            pri_dir = cameras_dir / pri_name
+            pri_file = save_calibration_to_camera_dir(pri_cal, pri_dir, field_width, field_height)
+            print(f"  Saved: {pri_file}")
+            print(f"  {pri_cal.device_name} {pri_cal.resolution}, {pri_cal.tags_used} tags, RMS {pri_cal.rms_error:.6f}")
+            if pri_cal.dist_coeffs is not None:
                 print(f"  Barrel distortion correction: yes")
-
-            # Notify the daemon so it hot-reloads the calibration
-            dc.reload_calibration(cam_name)
-
+            dc.reload_calibration(pri_name)
             print()
+
+            # Calibrate secondary using primary homography
+            print(f"Calibrating secondary [{sec_idx}] {sec_label} using primary homography ...")
+            sec_cal = calibrate_secondary(
+                secondary_cap=sec_cap,
+                primary_cal=pri_cal,
+                primary_cap=pri_cap,
+                num_frames=args.frames,
+                secondary_index=sec_idx,
+            )
+            sec_dir = cameras_dir / sec_name
+            sec_file = save_calibration_to_camera_dir(sec_cal, sec_dir, field_width, field_height)
+            print(f"  Saved: {sec_file}")
+            print(f"  {sec_cal.device_name} {sec_cal.resolution}, {sec_cal.tags_used} tags, RMS {sec_cal.rms_error:.6f}")
+            if sec_cal.dist_coeffs is not None:
+                print(f"  Barrel distortion correction: yes")
+            dc.reload_calibration(sec_name)
+            print()
+
         except Exception as e:
+            import traceback
             print(f"  ERROR: {e}")
-            print()
+            traceback.print_exc()
+            return 1
+
+    else:
+        # Independent single-camera calibration for each camera
+        for idx, label in camera_indices:
+            print(f"Calibrating [{idx}] {label} ...")
+            try:
+                cam_name = dc.open_camera(idx)
+
+                for _ in range(10):
+                    dc.capture_frame(cam_name)
+
+                cap = _DaemonCapture(dc, cam_name)
+
+                cal = calibrate_single(
+                    cap,
+                    field_width_cm=field_width,
+                    field_height_cm=field_height,
+                    num_frames=args.frames,
+                    camera_index=idx,
+                )
+
+                camera_dir = cameras_dir / cam_name
+                cal_file = save_calibration_to_camera_dir(cal, camera_dir, field_width, field_height)
+
+                print(f"Calibration saved to {cal_file}")
+                print(f"  Camera: {cal.device_name} {cal.resolution}, {cal.tags_used} tags, RMS {cal.rms_error:.6f}")
+                if cal.dist_coeffs is not None:
+                    print(f"  Barrel distortion correction: yes")
+
+                dc.reload_calibration(cam_name)
+
+                print()
+            except Exception as e:
+                import traceback
+                print(f"  ERROR: {e}")
+                traceback.print_exc()
+                print()
 
     print("Done.")
     return 0

@@ -387,6 +387,74 @@ def load_calibration(
 # ---------------------------------------------------------------------------
 
 
+def _assign_corners_by_position(
+    tags: dict,
+    field_width_cm: float,
+    field_height_cm: float,
+) -> tuple[list, list]:
+    """Assign ArUco boundary markers to world positions by pixel location.
+
+    Supports 4 tags (corners only) or 8 tags (corners + midpoints).
+    Tags are sorted clockwise starting from upper-left using their angle
+    from the centroid — no specific ArUco IDs required.
+
+    Returns (pixel_list, world_list) in clockwise order from upper-left.
+    Raises RuntimeError if fewer than 4 ArUco markers are detected.
+    """
+    import math
+
+    aruco_pts = [px for tid, px in tags.items() if tid < 0]
+    n = len(aruco_pts)
+    if n < 4:
+        raise RuntimeError(
+            f"Camera: only {n} ArUco corners found, need 4"
+        )
+
+    # World positions clockwise from upper-left for 4 or 8 boundary tags.
+    W, H = field_width_cm, field_height_cm
+    world_by_n = {
+        4: [(0, 0), (W, 0), (W, H), (0, H)],
+        8: [(0, 0), (W/2, 0), (W, 0), (W, H/2),
+            (W, H), (W/2, H), (0, H), (0, H/2)],
+    }
+    if n not in world_by_n and n > 8:
+        # More than 8: use the 8 most extreme (corners + midpoints via diagonals)
+        ul = min(aruco_pts, key=lambda p:  p[0] + p[1])
+        lr = max(aruco_pts, key=lambda p:  p[0] + p[1])
+        ur = max(aruco_pts, key=lambda p:  p[0] - p[1])
+        ll = min(aruco_pts, key=lambda p:  p[0] - p[1])
+        top_mid  = min(aruco_pts, key=lambda p: p[1])   # min y → topmost
+        bot_mid  = max(aruco_pts, key=lambda p: p[1])   # max y → bottommost
+        left_mid = min(aruco_pts, key=lambda p: p[0])   # min x → leftmost
+        rgt_mid  = max(aruco_pts, key=lambda p: p[0])   # max x → rightmost
+        aruco_pts = [ul, ur, lr, ll, top_mid, bot_mid, left_mid, rgt_mid]
+        n = 8
+    elif n not in world_by_n:
+        # 5, 6, 7: fall back to using the 4 extreme corners
+        ul = min(aruco_pts, key=lambda p:  p[0] + p[1])
+        lr = max(aruco_pts, key=lambda p:  p[0] + p[1])
+        ur = max(aruco_pts, key=lambda p:  p[0] - p[1])
+        ll = min(aruco_pts, key=lambda p:  p[0] - p[1])
+        aruco_pts = [ul, ur, lr, ll]
+        n = 4
+
+    world_positions = world_by_n[n]
+
+    # Sort pixels clockwise from upper-left using angle from centroid.
+    # atan2(py-cy, px-cx) gives clockwise order in image coords (y-down),
+    # but can start at any angle.  After sorting, rotate the list so the
+    # upper-left point (min px+py) is first.
+    cx = sum(p[0] for p in aruco_pts) / n
+    cy = sum(p[1] for p in aruco_pts) / n
+    sorted_pts = sorted(aruco_pts, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+
+    # Find upper-left: minimum (px + py) puts us closest to the image origin.
+    ul_idx = min(range(n), key=lambda i: sorted_pts[i][0] + sorted_pts[i][1])
+    sorted_pts = sorted_pts[ul_idx:] + sorted_pts[:ul_idx]
+
+    return sorted_pts, world_positions
+
+
 def _reprojection_rms(
     H: np.ndarray, pixel_pts: np.ndarray, world_pts: np.ndarray
 ) -> float:
@@ -465,30 +533,15 @@ def calibrate_single(
     """
     from .homography import compute_homography, detect_all_tags
 
-    corner_world = {
-        -1: (0.0, 0.0),
-        -2: (field_width_cm, 0.0),
-        -3: (0.0, field_height_cm),
-        -4: (field_width_cm, field_height_cm),
-    }
-
     tags = detect_all_tags(cap, num_frames)
 
     cam_w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
     cam_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
 
-    # Homography from ArUco corners
-    corner_pixels = []
-    corner_worlds = []
-    for neg_id, world_xy in corner_world.items():
-        if neg_id in tags:
-            corner_pixels.append(tags[neg_id])
-            corner_worlds.append(world_xy)
-
-    if len(corner_pixels) < 4:
-        raise RuntimeError(
-            f"Camera: only {len(corner_pixels)} ArUco corners found, need 4"
-        )
+    # Assign corners by pixel position (any 4 ArUco IDs accepted)
+    corner_pixels, corner_worlds = _assign_corners_by_position(
+        tags, field_width_cm, field_height_cm
+    )
 
     pixel_pts = np.array(corner_pixels, dtype=np.float32)
     world_pts = np.array(corner_worlds, dtype=np.float32)
@@ -511,6 +564,7 @@ def calibrate_single(
     # Optionally correct barrel distortion
     camera_matrix = None
     dist_coeffs = None
+    pts_for_rms = all_pixel
 
     if correct_distortion and n_pts >= 6:
         obj_pts_3d = np.zeros((n_pts, 1, 3), dtype=np.float32)
@@ -526,17 +580,125 @@ def calibrate_single(
             all_pixel.reshape(-1, 1, 2), camera_matrix, dist_coeffs, P=camera_matrix
         ).reshape(-1, 2)
         H = compute_homography(undist_pts, all_world)
+        pts_for_rms = undist_pts  # RMS must use same (undistorted) points as H
     elif n_pts > 4:
         # Recompute with all points for better accuracy
         H = compute_homography(all_pixel, all_world)
 
-    rms = _reprojection_rms(H, all_pixel, all_world)
+    rms = _reprojection_rms(H, pts_for_rms, all_world)
 
     from ..camera.camutil import get_device_name
 
     return CameraCalibration(
         device_name=get_device_name(camera_index),
         resolution=(cam_w, cam_h),
+        homography=H,
+        camera_matrix=camera_matrix,
+        dist_coeffs=dist_coeffs,
+        tags_used=n_pts,
+        rms_error=rms,
+    )
+
+
+def calibrate_secondary(
+    secondary_cap: cv.VideoCapture,
+    primary_cal: CameraCalibration,
+    primary_cap: cv.VideoCapture,
+    num_frames: int = 30,
+    correct_distortion: bool = True,
+    secondary_index: int = 3,
+) -> CameraCalibration:
+    """Calibrate a secondary camera using a fully-calibrated primary camera.
+
+    The primary camera has already been calibrated (homography + optional
+    distortion).  Its homography is used to project the world positions of
+    any AprilTags both cameras see, giving the secondary camera a set of
+    pixel→world correspondences without needing ArUco corner markers.
+
+    Args:
+        secondary_cap: Open VideoCapture for the camera to calibrate.
+        primary_cal: Completed CameraCalibration for the primary camera.
+        primary_cap: Open VideoCapture for the primary camera (for
+            simultaneous tag detection).
+        num_frames: Frames to accumulate for tag detection.
+        correct_distortion: Attempt barrel distortion correction if ≥6
+            shared points are found.
+        secondary_index: Camera index for device name lookup.
+
+    Returns:
+        CameraCalibration for the secondary camera.
+    """
+    from .homography import compute_homography, detect_all_tags
+
+    # Detect tags on both cameras simultaneously
+    primary_tags  = detect_all_tags(primary_cap,   num_frames)
+    secondary_tags = detect_all_tags(secondary_cap, num_frames)
+
+    sec_w = int(secondary_cap.get(cv.CAP_PROP_FRAME_WIDTH))
+    sec_h = int(secondary_cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+
+    # Build world positions for all tags seen by the primary camera.
+    # Include both AprilTags (positive IDs) and ArUco corners (negative IDs)
+    # so the secondary calibration works even when there are few/no AprilTags.
+    primary_world: Dict[int, Tuple[float, float]] = {}
+    H_pri = primary_cal.homography
+    cm = primary_cal.camera_matrix
+    dc = primary_cal.dist_coeffs
+    for tid, px in primary_tags.items():
+        # Undistort the pixel point if primary has distortion calibration
+        if cm is not None and dc is not None:
+            pt = cv.undistortPoints(
+                px.reshape(1, 1, 2).astype(np.float32), cm, dc, P=cm
+            ).reshape(2)
+        else:
+            pt = px
+        vec = H_pri @ np.array([pt[0], pt[1], 1.0])
+        primary_world[tid] = (float(vec[0] / vec[2]), float(vec[1] / vec[2]))
+
+    # Find all tags visible in both cameras (ArUco corners + AprilTags)
+    sec_px_list, world_list = [], []
+    for tid, world_xy in primary_world.items():
+        if tid in secondary_tags:
+            sec_px_list.append(secondary_tags[tid])
+            world_list.append(world_xy)
+
+    n_pts = len(sec_px_list)
+    if n_pts < 4:
+        raise RuntimeError(
+            f"Secondary camera: only {n_pts} shared tags found (need ≥4). "
+            f"Primary sees {len(primary_world)} tags; secondary sees "
+            f"{len(secondary_tags)} tags."
+        )
+
+    sec_px = np.array(sec_px_list, dtype=np.float32)
+    world  = np.array(world_list,  dtype=np.float32)
+
+    camera_matrix = None
+    dist_coeffs   = None
+    rms           = 0.0
+
+    if correct_distortion and n_pts >= 6:
+        obj_pts_3d = np.zeros((n_pts, 1, 3), dtype=np.float32)
+        obj_pts_3d[:, 0, :2] = world
+        img_pts = sec_px.reshape(n_pts, 1, 2)
+        _cv_rms, camera_matrix, dist_coeffs, _rv, _tv = cv.calibrateCamera(
+            [obj_pts_3d], [img_pts], (sec_w, sec_h), None, None
+        )
+        dist_coeffs = dist_coeffs.flatten()
+        undist_pts = cv.undistortPoints(
+            sec_px.reshape(-1, 1, 2), camera_matrix, dist_coeffs, P=camera_matrix
+        ).reshape(-1, 2)
+        H = compute_homography(undist_pts, world)
+        rms = _reprojection_rms(H, undist_pts, world)  # world-space cm, consistent with single
+    else:
+        H = compute_homography(sec_px, world)
+        rms = _reprojection_rms(H, sec_px, world)
+
+    from ..camera.camutil import get_device_name
+
+    return CameraCalibration(
+        device_name=get_device_name(secondary_index),
+        resolution=(sec_w, sec_h),
         homography=H,
         camera_matrix=camera_matrix,
         dist_coeffs=dist_coeffs,
@@ -576,14 +738,6 @@ def calibrate_joint(
     """
     from .homography import compute_homography, detect_all_tags
 
-    # Update corner world positions with actual field dimensions
-    corner_world = {
-        -1: (0.0, 0.0),
-        -2: (field_width_cm, 0.0),
-        -3: (0.0, field_height_cm),
-        -4: (field_width_cm, field_height_cm),
-    }
-
     # Step 1: Detect tags on both cameras
     bw_tags = detect_all_tags(bw_cap, num_frames)
     color_tags = detect_all_tags(color_cap, num_frames)
@@ -593,25 +747,30 @@ def calibrate_joint(
     color_w = int(color_cap.get(cv.CAP_PROP_FRAME_WIDTH))
     color_h = int(color_cap.get(cv.CAP_PROP_FRAME_HEIGHT))
 
-    # Step 2: B&W camera homography from ArUco corners
-    bw_corner_pixels = []
-    bw_corner_world = []
-    for neg_id, world_xy in corner_world.items():
-        if neg_id in bw_tags:
-            bw_corner_pixels.append(bw_tags[neg_id])
-            bw_corner_world.append(world_xy)
-
-    if len(bw_corner_pixels) < 4:
-        raise RuntimeError(
-            f"B&W camera: only {len(bw_corner_pixels)} ArUco corners found, need 4"
-        )
+    # Step 2: B&W camera homography — assign corners by pixel position
+    bw_corner_pixels, bw_corner_world = _assign_corners_by_position(
+        bw_tags, field_width_cm, field_height_cm
+    )
 
     bw_pixel_pts = np.array(bw_corner_pixels, dtype=np.float32)
     bw_world_pts = np.array(bw_corner_world, dtype=np.float32)
     bw_H = compute_homography(bw_pixel_pts, bw_world_pts)
 
-    # Step 3: Compute world positions for ALL AprilTags using B&W homography
-    tag_world_positions: Dict[int, Tuple[float, float]] = dict(corner_world)
+    # Step 3: Compute world positions for ALL tags using B&W homography.
+    # Seed with ArUco corners (positionally assigned) so color camera can
+    # use them as correspondence points even if no AprilTags overlap.
+    tag_world_positions: Dict[int, Tuple[float, float]] = {}
+    aruco_ids = sorted(tid for tid in bw_tags if tid < 0)
+    # Map each ArUco negative ID to its assigned world position in order
+    # (same sort order as _assign_corners_by_position: top-left, top-right,
+    #  bottom-left, bottom-right sorted by y then x)
+    by_y = sorted(((tid, bw_tags[tid]) for tid in aruco_ids), key=lambda t: t[1][1])
+    top_row = sorted(by_y[:2], key=lambda t: t[1][0])
+    bot_row = sorted(by_y[2:], key=lambda t: t[1][0])
+    corner_id_order = [top_row[0][0], top_row[1][0], bot_row[0][0], bot_row[1][0]]
+    for tid, world_xy in zip(corner_id_order, bw_corner_world):
+        tag_world_positions[tid] = world_xy
+
     for tid, px in bw_tags.items():
         if tid > 0:  # AprilTag (positive ID)
             vec = bw_H @ np.array([px[0], px[1], 1.0])

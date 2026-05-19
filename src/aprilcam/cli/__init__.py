@@ -24,6 +24,10 @@ SUBCOMMANDS = {
         "help": "List available cameras",
         "module": "aprilcam.cli.cameras_cli",
     },
+    "tags": {
+        "help": "Detect and list all ArUco and AprilTag markers on a camera",
+        "module": "aprilcam.cli.tags_cli",
+    },
     "init": {
         "help": "Configure MCP server entries for Claude Code and VS Code",
         "module": "aprilcam.cli.init_cli",
