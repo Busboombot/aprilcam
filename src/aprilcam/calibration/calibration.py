@@ -392,17 +392,44 @@ def _assign_corners_by_position(
     field_width_cm: float,
     field_height_cm: float,
 ) -> tuple[list, list]:
-    """Assign ArUco boundary markers to world positions by pixel location.
+    """Assign ArUco boundary markers to world positions.
 
-    Supports 4 tags (corners only) or 8 tags (corners + midpoints).
-    Tags are sorted clockwise starting from upper-left using their angle
-    from the centroid — no specific ArUco IDs required.
+    **ID-based assignment (preferred, multi-camera consistent):** when
+    ArUco markers 0–3 (stored as tids -1 to -4) are all present, their
+    canonical world positions are used directly.  This guarantees that
+    every camera maps the same physical marker to the same world
+    coordinate regardless of viewing angle:
 
-    Returns (pixel_list, world_list) in clockwise order from upper-left.
+        ArUco 0 (tid -1) → (0,           0          )
+        ArUco 1 (tid -2) → (field_width,  0          )
+        ArUco 2 (tid -3) → (0,           field_height)
+        ArUco 3 (tid -4) → (field_width, field_height)
+
+    **Pixel-position fallback:** when the canonical IDs are absent (e.g.
+    non-standard marker sets or fewer than 4 detected), corners are
+    sorted clockwise from upper-left by pixel coordinates — same
+    behaviour as before, but unreliable across multi-camera rigs.
+
+    Returns (pixel_list, world_list) as paired lists.
     Raises RuntimeError if fewer than 4 ArUco markers are detected.
     """
     import math
 
+    # Canonical corner tids (ArUco ID N → tid -(N+1))
+    _CANONICAL = {
+        -1: (0.0,           0.0),
+        -2: (field_width_cm, 0.0),
+        -3: (0.0,           field_height_cm),
+        -4: (field_width_cm, field_height_cm),
+    }
+
+    # Prefer ID-based assignment when all four canonical markers are visible.
+    if all(tid in tags for tid in _CANONICAL):
+        pixel_list = [tags[tid] for tid in (-1, -2, -3, -4)]
+        world_list = [_CANONICAL[tid] for tid in (-1, -2, -3, -4)]
+        return pixel_list, world_list
+
+    # --- Pixel-position fallback (any ArUco IDs) ---
     aruco_pts = [px for tid, px in tags.items() if tid < 0]
     n = len(aruco_pts)
     if n < 4:
@@ -410,7 +437,6 @@ def _assign_corners_by_position(
             f"Camera: only {n} ArUco corners found, need 4"
         )
 
-    # World positions clockwise from upper-left for 4 or 8 boundary tags.
     W, H = field_width_cm, field_height_cm
     world_by_n = {
         4: [(0, 0), (W, 0), (W, H), (0, H)],
@@ -418,19 +444,17 @@ def _assign_corners_by_position(
             (W, H), (W/2, H), (0, H), (0, H/2)],
     }
     if n not in world_by_n and n > 8:
-        # More than 8: use the 8 most extreme (corners + midpoints via diagonals)
         ul = min(aruco_pts, key=lambda p:  p[0] + p[1])
         lr = max(aruco_pts, key=lambda p:  p[0] + p[1])
         ur = max(aruco_pts, key=lambda p:  p[0] - p[1])
         ll = min(aruco_pts, key=lambda p:  p[0] - p[1])
-        top_mid  = min(aruco_pts, key=lambda p: p[1])   # min y → topmost
-        bot_mid  = max(aruco_pts, key=lambda p: p[1])   # max y → bottommost
-        left_mid = min(aruco_pts, key=lambda p: p[0])   # min x → leftmost
-        rgt_mid  = max(aruco_pts, key=lambda p: p[0])   # max x → rightmost
+        top_mid  = min(aruco_pts, key=lambda p: p[1])
+        bot_mid  = max(aruco_pts, key=lambda p: p[1])
+        left_mid = min(aruco_pts, key=lambda p: p[0])
+        rgt_mid  = max(aruco_pts, key=lambda p: p[0])
         aruco_pts = [ul, ur, lr, ll, top_mid, bot_mid, left_mid, rgt_mid]
         n = 8
     elif n not in world_by_n:
-        # 5, 6, 7: fall back to using the 4 extreme corners
         ul = min(aruco_pts, key=lambda p:  p[0] + p[1])
         lr = max(aruco_pts, key=lambda p:  p[0] + p[1])
         ur = max(aruco_pts, key=lambda p:  p[0] - p[1])
@@ -439,16 +463,9 @@ def _assign_corners_by_position(
         n = 4
 
     world_positions = world_by_n[n]
-
-    # Sort pixels clockwise from upper-left using angle from centroid.
-    # atan2(py-cy, px-cx) gives clockwise order in image coords (y-down),
-    # but can start at any angle.  After sorting, rotate the list so the
-    # upper-left point (min px+py) is first.
     cx = sum(p[0] for p in aruco_pts) / n
     cy = sum(p[1] for p in aruco_pts) / n
     sorted_pts = sorted(aruco_pts, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
-
-    # Find upper-left: minimum (px + py) puts us closest to the image origin.
     ul_idx = min(range(n), key=lambda i: sorted_pts[i][0] + sorted_pts[i][1])
     sorted_pts = sorted_pts[ul_idx:] + sorted_pts[:ul_idx]
 
