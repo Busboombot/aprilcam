@@ -199,20 +199,28 @@ def save_calibration_to_camera_dir(
     camera_dir.mkdir(parents=True, exist_ok=True)
     cal_file = camera_dir / "calibration.json"
 
-    # Preserve existing detection_fps if already set
-    existing_fps: Optional[int] = None
+    # Keys written by calibration — anything else in the existing file is
+    # user-managed (e.g. UVC settings) and must be preserved.
+    _CALIBRATION_KEYS = {
+        "device_name", "resolution", "homography", "tags_used", "rms_error",
+        "camera_matrix", "dist_coeffs", "field_width_cm", "field_height_cm",
+        "detection_fps",
+    }
+    preserved: dict = {}
     if cal_file.exists():
         try:
             existing_data = json.loads(cal_file.read_text())
+            preserved = {k: v for k, v in existing_data.items() if k not in _CALIBRATION_KEYS}
             if "detection_fps" in existing_data:
-                existing_fps = int(existing_data["detection_fps"])
+                detection_fps = int(existing_data["detection_fps"])
         except Exception:
             pass
 
     data = cal.to_dict()
     data["field_width_cm"] = field_width_cm
     data["field_height_cm"] = field_height_cm
-    data["detection_fps"] = existing_fps if existing_fps is not None else detection_fps
+    data["detection_fps"] = detection_fps
+    data.update(preserved)
     cal_file.write_text(json.dumps(data, indent=2))
     return cal_file
 
