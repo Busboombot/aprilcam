@@ -74,14 +74,14 @@ class PlayfieldBoundary:
         return out
 
     def _order_poly(self, corners_map: Dict[int, Tuple[float, float]]) -> Optional[np.ndarray]:
-        if not all(k in corners_map for k in (0, 1, 2, 3)):
+        # Canonical 4-corner layout: ArUco IDs 0-3
+        if all(k in corners_map for k in (0, 1, 2, 3)):
+            pts4 = np.array([corners_map[k] for k in (0, 1, 2, 3)], dtype=np.float32)
+        # 8-marker perimeter layout: corners are IDs 1, 3, 5, 7
+        elif all(k in corners_map for k in (1, 3, 5, 7)):
+            pts4 = np.array([corners_map[k] for k in (1, 3, 5, 7)], dtype=np.float32)
+        else:
             return None
-        pts4 = np.array([
-            corners_map[0],
-            corners_map[1],
-            corners_map[2],
-            corners_map[3],
-        ], dtype=np.float32)
         idx = np.argsort(pts4[:, 1])  # ascending by y (top first)
         top = pts4[idx[:2]]
         bot = pts4[idx[2:]]
