@@ -394,40 +394,55 @@ def _assign_corners_by_position(
 ) -> tuple[list, list]:
     """Assign ArUco boundary markers to world positions.
 
-    **ID-based assignment (preferred, multi-camera consistent):** when
-    ArUco markers 0–3 (stored as tids -1 to -4) are all present, their
-    canonical world positions are used directly.  This guarantees that
-    every camera maps the same physical marker to the same world
-    coordinate regardless of viewing angle:
+    **ID-based assignment (preferred, multi-camera consistent):** when a
+    recognised canonical ArUco layout is detected, marker IDs are used
+    directly to map pixel→world.  This guarantees every camera maps the
+    same physical marker to the same world coordinate regardless of angle.
 
-        ArUco 0 (tid -1) → (0,           0          )
-        ArUco 1 (tid -2) → (field_width,  0          )
-        ArUco 2 (tid -3) → (0,           field_height)
-        ArUco 3 (tid -4) → (field_width, field_height)
+    Supported canonical layouts (ArUco ID N → tid -(N+1)):
 
-    **Pixel-position fallback:** when the canonical IDs are absent (e.g.
-    non-standard marker sets or fewer than 4 detected), corners are
-    sorted clockwise from upper-left by pixel coordinates — same
-    behaviour as before, but unreliable across multi-camera rigs.
+    4-marker corners-only (IDs 0–3):
+        ArUco 0 (tid -1) → (0,       0)
+        ArUco 1 (tid -2) → (W,       0)
+        ArUco 2 (tid -3) → (0,       H)
+        ArUco 3 (tid -4) → (W,       H)
+
+    8-marker perimeter, clockwise from upper-left (IDs 1–8):
+        ArUco 1 (tid -2) → (0,       0)   upper-left
+        ArUco 2 (tid -3) → (W/2,     0)   top-mid
+        ArUco 3 (tid -4) → (W,       0)   upper-right
+        ArUco 4 (tid -5) → (W,       H/2) right-mid
+        ArUco 5 (tid -6) → (W,       H)   lower-right
+        ArUco 6 (tid -7) → (W/2,     H)   bottom-mid
+        ArUco 7 (tid -8) → (0,       H)   lower-left
+        ArUco 8 (tid -9) → (0,       H/2) left-mid
+
+    **Pixel-position fallback:** when no canonical layout matches, corners
+    are sorted clockwise from upper-left by pixel coordinates.
 
     Returns (pixel_list, world_list) as paired lists.
     Raises RuntimeError if fewer than 4 ArUco markers are detected.
     """
     import math
 
-    # Canonical corner tids (ArUco ID N → tid -(N+1))
-    _CANONICAL = {
-        -1: (0.0,           0.0),
-        -2: (field_width_cm, 0.0),
-        -3: (0.0,           field_height_cm),
-        -4: (field_width_cm, field_height_cm),
-    }
+    W, H = field_width_cm, field_height_cm
 
-    # Prefer ID-based assignment when all four canonical markers are visible.
-    if all(tid in tags for tid in _CANONICAL):
-        pixel_list = [tags[tid] for tid in (-1, -2, -3, -4)]
-        world_list = [_CANONICAL[tid] for tid in (-1, -2, -3, -4)]
-        return pixel_list, world_list
+    # 8-marker perimeter layout: ArUco IDs 1–8 (tids -2 to -9), clockwise from UL.
+    _CANONICAL_8_TIDS = (-2, -3, -4, -5, -6, -7, -8, -9)
+    _CANONICAL_8_WORLD = [
+        (0.0,  0.0),   (W/2,  0.0),   (W,    0.0),   (W,    H/2),
+        (W,    H),     (W/2,  H),     (0.0,  H),     (0.0,  H/2),
+    ]
+    if all(tid in tags for tid in _CANONICAL_8_TIDS):
+        pixel_list = [tags[tid] for tid in _CANONICAL_8_TIDS]
+        return pixel_list, _CANONICAL_8_WORLD
+
+    # 4-corner layout: ArUco IDs 0–3 (tids -1 to -4).
+    _CANONICAL_4_TIDS = (-1, -2, -3, -4)
+    _CANONICAL_4_WORLD = [(0.0, 0.0), (W, 0.0), (0.0, H), (W, H)]
+    if all(tid in tags for tid in _CANONICAL_4_TIDS):
+        pixel_list = [tags[tid] for tid in _CANONICAL_4_TIDS]
+        return pixel_list, _CANONICAL_4_WORLD
 
     # --- Pixel-position fallback (any ArUco IDs) ---
     aruco_pts = [px for tid, px in tags.items() if tid < 0]
