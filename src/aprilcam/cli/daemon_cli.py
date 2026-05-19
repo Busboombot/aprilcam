@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Optional
 
@@ -203,15 +204,31 @@ def _cmd_restart(
     tcp_port: Optional[int] = None,
 ) -> int:
     """Stop the daemon if running, then start it."""
+    import fcntl
     import time
     _cmd_stop(config, unix_path=unix_path, tcp_port=tcp_port)
-    # Wait until the control socket disappears (daemon fully exited)
-    control_path = config.socket_dir / "control.sock"
-    deadline = time.monotonic() + 6.0
+    # Wait until the pidfile lock is released — the socket disappears early
+    # (gRPC stops accepting) but the old daemon keeps its flock while camera
+    # pipelines drain.  A new daemon launched before the lock is released
+    # immediately exits with "already running".
+    pidfile = config.daemon_pidfile
+    deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         time.sleep(0.1)
-        if not control_path.exists():
+        if not pidfile.exists():
             break
+        try:
+            fd = os.open(str(pidfile), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                break  # lock is free — old daemon has fully exited
+            except BlockingIOError:
+                pass
+            finally:
+                os.close(fd)
+        except OSError:
+            break  # pidfile gone
     return _cmd_start(
         config, verbosity=verbosity, detach=detach,
         unix_path=unix_path, tcp_port=tcp_port,
