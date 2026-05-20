@@ -522,11 +522,14 @@ def _handle_capture_frame(
 
         ret, frame = None, None
         if cap is None:
-            # Daemon-owned camera: fetch a frame via the daemon socket
+            # Daemon-owned camera: fetch a frame via gRPC
             cam_id = pf_entry.camera_id if pf_entry is not None else camera_id
-            for frame in _frames_from_daemon(cam_id, 5):
+            try:
+                client = _ensure_daemon_client()
+                frame = client.capture_frame(cam_id)
                 ret = True
-                break
+            except Exception:
+                pass
         else:
             for _attempt in range(5):
                 ret, frame = cap.read()
