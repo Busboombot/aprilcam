@@ -47,10 +47,25 @@ def _load_homography_matrix(
     if homography == "auto":
         device_name = get_device_name(camera_index)
 
-        from .calibration.calibration import load_calibration_for_camera
+        from .calibration.calibration import (
+            load_calibration_for_camera,
+            load_calibration_from_camera_dir,
+            device_name_slug,
+        )
         cal = load_calibration_for_camera(device_name, data_path)
         if cal is not None:
             return cal.homography
+
+        # Try aprilcam Config cameras_dir (new per-camera directory scheme).
+        try:
+            from .config import Config
+            cfg = Config.load()
+            cam_dir = cfg.cameras_dir / device_name_slug(device_name)
+            cal = load_calibration_from_camera_dir(cam_dir)
+            if cal is not None:
+                return cal.homography
+        except Exception:
+            pass
 
         width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))

@@ -521,11 +521,18 @@ def _handle_capture_frame(
         import time
 
         ret, frame = None, None
-        for _attempt in range(5):
-            ret, frame = cap.read()
-            if ret:
+        if cap is None:
+            # Daemon-owned camera: fetch a frame via the daemon socket
+            cam_id = pf_entry.camera_id if pf_entry is not None else camera_id
+            for frame in _frames_from_daemon(cam_id, 5):
+                ret = True
                 break
-            time.sleep(0.1)
+        else:
+            for _attempt in range(5):
+                ret, frame = cap.read()
+                if ret:
+                    break
+                time.sleep(0.1)
         if not ret:
             return {"type": "error", "error": "Failed to read frame"}
 
@@ -613,19 +620,51 @@ def _handle_create_playfield(
                 break
 
         poly = pf.get_polygon()
-        if poly is None:
-            # Detect which corners are missing
-            import cv2
 
-            missing = [0, 1, 2, 3]
-            if last_frame is not None:
-                gray = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
-                dets = detect_aruco_4x4(gray)
-                found_ids = [tid for _, tid in dets if tid in (0, 1, 2, 3)]
-                missing = [i for i in (0, 1, 2, 3) if i not in found_ids]
+        # Fallback: if tag-based detection failed, try the stored camera calibration.
+        # A calibrated camera already has a homography; project the four field corners
+        # from world space back to pixel space to build the polygon.
+        stored_cal = None
+        stored_H = None
+        stored_field_w = None
+        stored_field_h = None
+        if poly is None:
+            try:
+                from aprilcam.config import Config
+                from aprilcam.calibration.calibration import (
+                    load_calibration_from_camera_dir,
+                    device_name_slug,
+                )
+                cfg = Config.load()
+                info = _cam_info.get(camera_id, {})
+                dev_name = info.get("device_name", camera_id)
+                cam_dir = cfg.cameras_dir / device_name_slug(dev_name)
+                cal = load_calibration_from_camera_dir(cam_dir)
+                if cal is not None and cal.homography is not None:
+                    # Read field dimensions from the calibration file
+                    import json as _json
+                    cal_file = cam_dir / "calibration.json"
+                    cal_data = _json.loads(cal_file.read_text())
+                    fw = cal_data.get("field_width_cm", 101.0)
+                    fh = cal_data.get("field_height_cm", 89.0)
+                    # Invert H to project world corners → pixel corners
+                    H_inv = np.linalg.inv(cal.homography)
+                    world_corners = np.array([[0,0],[fw,0],[fw,fh],[0,fh]], dtype=np.float64)
+                    px_corners = []
+                    for wx, wy in world_corners:
+                        v = H_inv @ np.array([wx, wy, 1.0])
+                        px_corners.append([v[0]/v[2], v[1]/v[2]])
+                    poly = np.array(px_corners, dtype=np.float32)
+                    stored_cal = cal
+                    stored_H = cal.homography
+                    stored_field_w = fw
+                    stored_field_h = fh
+            except Exception:
+                pass
+
+        if poly is None:
             return {
-                "error": "Failed to detect all 4 corner markers",
-                "missing_corner_ids": missing,
+                "error": "Failed to detect corner markers and no stored calibration found",
             }
 
         # Register the playfield
@@ -640,15 +679,25 @@ def _handle_create_playfield(
             playfield_id=playfield_id,
             camera_id=camera_id,
             playfield=pf,
+            homography=stored_H,
+            field_spec=FieldSpec(stored_field_w, stored_field_h, "cm") if stored_field_w else None,
         )
+        # Inject the polygon from calibration if tag detection failed
+        if stored_cal is not None:
+            pf._poly = poly  # type: ignore[attr-defined]
         playfield_registry.register(entry)
 
         corners = poly.tolist()  # UL, UR, LR, LL
-        return {
+        calibrated = stored_H is not None
+        result = {
             "playfield_id": playfield_id,
             "corners": corners,
-            "calibrated": False,
+            "calibrated": calibrated,
         }
+        if calibrated:
+            result["field_width_cm"] = stored_field_w
+            result["field_height_cm"] = stored_field_h
+        return result
     except Exception as exc:
         return {"error": f"Unexpected error: {exc}"}
 
