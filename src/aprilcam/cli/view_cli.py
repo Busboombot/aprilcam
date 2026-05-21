@@ -18,9 +18,7 @@ _OBJ_BGR: dict[str, tuple[int, int, int]] = {
     "orange": (0,   128, 255),
     "yellow": (0,   220, 220),
     "green":  (0,   200, 0),
-    "teal":   (180, 180, 0),
-    "cyan":   (220, 220, 0),
-    "blue":   (220, 0,   0),
+    "blue":   (220, 100, 0),
     "purple": (180, 0,   180),
 }
 

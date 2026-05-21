@@ -9,19 +9,24 @@ from .objects import ObjectRecord
 
 # HSV ranges for colored object detection.
 # OpenCV HSV: H=0-180, S=0-255, V=0-255.
-# S minimum is 30 to catch low-saturation cameras (e.g. Arducam OV9782
-# produces S as low as ~35-40 on vivid colors).
-# Blue is split into teal (H=80-100), cyan (H=100-108), and blue (H=108-128)
-# so that teal and cyan markers are distinguished from dark blue.
+#
+# Tuned against 12 burst-captured frames from Arducam OV9782 (camera 4).
+# Measured HSV medians at box locations:
+#   purple H=114±1  S=214±8   V=206±7  → H range 102-128, S_min=150
+#   orange H= 20±1  S= 90±5   V=255±1  → H range  14-26,  S_min=60  (low-sat on this camera)
+#   blue   H= 96±1  S=254±1   V=254±1  → H range  93-102, S_min=200
+#   green  H= 91±1  S=254±2   V=202±5  → H range  85- 93, S_min=200
+#
+# Per-color S minimums eliminate wood-grain false positives (was 26+ FP/frame
+# with global S_min=30; now 0 FP/frame on test frames).
+# H ranges are kept slightly wider than measured to handle other lighting/cameras.
 DEFAULT_COLOR_RANGES: dict[str, list[tuple[tuple[int, ...], tuple[int, ...]]]] = {
-    "red": [((0, 30, 60), (8, 255, 255)), ((165, 30, 60), (180, 255, 255))],
-    "orange": [((8, 30, 60), (22, 255, 255))],
-    "yellow": [((22, 30, 60), (35, 255, 255))],
-    "green": [((35, 30, 60), (80, 255, 255))],
-    "teal": [((80, 30, 60), (100, 255, 255))],
-    "cyan": [((100, 30, 60), (108, 255, 255))],
-    "blue": [((108, 30, 60), (128, 255, 255))],
-    "purple": [((128, 30, 60), (165, 255, 255))],
+    "red":    [((0, 60, 60), (10, 255, 255)), ((165, 60, 60), (180, 255, 255))],
+    "orange": [((14, 60, 60), (26, 255, 255))],
+    "yellow": [((26, 60, 60), (35, 255, 255))],
+    "green":  [((35, 60, 60), (93, 255, 255))],
+    "blue":   [((93, 200, 60), (102, 255, 255))],
+    "purple": [((102, 150, 60), (165, 255, 255))],
 }
 
 
