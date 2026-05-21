@@ -277,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
     _obj_lock = threading.Lock()
     _classifier_holder: list = [None]  # lazy-init ColorClassifier
 
+    _paths_file = config.cameras_dir / cam_name / "paths.json"
+
     def _process_frame_and_tags(frame_bgr: "np.ndarray", tag_frame):
         """Apply tag overlay to frame_bgr; return (disp, status_dict, raw_tags_dicts)."""
         nonlocal boundary
@@ -312,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
                     pass
 
         display.draw_overlays(disp, tags, homography)
+
+        paths = _load_paths(_paths_file)
+        if paths:
+            display.draw_paths(disp, paths, boundary, homography)
 
         if _detect_objects.is_set():
             color_clf = _classifier_holder[0]
