@@ -1535,7 +1535,13 @@ async def open_camera(
     source: str | None = None,
     backend: str | None = None,
 ) -> list[TextContent]:
-    """Open a camera by index, name pattern, or screen capture and return a UUID handle.
+    """Open a camera by index, name pattern, or screen capture and return a camera handle.
+
+    Workflow: Start here. The returned camera_id is used by capture_frame,
+    create_playfield, start_detection, and start_live_view.
+
+    The returned camera_id is a deterministic name derived from the camera
+    (e.g. ``"arducam-ov9782-usb-camera"``), not a UUID.
 
     Args:
         index: Camera device index (default 0 if nothing else is specified).
@@ -1544,7 +1550,7 @@ async def open_camera(
         backend: OpenCV backend constant name (e.g. ``"CAP_AVFOUNDATION"``).
 
     Returns:
-        On success: ``{"camera_id": "<uuid>"}``.
+        On success: ``{"camera_id": "<camera_name>"}``.
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_open_camera(index=index, pattern=pattern, source=source, backend=backend)
@@ -1598,12 +1604,24 @@ async def create_playfield(
 ) -> list[TextContent]:
     """Create a playfield from a camera by detecting ArUco corner markers.
 
+    Workflow: open_camera → create_playfield.
+
     Reads up to *max_frames* frames from the camera, looking for four
     ArUco 4x4 corner markers (IDs 0-3). Once all four are found, the
     playfield polygon is established and a playfield_id is returned.
 
+    The returned playfield_id can be used anywhere a camera_id is accepted:
+    capture_frame, get_frame, start_detection, stream_tags, start_live_view,
+    and create_path all accept playfield_id as their source/camera argument.
+
+    Calibration is automatic if the camera has a stored calibration.json
+    (loaded from disk at playfield creation time), enabling world-coordinate
+    mapping immediately. If no stored calibration exists, the playfield is
+    created without world-coordinate support; call calibrate_playfield
+    afterward to enable pixel-to-world mapping.
+
     Args:
-        camera_id: UUID handle from ``open_camera``.
+        camera_id: Camera handle from ``open_camera``.
         max_frames: Maximum number of frames to read while searching
             for corner markers (default 30).
 
@@ -1624,6 +1642,13 @@ async def calibrate_playfield(
     units: str = "inch",
 ) -> list[TextContent]:
     """Calibrate a playfield with real-world measurements to enable pixel-to-world mapping.
+
+    Workflow: open_camera → create_playfield → calibrate_playfield.
+
+    This step is optional if a calibration.json was already stored for the
+    camera — ``create_playfield`` loads it automatically and sets
+    ``"calibrated": true`` in its response. Only call this tool when no
+    stored calibration exists and you need world-coordinate mapping.
 
     Uses the detected corner markers to compute a homography that maps
     pixel coordinates to real-world coordinates in the specified units.
@@ -1754,6 +1779,8 @@ async def deskew_image(
 ) -> list[TextContent | ImageContent]:
     """Read a static image and apply a playfield's deskew (perspective warp) transform.
 
+    Requires playfield_id from ``create_playfield`` or ``create_playfield_from_image``.
+
     Warps the image to a top-down view using the homography derived
     from the playfield's detected corner markers.
 
@@ -1841,13 +1868,16 @@ async def create_composite(
 ) -> list[TextContent]:
     """Create a multi-camera composite by computing cross-camera homography.
 
+    Workflow: open_camera (primary) + open_camera (secondary) → create_composite
+    → get_composite_frame / get_composite_tags.
+
     Maps tag detections from a secondary camera into the primary camera's
     coordinate system. If *correspondence_points* is empty, auto-detects
     shared ArUco markers between both cameras.
 
     Args:
-        primary_camera_id: UUID handle of the primary (color) camera.
-        secondary_camera_id: UUID handle of the secondary (e.g. B&W) camera.
+        primary_camera_id: Camera handle of the primary (color) camera.
+        secondary_camera_id: Camera handle of the secondary (e.g. B&W) camera.
         playfield_id: Optional playfield handle for world-coordinate mapping.
         correspondence_points: JSON string of point pairs
             ``[[px1,py1,sx1,sy1], ...]`` (primary x,y then secondary x,y).
@@ -1994,6 +2024,8 @@ async def get_composite_frame(
 ) -> list[TextContent | ImageContent]:
     """Capture the primary camera frame with secondary-camera tag detections overlaid.
 
+    Requires composite_id from ``create_composite``.
+
     Reads frames from both cameras, detects AprilTags on the secondary
     frame, maps their positions into the primary camera's coordinate
     system, and draws tag overlays on the primary frame.
@@ -2059,6 +2091,8 @@ async def get_composite_tags(
     composite_id: str,
 ) -> list[TextContent]:
     """Detect tags on the secondary camera and return positions in primary camera coordinates.
+
+    Requires composite_id from ``create_composite``.
 
     If the composite has an associated calibrated playfield, each tag
     also includes ``world_xy`` coordinates.
@@ -2135,12 +2169,18 @@ async def start_detection(
 ) -> list[TextContent]:
     """Start a persistent tag detection loop on a camera or playfield.
 
+    Prefer ``stream_tags`` over ``start_detection`` for new code — stream_tags
+    has the same effect with cleaner metadata.
+
+    After starting, poll with ``get_tags``, ``get_tag_history``, or
+    ``get_objects``. Stop with ``stop_detection``.
+
     The loop captures frames continuously, detects AprilTag/ArUco markers
     on each frame, and stores results in a 300-frame ring buffer
     (~10 seconds at 30 fps).
 
     Args:
-        source_id: A camera UUID or playfield_id to detect on.
+        source_id: A camera handle or playfield_id to detect on.
         family: AprilTag family (default ``"36h11"``).
         proc_width: Processing width in pixels; 0 means no downscale.
         detect_interval: Run detection every N frames (default 1).
@@ -2168,8 +2208,11 @@ async def start_detection(
 async def stop_detection(source_id: str) -> list[TextContent]:
     """Stop a running tag detection loop and discard its ring buffer.
 
+    This is the counterpart to ``start_detection``. If you used ``stream_tags``,
+    call ``stop_stream`` instead.
+
     Args:
-        source_id: The camera UUID or playfield_id passed to ``start_detection``.
+        source_id: The camera handle or playfield_id passed to ``start_detection``.
 
     Returns:
         On success: ``{"source_id": "<id>", "status": "stopped"}``.
@@ -2194,6 +2237,12 @@ async def stream_tags(
     wraps the same infrastructure as ``start_detection`` (AprilCam +
     DetectionLoop + RingBuffer) while recording an explicit *operations*
     pipeline for metadata.
+
+    Workflow: open_camera [→ create_playfield] → stream_tags → get_tags /
+    get_tag_history / get_objects → stop_stream.
+
+    Use ``stop_stream`` (not ``stop_detection``) to shut down a stream
+    started with this tool.
 
     Args:
         source_id: A camera handle (``cam_N``) or playfield_id to stream from.
@@ -2336,6 +2385,8 @@ async def stop_stream(source_id: str) -> list[TextContent]:
     logic as ``stop_detection``: stops the loop, releases the exclusive
     capture, and re-opens the shared camera handle.
 
+    If you used ``start_detection``, call ``stop_detection`` instead.
+
     Args:
         source_id: The source identifier passed to ``stream_tags``.
 
@@ -2381,8 +2432,12 @@ async def stop_stream(source_id: str) -> list[TextContent]:
 async def get_tags(source_id: str) -> list[TextContent]:
     """Return the latest tag detections from a running detection loop.
 
+    Requires an active detection loop (``start_detection`` or ``stream_tags``
+    must be called first).
+
     Args:
-        source_id: The camera UUID or playfield_id passed to ``start_detection``.
+        source_id: The camera handle or playfield_id passed to ``start_detection``
+            or ``stream_tags``.
 
     Returns:
         On success: ``{"source_id": "<id>", "frame": <int>, "tags": [...]}``.
@@ -2402,11 +2457,13 @@ async def pixel_to_world(
 ) -> list[TextContent]:
     """Convert one or more pixel coordinates to world coordinates (cm).
 
-    Requires the source to have a calibrated homography (i.e. ``calibrate_playfield``
-    has been run, or the camera loaded a ``calibration.json`` with a homography).
+    Requires the source to have a calibrated homography. Calibration comes
+    from ``calibrate_playfield`` or a stored calibration.json loaded
+    automatically by ``create_playfield``.
 
     Args:
-        source_id: Playfield or camera ID (the same ID used with ``start_detection``).
+        source_id: Playfield or camera ID (the same ID used with ``start_detection``
+            or ``stream_tags``).
         pixels: List of ``[x, y]`` pixel coordinates to convert.
             Example: ``[[320, 240], [100, 50]]``
 
@@ -2427,8 +2484,12 @@ async def get_tag_history(
 ) -> list[TextContent]:
     """Return recent tag detection history from a running detection loop's ring buffer.
 
+    Requires an active detection loop (``start_detection`` or ``stream_tags``
+    must be called first).
+
     Args:
-        source_id: The camera UUID or playfield_id passed to ``start_detection``.
+        source_id: The camera handle or playfield_id passed to ``start_detection``
+            or ``stream_tags``.
         num_frames: Number of most-recent frames to return (default 30,
             max 300 which is the ring buffer capacity).
 
@@ -2445,12 +2506,16 @@ async def get_tag_history(
 async def get_objects(source_id: str) -> list[TextContent]:
     """Return detected non-tag objects from a running detection loop.
 
+    Requires an active detection loop (``start_detection`` or ``stream_tags``
+    must be called first).
+
     Runs square-contour detection on the latest frame, excluding regions
     covered by known AprilTag / ArUco markers.  World coordinates are
     included when the source has a calibrated playfield homography.
 
     Args:
-        source_id: The camera UUID or playfield_id passed to ``start_detection``.
+        source_id: The camera handle or playfield_id passed to ``start_detection``
+            or ``stream_tags``.
 
     Returns:
         On success: ``{"source_id": "<id>", "objects": [...]}``.
@@ -2800,6 +2865,12 @@ async def start_live_view(
 ) -> list[TextContent]:
     """Open a live visualization window with tag detection overlays.
 
+    Agent-drawn paths created with ``create_path`` are rendered in the live
+    view window each frame.
+
+    The returned view_id is also a valid source_id for ``get_tags`` and
+    ``get_tag_history``.
+
     Spawns a subprocess that opens an OpenCV window showing the camera
     feed with the playfield deskewed to a proportional rectangle.
     Detected tags are drawn with:
@@ -2975,6 +3046,14 @@ def _handle_clear_paths(playfield_id: str) -> dict:
 async def create_path(playfield_id: str, waypoints_json: str) -> list[TextContent]:
     """Create an agent-drawn path on a playfield.
 
+    Workflow: open_camera → create_playfield → create_path.
+
+    x and y are world coordinates in cm. Requires a calibrated playfield
+    (run ``calibrate_playfield`` first, or use a camera with a stored
+    calibration.json); paths are silently invisible on uncalibrated playfields.
+
+    Paths are rendered in the live view window (``start_live_view``) each frame.
+
     Args:
         playfield_id: The playfield to attach the path to.
         waypoints_json: JSON-encoded list of waypoint dicts.  Each dict must
@@ -2982,6 +3061,13 @@ async def create_path(playfield_id: str, waypoints_json: str) -> list[TextConten
             and ``line_color``.  Colors are ``[R, G, B]`` with values 0-255.
             Valid symbols: square, filled_square, circle, filled_circle,
             triangle, filled_triangle, x, none.
+
+            Example::
+
+                [{"x": 20, "y": 15, "size_cm": 3, "symbol": "filled_circle",
+                  "symbol_color": [0, 200, 0], "line_color": [0, 200, 0]},
+                 {"x": 60, "y": 45, "size_cm": 3, "symbol": "filled_circle",
+                  "symbol_color": [0, 200, 0], "line_color": [0, 200, 0]}]
 
     Returns:
         On success: ``{"path_id": "path_NNN"}``.
@@ -2994,6 +3080,8 @@ async def create_path(playfield_id: str, waypoints_json: str) -> list[TextConten
 @server.tool()
 async def delete_path(path_id: str) -> list[TextContent]:
     """Delete a previously created path by its path_id.
+
+    Use ``list_paths`` to find path_ids for a playfield.
 
     Args:
         path_id: The path_id returned by ``create_path``.
@@ -3009,6 +3097,8 @@ async def delete_path(path_id: str) -> list[TextContent]:
 @server.tool()
 async def list_paths(playfield_id: str) -> list[TextContent]:
     """List all paths registered for a playfield.
+
+    Use this to find path_ids for ``delete_path``.
 
     Args:
         playfield_id: The playfield whose paths should be listed.
@@ -3219,6 +3309,9 @@ async def create_frame(
 ) -> list[TextContent]:
     """Capture a frame from a camera or playfield and store it in the frame registry.
 
+    Workflow: open_camera [→ create_playfield] → create_frame → process_frame
+    → get_frame_image / save_frame → release_frame.
+
     The frame is stored with three identical image slots (original, deskewed,
     processed).  If *operations* is provided, the operation pipeline runs
     immediately after capture and results are included in the response.
@@ -3331,6 +3424,8 @@ async def process_frame(
 ) -> list[TextContent]:
     """Run one or more operations on an existing frame in the registry.
 
+    Requires frame_id from ``create_frame`` or ``create_frame_from_image``.
+
     Operations execute in order on the frame's ``processed`` image slot.
     Detection operations store structured results without modifying the
     image; the ``deskew`` operation replaces the ``deskewed`` and
@@ -3383,6 +3478,8 @@ async def get_frame_image(
 ) -> list[TextContent | ImageContent]:
     """Retrieve an image from a stored frame at the specified processing stage.
 
+    Requires frame_id from ``create_frame`` or ``create_frame_from_image``.
+
     Args:
         frame_id: The frame handle returned by ``create_frame`` or
             ``create_frame_from_image``.
@@ -3431,6 +3528,8 @@ async def save_frame(
     output_dir: str,
 ) -> list[TextContent]:
     """Save all image stages and metadata for a frame to a directory.
+
+    Requires frame_id from ``create_frame`` or ``create_frame_from_image``.
 
     Creates ``original.jpg``, ``deskewed.jpg``, ``processed.jpg``, and
     ``metadata.json`` in *output_dir*.
@@ -3489,6 +3588,9 @@ async def save_frame(
 @server.tool()
 async def release_frame(frame_id: str) -> list[TextContent]:
     """Remove a frame from the registry, freeing its memory.
+
+    Releases memory for a frame_id from ``create_frame`` or
+    ``create_frame_from_image``. Call when done with a frame.
 
     Args:
         frame_id: The frame handle to release.
