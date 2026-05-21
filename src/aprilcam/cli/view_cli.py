@@ -14,12 +14,14 @@ from typing import Optional
 
 
 _OBJ_BGR: dict[str, tuple[int, int, int]] = {
-    "red":    (0,   0,   220),
-    "orange": (0,   128, 255),
-    "yellow": (0,   220, 220),
-    "green":  (0,   200, 0),
-    "blue":   (220, 100, 0),
-    "purple": (180, 0,   180),
+    "black":   (80,  80,  80),
+    "red":     (0,   0,   220),
+    "orange":  (0,   128, 255),
+    "yellow":  (0,   220, 220),
+    "green":   (0,   200, 0),
+    "blue":    (220, 100, 0),
+    "purple":  (180, 0,   180),
+    "magenta": (200, 0,   200),
 }
 
 

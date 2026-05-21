@@ -12,21 +12,26 @@ from .objects import ObjectRecord
 #
 # Tuned against 12 burst-captured frames from Arducam OV9782 (camera 4).
 # Measured HSV medians at box locations:
-#   purple H=114±1  S=214±8   V=206±7  → H range 102-128, S_min=150
-#   orange H= 20±1  S= 90±5   V=255±1  → H range  14-26,  S_min=60  (low-sat on this camera)
-#   blue   H= 96±1  S=254±1   V=254±1  → H range  93-102, S_min=200
-#   green  H= 91±1  S=254±2   V=202±5  → H range  85- 93, S_min=200
+#   black   H=105±17 S=200±51 V= 67±32 → detect by V<75 (dark), any H/S
+#   red     H=177±64 S= 73±12 V=254±11 → H=165-180 + H=0-10, S_min=60
+#   orange  H= 19± 1 S=100± 9 V=254± 5 → H=14-26, S_min=60
+#   yellow  H= 26±22 S=  2± 7 V=255±31 → near-white: S<35, V>215 (H useless when S≈0)
+#   green   H= 90± 1 S=252± 9 V=191± 5 → H=35-93, S_min=60
+#   blue    H= 97± 1 S=254± 3 V=255± 2 → H=93-102, S_min=200
+#   purple  H=114± 1 S=211±18 V=194±19 → H=102-130, S_min=150
+#   magenta H=150±40 S= 85±15 V=254±16 → H=135-165, S_min=60
 #
 # Per-color S minimums eliminate wood-grain false positives (was 26+ FP/frame
 # with global S_min=30; now 0 FP/frame on test frames).
-# H ranges are kept slightly wider than measured to handle other lighting/cameras.
 DEFAULT_COLOR_RANGES: dict[str, list[tuple[tuple[int, ...], tuple[int, ...]]]] = {
-    "red":    [((0, 60, 60), (10, 255, 255)), ((165, 60, 60), (180, 255, 255))],
-    "orange": [((14, 60, 60), (26, 255, 255))],
-    "yellow": [((26, 60, 60), (35, 255, 255))],
-    "green":  [((35, 60, 60), (93, 255, 255))],
-    "blue":   [((93, 200, 60), (102, 255, 255))],
-    "purple": [((102, 150, 60), (165, 255, 255))],
+    "black":   [((0,   0,   0),  (180, 255,  75))],
+    "red":     [((0,   60,  60), (10,  255, 255)), ((165, 60, 60), (180, 255, 255))],
+    "orange":  [((14,  60,  60), (26,  255, 255))],
+    "yellow":  [((0,   0,  215), (180,  35, 255))],
+    "green":   [((35,  60,  60), (93,  255, 255))],
+    "blue":    [((93,  200,  60), (102, 255, 255))],
+    "purple":  [((102, 150,  60), (130, 255, 255))],
+    "magenta": [((135,  60,  60), (165, 255, 255))],
 }
 
 
