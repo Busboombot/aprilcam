@@ -13,6 +13,31 @@ from pathlib import Path
 from typing import Optional
 
 
+_OBJ_BGR: dict[str, tuple[int, int, int]] = {
+    "red":    (0,   0,   220),
+    "orange": (0,   128, 255),
+    "yellow": (0,   220, 220),
+    "green":  (0,   200, 0),
+    "teal":   (180, 180, 0),
+    "cyan":   (220, 220, 0),
+    "blue":   (220, 0,   0),
+    "purple": (180, 0,   180),
+}
+
+
+def _draw_object_boxes(img: "np.ndarray", objects: list) -> None:
+    import cv2 as _cv
+    for obj in objects:
+        x, y, w, h = obj.bbox
+        bgr = _OBJ_BGR.get(obj.color, (180, 180, 180))
+        _cv.rectangle(img, (x, y), (x + w, y + h), bgr, 2)
+        label = obj.color
+        if obj.world_xy is not None:
+            label += f" ({obj.world_xy[0]:.0f},{obj.world_xy[1]:.0f})"
+        _cv.putText(img, label, (x, max(y - 4, 12)),
+                    _cv.FONT_HERSHEY_SIMPLEX, 0.45, bgr, 1, _cv.LINE_AA)
+
+
 def _tag_record_to_dict(tag_record) -> dict:
     """Convert a TagRecord Pydantic model to a legacy-format dict for display helpers.
 
@@ -247,6 +272,11 @@ def main(argv: list[str] | None = None) -> int:
     _latest_tag_frame: list = [first_tag_frame]  # mutable container for thread sharing
     _tag_lock = threading.Lock()
 
+    _detect_objects = threading.Event()
+    _latest_objects: list = [[]]
+    _obj_lock = threading.Lock()
+    _classifier_holder: list = [None]  # lazy-init ColorClassifier
+
     def _process_frame_and_tags(frame_bgr: "np.ndarray", tag_frame):
         """Apply tag overlay to frame_bgr; return (disp, status_dict, raw_tags_dicts)."""
         nonlocal boundary
@@ -282,6 +312,36 @@ def main(argv: list[str] | None = None) -> int:
                     pass
 
         display.draw_overlays(disp, tags, homography)
+
+        if _detect_objects.is_set():
+            color_clf = _classifier_holder[0]
+            if color_clf is not None:
+                # Build containment polygon from the disp frame dimensions.
+                # boundary._poly is in original camera coords which may not match
+                # the deskewed disp frame, so we use the frame bounds instead.
+                dh_f, dw_f = disp.shape[:2]
+                INSET = 60
+                shrunk_poly = np.array([
+                    [INSET, INSET],
+                    [dw_f - INSET, INSET],
+                    [dw_f - INSET, dh_f - INSET],
+                    [INSET, dh_f - INSET],
+                ], dtype=np.float32).reshape(-1, 1, 2)
+
+                raw_objs = color_clf.classify(disp, homography=homography)
+                detected = []
+                for obj in raw_objs:
+                    cx, cy = obj.center_px
+                    if cv.pointPolygonTest(shrunk_poly, (float(cx), float(cy)), False) < 0:
+                        continue
+                    x, y, bw, bh = obj.bbox
+                    aspect = max(bw, bh) / max(min(bw, bh), 1)
+                    if aspect > 2.0 or min(bw, bh) < 15 or max(bw, bh) > 200:
+                        continue
+                    detected.append(obj)
+                _draw_object_boxes(disp, detected)
+                with _obj_lock:
+                    _latest_objects[0] = detected
 
         fps_val = tag_frame.fps if tag_frame is not None else 0.0
         calibrated = homography is not None
@@ -432,6 +492,49 @@ def main(argv: list[str] | None = None) -> int:
     stat_sb.pack(side=tk.RIGHT, fill=tk.Y)
     stat_text.pack(fill=tk.BOTH, expand=True)
 
+    # ── Object detection toggle + panel ──────────────────────────────────
+    OBJ_FG = "#44ff88"
+
+    def _toggle_objects():
+        if _detect_objects.is_set():
+            _detect_objects.clear()
+            btn_objects.config(text="Objects: Off", bg="#444444", fg="#aaaaaa")
+            with _obj_lock:
+                _latest_objects[0] = []
+        else:
+            if _classifier_holder[0] is None:
+                from aprilcam.vision.color_classifier import ColorClassifier
+                _classifier_holder[0] = ColorClassifier(min_area=400, max_area=8000)
+            _detect_objects.set()
+            btn_objects.config(text="Objects: On", bg="#226622", fg=OBJ_FG)
+
+    btn_objects = tk.Button(
+        right_frame, text="Objects: Off",
+        font=("Helvetica", 10, "bold"),
+        bg="#444444", fg="#aaaaaa",
+        activebackground="#333333", activeforeground="#dddddd",
+        relief=tk.FLAT, padx=8, pady=4,
+        command=_toggle_objects,
+    )
+    btn_objects.pack(fill=tk.X, padx=8, pady=(4, 2))
+
+    obj_outer = tk.LabelFrame(
+        right_frame, text="Objects",
+        font=("Helvetica", 10, "bold"),
+        fg=OBJ_FG, bg=PANEL_BG, padx=4, pady=4,
+    )
+    obj_outer.pack(fill=tk.X, padx=8, pady=(2, 8))
+
+    obj_text = tk.Text(
+        obj_outer, font=mono, bg="#111", fg=OBJ_FG,
+        state=tk.DISABLED, height=6, width=44,
+        relief=tk.FLAT, padx=4, pady=2, wrap=tk.NONE,
+    )
+    obj_sb = tk.Scrollbar(obj_outer, command=obj_text.yview)
+    obj_text.configure(yscrollcommand=obj_sb.set)
+    obj_sb.pack(side=tk.RIGHT, fill=tk.Y)
+    obj_text.pack(fill=tk.BOTH, expand=True)
+
     # ── Mobility tracking (main-thread only) ──────────────────────────────
     _vel_counts: dict[int, int] = {}
     _perm_mobile: set[int] = set()
@@ -513,6 +616,22 @@ def main(argv: list[str] | None = None) -> int:
         var_deskew.set("On" if status_dict.get("deskew_mode") else "Off")
 
         _update_tag_panel(raw_tags)
+
+        with _obj_lock:
+            current_objects = list(_latest_objects[0])
+        if current_objects:
+            _OBJ_HDR = f"{'Color':<8} {'PxX':>4} {'PxY':>4} {'WldX':>6} {'WldY':>6}\n" + "-" * 34 + "\n"
+            rows = []
+            for obj in current_objects:
+                cx, cy = obj.center_px
+                wx = f"{obj.world_xy[0]:6.1f}" if obj.world_xy else "    --"
+                wy = f"{obj.world_xy[1]:6.1f}" if obj.world_xy else "    --"
+                rows.append(f"{obj.color:<8} {int(cx):>4} {int(cy):>4} {wx} {wy}\n")
+            _set_text(obj_text, _OBJ_HDR + "".join(rows))
+        elif _detect_objects.is_set():
+            _set_text(obj_text, "(none detected)\n")
+        else:
+            _set_text(obj_text, "(detection off)\n")
 
         root.after(33, _poll)
 

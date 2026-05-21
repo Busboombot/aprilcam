@@ -7,18 +7,21 @@ import numpy as np
 
 from .objects import ObjectRecord
 
-# HSV ranges tuned from Brio 501 camera under overhead lighting.
+# HSV ranges for colored object detection.
 # OpenCV HSV: H=0-180, S=0-255, V=0-255.
-# Ranges are non-overlapping in H to avoid misclassification.
-# S minimum is set to 30 to catch washed-out cubes (Brio 501 produces
-# low-saturation colors on dark playfields, with S as low as ~35-40).
+# S minimum is 30 to catch low-saturation cameras (e.g. Arducam OV9782
+# produces S as low as ~35-40 on vivid colors).
+# Blue is split into teal (H=80-100), cyan (H=100-108), and blue (H=108-128)
+# so that teal and cyan markers are distinguished from dark blue.
 DEFAULT_COLOR_RANGES: dict[str, list[tuple[tuple[int, ...], tuple[int, ...]]]] = {
-    "red": [((0, 30, 50), (8, 255, 255)), ((165, 30, 50), (180, 255, 255))],
-    "orange": [((8, 30, 50), (22, 255, 255))],
-    "yellow": [((22, 30, 50), (35, 255, 255))],
-    "green": [((35, 30, 50), (85, 255, 255))],
-    "blue": [((85, 30, 50), (125, 255, 255))],
-    "purple": [((125, 30, 50), (165, 255, 255))],
+    "red": [((0, 30, 60), (8, 255, 255)), ((165, 30, 60), (180, 255, 255))],
+    "orange": [((8, 30, 60), (22, 255, 255))],
+    "yellow": [((22, 30, 60), (35, 255, 255))],
+    "green": [((35, 30, 60), (80, 255, 255))],
+    "teal": [((80, 30, 60), (100, 255, 255))],
+    "cyan": [((100, 30, 60), (108, 255, 255))],
+    "blue": [((108, 30, 60), (128, 255, 255))],
+    "purple": [((128, 30, 60), (165, 255, 255))],
 }
 
 

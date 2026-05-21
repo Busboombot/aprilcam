@@ -143,6 +143,34 @@ class PlayfieldEntry:
     homography: Optional[np.ndarray] = None
 
 
+class DaemonCapture:
+    """Wraps a DaemonControl client as a cv2.VideoCapture-compatible source.
+
+    The DetectionLoop calls ``source.read()`` expecting ``(bool, ndarray)``.
+    Daemon-owned cameras are not backed by a real VideoCapture object in the
+    registry, so this adapter bridges the gap.
+    """
+
+    def __init__(self, client: "DaemonControl", cam_name: str) -> None:
+        self._client = client
+        self._cam_name = cam_name
+
+    def read(self):
+        try:
+            frame = self._client.capture_frame(self._cam_name)
+            if frame is None:
+                return False, None
+            return True, frame
+        except Exception:
+            return False, None
+
+    def isOpened(self) -> bool:  # noqa: N802
+        return True
+
+    def release(self) -> None:
+        pass
+
+
 class PlayfieldRegistry:
     """Manages playfield entries keyed by playfield_id."""
 
@@ -894,6 +922,15 @@ def _handle_start_detection(
                     except Exception:
                         pass
 
+        # Daemon-owned cameras have None in the registry; wrap with DaemonCapture
+        # so DetectionLoop can call .read() via gRPC.
+        if cap is None and camera_id is not None:
+            try:
+                daemon_client = _ensure_daemon_client()
+                cap = DaemonCapture(daemon_client, camera_id)
+            except Exception as exc:
+                return {"error": f"Cannot reach daemon for camera '{camera_id}': {exc}"}
+
         cam = AprilCam(
             index=camera_index if camera_index is not None else 0,
             backend=None,
@@ -1035,6 +1072,39 @@ def _handle_get_tags(source_id: str) -> dict:
         return {"error": f"Unexpected error: {exc}"}
 
 
+def _handle_pixel_to_world(
+    source_id: str,
+    pixels: list[list[float]],
+) -> dict:
+    """Convert pixel coordinates to world coordinates using the source homography."""
+    try:
+        homography = None
+        try:
+            pf_entry = playfield_registry.get(source_id)
+            homography = pf_entry.homography
+        except KeyError:
+            pass
+
+        if homography is None:
+            return {"error": f"No calibrated homography for '{source_id}'"}
+
+        H = np.array(homography, dtype=np.float64).reshape(3, 3)
+        world_points = []
+        for px in pixels:
+            if len(px) < 2:
+                world_points.append(None)
+                continue
+            vec = H @ np.array([float(px[0]), float(px[1]), 1.0])
+            if abs(vec[2]) < 1e-9:
+                world_points.append(None)
+            else:
+                world_points.append([float(vec[0] / vec[2]), float(vec[1] / vec[2])])
+
+        return {"source_id": source_id, "world_points": world_points}
+    except Exception as exc:
+        return {"error": f"Unexpected error: {exc}"}
+
+
 def _handle_get_tag_history(
     source_id: str,
     num_frames: int = 30,
@@ -1055,7 +1125,8 @@ def _handle_get_objects(source_id: str) -> dict:
     """Core logic for get_objects — returns detected non-tag objects or error."""
     try:
         import cv2 as cv
-        from aprilcam.vision.objects import SquareDetector
+        import math as _math
+        from aprilcam.vision.color_classifier import ColorClassifier
 
         det_entry = detection_registry.get(source_id)
         if det_entry is None:
@@ -1065,50 +1136,43 @@ def _handle_get_objects(source_id: str) -> dict:
         if frame is None:
             return {"error": "No frames captured yet"}
 
-        detector = SquareDetector()
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-        # Get tag corners for exclusion from the latest ring buffer entry.
-        latest = det_entry.ring_buffer.get_latest()
-        tag_corners = []
-        if latest:
-            for tag in latest.tags:
-                tag_corners.append(
-                    np.array(tag.corners_px, dtype=np.float32)
-                )
-
-        # Get homography if this source is a playfield.
+        # Get homography and playfield polygon if this source is a playfield.
         homography = None
+        pf_poly = None
         try:
             pf_entry = playfield_registry.get(source_id)
             if pf_entry.homography is not None:
                 homography = pf_entry.homography
-        except KeyError:
-            pass
-
-        # Get playfield polygon for containment filtering.
-        pf_poly = None
-        try:
-            pf_entry = playfield_registry.get(source_id)
             pf_poly = pf_entry.playfield.get_polygon()
         except (KeyError, AttributeError):
             pass
 
-        objects = detector.detect(
-            gray, homography=homography, tag_corners=tag_corners,
-            playfield_polygon=pf_poly,
-        )
+        # Detect colored objects via HSV classification.
+        classifier = ColorClassifier(min_area=600, max_area=30000)
+        raw = classifier.classify(frame, homography=homography)
 
-        # Color classify each object using the color frame
-        from aprilcam.vision.color_classifier import ColorClassifier
-        from dataclasses import replace as _replace
-        classifier = ColorClassifier()
-        colored = []
-        for obj in objects:
+        # Filter: inside playfield polygon (inset by 60 px) + roughly square shape.
+        objects = []
+        shrunk_poly = None
+        if pf_poly is not None:
+            pts = pf_poly.reshape(-1, 2).astype(np.float32)
+            center = pts.mean(axis=0)
+            dirs = pts - center
+            lens = np.linalg.norm(dirs, axis=1, keepdims=True)
+            lens = np.maximum(lens, 1e-6)
+            shrunk = pts - dirs / lens * 60
+            shrunk_poly = shrunk.reshape(-1, 1, 2).astype(np.float32)
+
+        for obj in raw:
             cx, cy = obj.center_px
-            c = classifier.classify_at_point(frame, cx, cy)
-            colored.append(_replace(obj, color=c))
-        objects = colored
+            if shrunk_poly is not None:
+                if cv.pointPolygonTest(shrunk_poly, (float(cx), float(cy)), False) < 0:
+                    continue
+            x, y, bw, bh = obj.bbox
+            aspect = max(bw, bh) / max(min(bw, bh), 1)
+            if aspect > 2.0 or min(bw, bh) < 15:
+                continue
+            objects.append(obj)
 
         return {
             "source_id": source_id,
@@ -2215,6 +2279,16 @@ async def stream_tags(
                     except Exception:
                         pass
 
+        # Daemon-owned cameras have None in the registry; wrap with DaemonCapture
+        if cap is None and camera_id is not None:
+            try:
+                daemon_client = _ensure_daemon_client()
+                cap = DaemonCapture(daemon_client, camera_id)
+            except Exception as exc:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"Cannot reach daemon for camera '{camera_id}': {exc}"}
+                ))]
+
         cam = AprilCam(
             index=camera_index if camera_index is not None else 0,
             backend=None,
@@ -2318,6 +2392,31 @@ async def get_tags(source_id: str) -> list[TextContent]:
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_tags(source_id)
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+@server.tool()
+async def pixel_to_world(
+    source_id: str,
+    pixels: list,
+) -> list[TextContent]:
+    """Convert one or more pixel coordinates to world coordinates (cm).
+
+    Requires the source to have a calibrated homography (i.e. ``calibrate_playfield``
+    has been run, or the camera loaded a ``calibration.json`` with a homography).
+
+    Args:
+        source_id: Playfield or camera ID (the same ID used with ``start_detection``).
+        pixels: List of ``[x, y]`` pixel coordinates to convert.
+            Example: ``[[320, 240], [100, 50]]``
+
+    Returns:
+        ``{"source_id": "<id>", "world_points": [[x_cm, y_cm], ...]}``
+        Each entry corresponds to the input pixel at the same index.
+        Returns ``null`` for any point that could not be projected.
+        On error: ``{"error": "<message>"}``.
+    """
+    result = _handle_pixel_to_world(source_id, pixels)
     return [TextContent(type="text", text=json.dumps(result))]
 
 

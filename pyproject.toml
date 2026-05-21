@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aprilcam"
-version = "0.20260519.10"
+version = "0.20260520.1"
 description = "MCP server and CLI for camera management, AprilTag/ArUco detection, playfield homography, and image processing"
 authors = [
   { name = "Eric Busboom" }
@@ -48,6 +48,10 @@ dependencies = [
   "protobuf>=4.25",
   "zeroconf>=0.131",
   "pydantic>=2.0",
+  "ipykernel>=7.2.0",
+  "ipython>=8.39.0",
+  "jupyter>=1.1.1",
+  "anthropic>=0.104.0",
 ]
 
 [project.urls]
@@ -77,6 +81,12 @@ asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
+    "anthropic>=0.104.0",
+    "ipykernel>=7.2.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.9",
+    "nbconvert>=7.17.1",
+    "pandas>=2.3.3",
     "pytest>=9.0.2",
     "pytest-asyncio>=0.24",
 ]
