@@ -2432,18 +2432,29 @@ async def stop_stream(source_id: str) -> list[TextContent]:
 async def get_tags(source_id: str) -> list[TextContent]:
     """Return the latest tag detections from a running detection loop.
 
-    Requires an active detection loop (``start_detection`` or ``stream_tags``
-    must be called first).
+    **Primary tool for tag world coordinates.** When the source is a
+    calibrated playfield, each tag record already includes ``world_xy``
+    (x, y in cm) — no separate conversion step needed. Use
+    ``pixel_to_world`` only when you have raw pixel coordinates from
+    somewhere else.
+
+    Requires an active detection loop. Recommended workflow:
+    ``open_camera`` → ``create_playfield`` → ``stream_tags`` →
+    ``get_tags`` (poll as needed) → ``stop_stream``.
 
     Args:
-        source_id: The camera handle or playfield_id passed to ``start_detection``
-            or ``stream_tags``.
+        source_id: The playfield_id (or camera handle) passed to ``stream_tags``.
 
     Returns:
         On success: ``{"source_id": "<id>", "frame": <int>, "tags": [...]}``.
-        Each tag includes ``id``, pixel position, orientation, and velocity.
-        Returns ``{"frame": null, "tags": []}`` if no frames have been
-        processed yet.
+        Each tag dict contains:
+          - ``id``: marker ID (int)
+          - ``center_px``: [x, y] pixel position
+          - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated
+          - ``orientation_yaw``: heading in radians
+          - ``vel_px``: [vx, vy] velocity in pixels/s
+          - ``in_playfield``: bool
+        Returns ``{"frame": null, "tags": []}`` if no frames processed yet.
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_tags(source_id)
