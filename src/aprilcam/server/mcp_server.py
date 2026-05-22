@@ -1611,14 +1611,17 @@ async def create_playfield(
     playfield polygon is established and a playfield_id is returned.
 
     The returned playfield_id can be used anywhere a camera_id is accepted:
-    capture_frame, get_frame, start_detection, stream_tags, start_live_view,
-    and create_path all accept playfield_id as their source/camera argument.
+    capture_frame, get_frame, stream_tags, start_live_view, and create_path
+    all accept playfield_id as their source/camera argument.
 
-    Calibration is automatic if the camera has a stored calibration.json
-    (loaded from disk at playfield creation time), enabling world-coordinate
-    mapping immediately. If no stored calibration exists, the playfield is
-    created without world-coordinate support; call calibrate_playfield
-    afterward to enable pixel-to-world mapping.
+    Calibration behavior:
+    - If a stored ``calibration.json`` exists for the camera, it is loaded
+      automatically and the response contains ``"calibrated": true``.
+      Subsequent ``get_tags`` calls will include ``world_xy`` (x, y in cm)
+      for every detected tag.
+    - If no stored calibration exists, ``"calibrated": false`` and
+      ``world_xy`` will be null in all tag records until you call
+      ``calibrate_playfield`` to provide real-world measurements.
 
     Args:
         camera_id: Camera handle from ``open_camera``.
@@ -1626,7 +1629,9 @@ async def create_playfield(
             for corner markers (default 30).
 
     Returns:
-        On success: ``{"playfield_id": "<id>", "corners": [[x,y],...], "calibrated": false}``.
+        On success: ``{"playfield_id": "<id>", "corners": [[x,y],...],
+        "calibrated": <bool>}``. When ``calibrated`` is true, also includes
+        ``"field_width_cm"`` and ``"field_height_cm"``.
         On partial detection: ``{"error": "...", "missing_corner_ids": [...]}``.
         On error: ``{"error": "<message>"}``.
     """
@@ -2028,7 +2033,9 @@ async def get_composite_frame(
 
     Reads frames from both cameras, detects AprilTags on the secondary
     frame, maps their positions into the primary camera's coordinate
-    system, and draws tag overlays on the primary frame.
+    system, and draws tag overlays (polygon outline + ID label) on the
+    primary frame. Returns only the annotated image; use
+    ``get_composite_tags`` to get structured tag records with field values.
 
     Args:
         composite_id: The composite handle from ``create_composite``.
@@ -2102,7 +2109,12 @@ async def get_composite_tags(
 
     Returns:
         On success: ``{"composite_id": "<id>", "tags": [...]}``. Each tag
-        has ``id``, ``center_px``, ``corners_px``, and optionally ``world_xy``.
+        dict contains:
+          - ``id``: marker ID (int)
+          - ``center_px``: [x, y] position in primary camera coordinates
+          - ``corners_px``: list of 4 [x, y] corner points in primary camera coordinates
+          - ``world_xy``: [x_cm, y_cm] world position (present only when the
+            composite has an associated calibrated playfield; null otherwise)
         On error: ``{"error": "<message>"}``.
     """
     try:
@@ -2169,8 +2181,9 @@ async def start_detection(
 ) -> list[TextContent]:
     """Start a persistent tag detection loop on a camera or playfield.
 
-    Prefer ``stream_tags`` over ``start_detection`` for new code — stream_tags
-    has the same effect with cleaner metadata.
+    Prefer ``stream_tags`` over ``start_detection`` for new code.
+    ``stream_tags`` has the same effect and records an explicit operations
+    pipeline in its metadata. Use ``start_detection`` only for legacy code.
 
     After starting, poll with ``get_tags``, ``get_tag_history``, or
     ``get_objects``. Stop with ``stop_detection``.
@@ -2439,21 +2452,27 @@ async def get_tags(source_id: str) -> list[TextContent]:
     somewhere else.
 
     Requires an active detection loop. Recommended workflow:
-    ``open_camera`` → ``create_playfield`` → ``stream_tags`` →
+    ``open_camera`` → ``create_playfield`` → ``stream_tags`` (preferred) →
     ``get_tags`` (poll as needed) → ``stop_stream``.
 
+    Use ``start_detection`` only for legacy code; ``stream_tags`` is preferred.
+
     Args:
-        source_id: The playfield_id (or camera handle) passed to ``stream_tags``.
+        source_id: The playfield_id (or camera handle) passed to ``stream_tags``
+            (or ``start_detection``).
 
     Returns:
         On success: ``{"source_id": "<id>", "frame": <int>, "tags": [...]}``.
         Each tag dict contains:
           - ``id``: marker ID (int)
           - ``center_px``: [x, y] pixel position
+          - ``corners_px``: list of 4 [x, y] corner points
           - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated
           - ``orientation_yaw``: heading in radians
-          - ``vel_px``: [vx, vy] velocity in pixels/s
-          - ``in_playfield``: bool
+          - ``vel_px``: [vx, vy] velocity in pixels/s, or null if not yet computed
+          - ``in_playfield``: bool, true if the tag center is inside the playfield polygon
+          - ``gripper_world_xy``: [x_cm, y_cm] (only present when ``robot_tag_id``
+            matches this tag's id and the playfield is calibrated)
         Returns ``{"frame": null, "tags": []}`` if no frames processed yet.
         On error: ``{"error": "<message>"}``.
     """
@@ -2468,13 +2487,18 @@ async def pixel_to_world(
 ) -> list[TextContent]:
     """Convert one or more pixel coordinates to world coordinates (cm).
 
+    Use this tool only for ad-hoc pixel-to-world conversion of arbitrary
+    screen positions. If you want world coordinates for detected tags, use
+    ``get_tags`` directly — it already includes ``world_xy`` for each tag
+    when the playfield is calibrated.
+
     Requires the source to have a calibrated homography. Calibration comes
     from ``calibrate_playfield`` or a stored calibration.json loaded
     automatically by ``create_playfield``.
 
     Args:
-        source_id: Playfield or camera ID (the same ID used with ``start_detection``
-            or ``stream_tags``).
+        source_id: Playfield or camera ID (the same ID used with ``stream_tags``
+            or ``start_detection``).
         pixels: List of ``[x, y]`` pixel coordinates to convert.
             Example: ``[[320, 240], [100, 50]]``
 
@@ -2495,18 +2519,31 @@ async def get_tag_history(
 ) -> list[TextContent]:
     """Return recent tag detection history from a running detection loop's ring buffer.
 
-    Requires an active detection loop (``start_detection`` or ``stream_tags``
-    must be called first).
+    Requires an active detection loop. Recommended workflow:
+    ``open_camera`` → ``create_playfield`` → ``stream_tags`` (preferred) →
+    ``get_tag_history`` → ``stop_stream``.
+
+    Use ``start_detection`` only for legacy code; ``stream_tags`` is preferred.
 
     Args:
-        source_id: The camera handle or playfield_id passed to ``start_detection``
-            or ``stream_tags``.
+        source_id: The camera handle or playfield_id passed to ``stream_tags``
+            (or ``start_detection``).
         num_frames: Number of most-recent frames to return (default 30,
             max 300 which is the ring buffer capacity).
 
     Returns:
         On success: ``{"source_id": "<id>", "frames": [...]}``. Each frame
-        record includes a frame number, timestamp, and per-tag detections.
+        record contains:
+          - ``frame``: frame counter (int)
+          - ``timestamp``: capture time as a float (seconds since epoch)
+          - ``tags``: list of tag dicts, each containing:
+              - ``id``: marker ID (int)
+              - ``center_px``: [x, y] pixel position
+              - ``corners_px``: list of 4 [x, y] corner points
+              - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated
+              - ``orientation_yaw``: heading in radians
+              - ``vel_px``: [vx, vy] velocity in pixels/s, or null if not yet computed
+              - ``in_playfield``: bool
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_tag_history(source_id, num_frames=num_frames)
@@ -2517,21 +2554,32 @@ async def get_tag_history(
 async def get_objects(source_id: str) -> list[TextContent]:
     """Return detected non-tag objects from a running detection loop.
 
-    Requires an active detection loop (``start_detection`` or ``stream_tags``
-    must be called first).
+    Requires an active detection loop. Recommended workflow:
+    ``open_camera`` → ``create_playfield`` → ``stream_tags`` (preferred) →
+    ``get_objects`` → ``stop_stream``.
 
-    Runs square-contour detection on the latest frame, excluding regions
-    covered by known AprilTag / ArUco markers.  World coordinates are
+    Use ``start_detection`` only for legacy code; ``stream_tags`` is preferred.
+
+    Runs colored-square detection on the latest frame, excluding regions
+    covered by known AprilTag / ArUco markers, and filtering to objects
+    inside the playfield polygon (if available). World coordinates are
     included when the source has a calibrated playfield homography.
 
     Args:
-        source_id: The camera handle or playfield_id passed to ``start_detection``
-            or ``stream_tags``.
+        source_id: The camera handle or playfield_id passed to ``stream_tags``
+            (or ``start_detection``).
 
     Returns:
         On success: ``{"source_id": "<id>", "objects": [...]}``.
-        Each object includes ``center_px``, ``world_xy``, ``color``,
-        ``bbox``, ``area_px``, ``object_type``, and ``confidence``.
+        Each object dict contains:
+          - ``center_px``: [x, y] pixel center of the detected object
+          - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated
+          - ``color``: dominant color name (str, e.g. ``"red"``, ``"green"``,
+            ``"blue"``, ``"yellow"``, ``"orange"``, ``"purple"``, ``"unknown"``)
+          - ``bbox``: [x, y, width, height] bounding rectangle in pixels
+          - ``area_px``: contour area in square pixels (float)
+          - ``object_type``: classifier-assigned type string (e.g. ``"square"``)
+          - ``confidence``: detection confidence score (float, 0.0-1.0)
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_objects(source_id)
@@ -2818,14 +2866,22 @@ async def apply_transform(
 ) -> list[TextContent | ImageContent]:
     """Apply an image transform to a live frame from a camera or playfield.
 
-    Supported operations include ``rotate``, ``scale``, ``threshold``,
-    ``edge``, ``blur``, ``grayscale``, and others defined in the
-    image_processing module.
+    Supported operations and their params:
+      - ``"rotate"``: rotate the frame by an angle.
+        Params: ``{"angle": <degrees>}`` (default 90).
+      - ``"scale"``: resize the frame by a scale factor.
+        Params: ``{"factor": <float>}`` (default 0.5).
+      - ``"threshold"``: convert to grayscale and apply binary threshold.
+        Params: ``{"value": <0-255>}`` (default 127).
+      - ``"canny"``: apply Canny edge detection.
+        Params: ``{"low": <threshold>, "high": <threshold>}`` (defaults 50, 150).
+      - ``"blur"``: apply Gaussian blur.
+        Params: ``{"kernel_size": <odd int>}`` (default 5).
 
     Args:
         source_id: A camera UUID or playfield_id.
-        operation: The transform operation name (e.g. ``"rotate"``,
-            ``"threshold"``, ``"edge"``).
+        operation: The transform operation name: ``"rotate"``, ``"scale"``,
+            ``"threshold"``, ``"canny"``, or ``"blur"``.
         params: JSON string with operation-specific parameters
             (e.g. ``'{"angle": 45}'`` for rotate). Defaults to ``"{}"``.
         format: ``"base64"`` (default) or ``"file"``.
@@ -2895,7 +2951,9 @@ async def start_live_view(
     ``get_tags`` and ``get_tag_history`` using the returned view_id.
 
     Args:
-        camera_id: An open camera handle from ``open_camera``.
+        camera_id: An open camera handle from ``open_camera`` or a
+            playfield_id from ``create_playfield``. When a playfield_id is
+            provided, the viewer shows the deskewed playfield view.
         deskew: Warp the playfield to a top-down rectangle (default True).
         family: AprilTag family (default ``"36h11"``).
         proc_width: Processing width for detection downscale (0 = full).
