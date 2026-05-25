@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Regenerate protobuf Python bindings
-status: open
+status: done
 use-cases:
   - SUC-002
   - SUC-003

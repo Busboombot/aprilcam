@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Live Overlay & Protocol Spec Closeout
-status: planning-docs
+status: done
 branch: sprint/005-live-overlay-protocol-spec-closeout
 use-cases: []
 issues: []
