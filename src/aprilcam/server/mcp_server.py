@@ -243,21 +243,15 @@ def _get_paths_file(camera_id: str) -> Optional[Path]:
     """
     info = _cam_info.get(camera_id)
     if info is None:
-        # Try reading info.json from disk (daemon may be running from a prior session)
-        try:
-            config = Config.load()
-            info_path = config.cameras_dir / camera_id / "info.json"
-            if info_path.exists():
-                info = json.loads(info_path.read_text())
-                _cam_info[camera_id] = info  # cache for future calls
-        except Exception:
-            pass
-    if info is None:
         return None
+    # Prefer paths_file if already stored; otherwise derive from camera_dir.
     pf_str = info.get("paths_file")
-    if not pf_str:
-        return None
-    return Path(pf_str)
+    if pf_str:
+        return Path(pf_str)
+    camera_dir = info.get("camera_dir")
+    if camera_dir:
+        return Path(camera_dir) / "paths.json"
+    return None
 
 
 def _write_paths_json(playfield_id: str) -> None:
@@ -467,14 +461,16 @@ def _handle_open_camera(
 
         # Delegate to daemon via gRPC — no direct cv.VideoCapture here
         client = _ensure_daemon_client()
-        cam_name: str = client.open_camera(idx)
+        cam_name, camera_dir = client.open_camera(idx)
         handle = cam_name
 
-        # Derive the per-camera data directory from config (daemon no longer
-        # writes info.json; paths.json lives alongside calibration data).
-        _config = Config.load()
-        cam_data_dir = _config.data_dir / "cameras" / cam_name
-        info: dict = {"paths_file": str(cam_data_dir / "paths.json")}
+        # Use the daemon-returned camera_dir (absolute path) to build file paths.
+        # This avoids CWD-relative Config.load() path mismatches when the MCP
+        # server runs from a different directory than the daemon.
+        info: dict = {
+            "camera_dir": camera_dir,
+            "paths_file": str(Path(camera_dir) / "paths.json"),
+        }
 
         # Store a sentinel (None) in the registry so other code that checks
         # "is this camera_id registered?" still works.  Close any stale entry first.
@@ -661,16 +657,13 @@ def _handle_create_playfield(
         stored_field_h = None
         if poly is None:
             try:
-                from aprilcam.config import Config
                 from aprilcam.calibration.calibration import (
                     load_calibration_from_camera_dir,
-                    device_name_slug,
                 )
-                cfg = Config.load()
                 info = _cam_info.get(camera_id, {})
-                dev_name = info.get("device_name", camera_id)
-                cam_dir = cfg.cameras_dir / device_name_slug(dev_name)
-                cal = load_calibration_from_camera_dir(cam_dir)
+                _camera_dir = info.get("camera_dir", "")
+                cam_dir = Path(_camera_dir) if _camera_dir else None
+                cal = load_calibration_from_camera_dir(cam_dir) if cam_dir is not None else None
                 if cal is not None and cal.homography is not None:
                     # Read field dimensions from the calibration file
                     import json as _json
@@ -792,7 +785,9 @@ def _handle_calibrate_playfield(
         entry.field_spec = field_spec
         entry.homography = H
 
-        # Persist per-camera calibration file in the new calibration_dir scheme.
+        # Persist calibration into the daemon's per-camera directory.
+        # camera_dir is returned by the daemon at open_camera time, so it is
+        # always an absolute path regardless of the MCP server's CWD.
         per_camera_path: str | None = None
         try:
             camera_id = entry.camera_id
@@ -801,6 +796,12 @@ def _handle_calibrate_playfield(
             cap_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             cap_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+            from aprilcam.camera.camutil import get_device_name
+            from aprilcam.calibration.calibration import (
+                CameraCalibration,
+                save_calibration_to_camera_dir,
+            )
+
             # Resolve device name from camera index
             cam_idx: int | None = None
             if camera_id.startswith("cam_"):
@@ -808,26 +809,18 @@ def _handle_calibrate_playfield(
                     cam_idx = int(camera_id.split("_", 1)[1])
                 except (ValueError, IndexError):
                     pass
-
-            from aprilcam.camera.camutil import get_device_name
-            from aprilcam.calibration.calibration import (
-                CameraCalibration,
-                save_calibration_for_camera,
-            )
-            from aprilcam.config import Config
-
             dev_name = get_device_name(cam_idx) if cam_idx is not None else None
 
-            if dev_name and cap_w and cap_h:
-                cfg = Config.load()
+            camera_dir_str = _cam_info.get(camera_id, {}).get("camera_dir", "")
+            if dev_name and cap_w and cap_h and camera_dir_str:
                 cal = CameraCalibration(
                     device_name=dev_name,
                     resolution=(cap_w, cap_h),
                     homography=H,
                 )
-                pc_path = save_calibration_for_camera(
+                pc_path = save_calibration_to_camera_dir(
                     cal,
-                    cfg.calibration_dir,
+                    camera_dir_str,
                     field_width_cm=field_spec.width_cm,
                     field_height_cm=field_spec.height_cm,
                 )

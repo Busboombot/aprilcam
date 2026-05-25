@@ -46,7 +46,8 @@ message OpenCameraRequest {
 }
 
 message OpenCameraResponse {
-  string cam_name = 1;
+  string cam_name   = 1;
+  string camera_dir = 2;   // absolute path to daemon's per-camera data directory
 }
 
 message CameraRequest {

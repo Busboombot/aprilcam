@@ -203,13 +203,13 @@ class DaemonControl:
         )
         return list(resp.cameras)
 
-    def open_camera(self, index: int) -> str:
-        """Open camera by device index; return the assigned ``cam_name``."""
+    def open_camera(self, index: int) -> tuple[str, str]:
+        """Open camera by device index; return ``(cam_name, camera_dir)``."""
         stub = self._stub_or_raise()
         resp: aprilcam_pb2.OpenCameraResponse = stub.OpenCamera(
             aprilcam_pb2.OpenCameraRequest(index=index)
         )
-        return str(resp.cam_name)
+        return str(resp.cam_name), str(resp.camera_dir)
 
     def close_camera(self, cam_name: str) -> None:
         """Close an open camera."""
