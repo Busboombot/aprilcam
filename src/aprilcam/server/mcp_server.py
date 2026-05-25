@@ -3770,21 +3770,19 @@ async def clear_live_overlay(camera_id: str) -> list[TextContent]:
 # for clients that do not support the Resources protocol.
 # ---------------------------------------------------------------------------
 
-_DOCS_DIR = Path(__file__).parent.parent.parent.parent / "docs"
+_PACKAGE_DIR = Path(__file__).parent.parent  # src/aprilcam/
 
 
 @server.resource("aprilcam://docs/robot-api")
 def _resource_robot_api() -> str:
     """Robot Direct API guide — DaemonControl, publish_overlay, tag stream."""
-    path = _DOCS_DIR / "robot-direct-api.md"
-    return path.read_text() if path.exists() else "Guide not found."
+    return (_PACKAGE_DIR / "ROBOT_API_GUIDE.md").read_text()
 
 
-@server.resource("aprilcam://docs/daemon-interface")
-def _resource_daemon_interface() -> str:
-    """Daemon interface specification — sockets, wire format, configuration."""
-    path = _DOCS_DIR / "daemon-interface.md"
-    return path.read_text() if path.exists() else "Guide not found."
+@server.resource("aprilcam://docs/agent-guide")
+def _resource_agent_guide() -> str:
+    """AprilCam Agent Guide — MCP tool overview and quick-start examples."""
+    return (_PACKAGE_DIR / "AGENT_GUIDE.md").read_text()
 
 
 @server.tool()
@@ -3808,9 +3806,7 @@ async def get_robot_api_guide() -> list[TextContent]:
     equivalent Python API you can hand off to a robot program so it can
     operate autonomously without MCP at runtime.
     """
-    path = _DOCS_DIR / "robot-direct-api.md"
-    text = path.read_text() if path.exists() else "Guide not found."
-    return [TextContent(type="text", text=text)]
+    return [TextContent(type="text", text=(_PACKAGE_DIR / "ROBOT_API_GUIDE.md").read_text())]
 
 
 # ---------------------------------------------------------------------------

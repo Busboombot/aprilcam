@@ -73,7 +73,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-aprilcam = ["AGENT_GUIDE.md"]
+aprilcam = ["AGENT_GUIDE.md", "ROBOT_API_GUIDE.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
