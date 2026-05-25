@@ -101,3 +101,46 @@ def test_unknown_type_skipped():
     elem = aprilcam_pb2.OverlayElement(type="bogus", params=[1.0, 2.0])
     d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
     # No exception raised; frame may or may not be modified (doesn't matter)
+
+
+def test_text_draws():
+    d = _make_display()
+    frame = _frame()
+    elem = aprilcam_pb2.OverlayElement(
+        type="text", params=[50.0, 50.0],
+        text="hello", color=[255, 255, 0], thickness=1,
+    )
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    assert frame.sum() > 0
+
+
+def test_text_empty_string_no_raise():
+    d = _make_display()
+    frame = _frame()
+    elem = aprilcam_pb2.OverlayElement(
+        type="text", params=[50.0, 50.0], text="",
+    )
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    # empty string — no exception, frame may or may not be modified
+
+
+def test_rect_draws():
+    d = _make_display()
+    frame = _frame()
+    elem = aprilcam_pb2.OverlayElement(
+        type="rect", params=[30.0, 30.0, 70.0, 60.0],
+        color=[0, 255, 255], thickness=-1,
+    )
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    assert frame.sum() > 0
+
+
+def test_polygon_draws():
+    d = _make_display()
+    frame = _frame()
+    elem = aprilcam_pb2.OverlayElement(
+        type="polygon", params=[50.0, 30.0, 70.0, 60.0, 30.0, 60.0],
+        color=[255, 0, 200], thickness=-1,
+    )
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    assert frame.sum() > 0
