@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import aprilcam_pb2 as aprilcam__pb2
+from aprilcam.proto import aprilcam_pb2 as aprilcam__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
@@ -88,6 +88,11 @@ class AprilCamStub(object):
                 request_serializer=aprilcam__pb2.StreamRequest.SerializeToString,
                 response_deserializer=aprilcam__pb2.StreamEndpoint.FromString,
                 _registered_method=True)
+        self.PublishOverlay = channel.unary_unary(
+                '/aprilcam.AprilCam/PublishOverlay',
+                request_serializer=aprilcam__pb2.PublishOverlayRequest.SerializeToString,
+                response_deserializer=aprilcam__pb2.StatusReply.FromString,
+                _registered_method=True)
 
 
 class AprilCamServicer(object):
@@ -160,6 +165,13 @@ class AprilCamServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PublishOverlay(self, request, context):
+        """Live overlay injection — push overlay elements to all tag stream subscribers
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_AprilCamServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -212,6 +224,11 @@ def add_AprilCamServicer_to_server(servicer, server):
                     servicer.GetTagStream,
                     request_deserializer=aprilcam__pb2.StreamRequest.FromString,
                     response_serializer=aprilcam__pb2.StreamEndpoint.SerializeToString,
+            ),
+            'PublishOverlay': grpc.unary_unary_rpc_method_handler(
+                    servicer.PublishOverlay,
+                    request_deserializer=aprilcam__pb2.PublishOverlayRequest.FromString,
+                    response_serializer=aprilcam__pb2.StatusReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -488,6 +505,33 @@ class AprilCam(object):
             '/aprilcam.AprilCam/GetTagStream',
             aprilcam__pb2.StreamRequest.SerializeToString,
             aprilcam__pb2.StreamEndpoint.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PublishOverlay(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aprilcam.AprilCam/PublishOverlay',
+            aprilcam__pb2.PublishOverlayRequest.SerializeToString,
+            aprilcam__pb2.StatusReply.FromString,
             options,
             channel_credentials,
             insecure,

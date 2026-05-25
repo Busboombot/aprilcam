@@ -3695,6 +3695,71 @@ async def list_frames() -> list[TextContent]:
 
 
 # ---------------------------------------------------------------------------
+# Live overlay tools
+# ---------------------------------------------------------------------------
+
+
+@server.tool()
+async def set_live_overlay(camera_id: str, elements_json: str, ttl: float = 1.0) -> list[TextContent]:
+    """Push graphical overlay elements to the live view for a camera.
+
+    Workflow: open_camera → set_live_overlay (no playfield required).
+
+    elements_json: JSON array of element dicts. Each element has:
+      type (str): "arc", "arrow", "point", or "polyline"
+      params (list[float]): type-specific coordinates in world cm:
+        arc:      [cx, cy, radius, start_deg, end_deg]
+        arrow:    [x1, y1, x2, y2]
+        point:    [x, y, radius_cm]
+        polyline: [x0, y0, x1, y1, ...]
+      color (list[int]): [R, G, B] each 0-255 (optional, default white)
+      thickness (int): line width in pixels; -1 = filled (optional, default 2)
+
+    ttl: Seconds before the view automatically drops the overlay (default 1.0).
+         Call repeatedly at your desired update rate (5-10 Hz for robot state).
+
+    Any process with DaemonControl access can also call
+    DaemonControl.publish_overlay() directly without going through MCP.
+
+    Returns "ok" or an error string.
+    """
+    import json as _json
+    try:
+        elements = _json.loads(elements_json)
+    except _json.JSONDecodeError as exc:
+        return [TextContent(type="text", text=f"Error: invalid JSON in elements_json: {exc}")]
+    try:
+        client = _ensure_daemon_client()
+        ok = client.publish_overlay(camera_id, elements, ttl)
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+    if ok:
+        return [TextContent(type="text", text="ok")]
+    return [TextContent(type="text", text="Error: overlay not published (camera not found or not streaming)")]
+
+
+@server.tool()
+async def clear_live_overlay(camera_id: str) -> list[TextContent]:
+    """Immediately remove the live overlay from the camera's live view.
+
+    Equivalent to calling set_live_overlay with an empty element list and ttl=0.
+
+    Any process with DaemonControl access can also call
+    DaemonControl.publish_overlay(camera_id, [], ttl=0) directly.
+
+    Returns "ok" or an error string.
+    """
+    try:
+        client = _ensure_daemon_client()
+        ok = client.publish_overlay(camera_id, [], ttl=0)
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+    if ok:
+        return [TextContent(type="text", text="ok")]
+    return [TextContent(type="text", text="Error: could not clear overlay (camera not found or not streaming)")]
+
+
+# ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
 

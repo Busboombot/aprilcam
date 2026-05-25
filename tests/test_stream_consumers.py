@@ -39,6 +39,7 @@ def _build_image_frame_bytes(frame_id: int, jpeg: bytes) -> bytes:
 
 
 def _build_tag_frame_bytes(frame_id: int, fps: float = 30.0) -> bytes:
+    """Build length-prefixed StreamMessage wrapping a TagFrame."""
     tag = aprilcam_pb2.TagMsg(
         id=7,
         cx_px=100.0,
@@ -46,14 +47,34 @@ def _build_tag_frame_bytes(frame_id: int, fps: float = 30.0) -> bytes:
         corners_px=[90.0, 190.0, 110.0, 190.0, 110.0, 210.0, 90.0, 210.0],
         yaw=1.5,
     )
-    msg = aprilcam_pb2.TagFrame(
+    tag_frame = aprilcam_pb2.TagFrame(
         frame_id=frame_id,
         ts_mono_ns=2_000_000,
         ts_wall_ms=3_000,
         tags=[tag],
         fps=fps,
     )
-    return _length_prefix(msg.SerializeToString())
+    stream_msg = aprilcam_pb2.StreamMessage(tag_frame=tag_frame)
+    return _length_prefix(stream_msg.SerializeToString())
+
+
+def _build_overlay_frame_bytes(camera_id: str = "cam0") -> bytes:
+    """Build length-prefixed StreamMessage wrapping an OverlayFrame."""
+    overlay = aprilcam_pb2.OverlayFrame(
+        timestamp=1.0,
+        ttl=5.0,
+        camera_id=camera_id,
+        elements=[
+            aprilcam_pb2.OverlayElement(
+                type="circle",
+                params=[50.0, 50.0, 10.0],
+                color=[255, 0, 0],
+                thickness=2,
+            )
+        ],
+    )
+    stream_msg = aprilcam_pb2.StreamMessage(overlay=overlay)
+    return _length_prefix(stream_msg.SerializeToString())
 
 
 def _loopback_pair() -> tuple[socket.socket, socket.socket]:
@@ -268,6 +289,23 @@ class TestTagStreamConsumer:
         consumer.close()
         conn.close()
         server.close()
+
+    def test_read_returns_overlay_frame(self):
+        """read() returns an OverlayFrame proto when the StreamMessage carries an overlay."""
+        writer, reader = _loopback_pair()
+        writer.sendall(_build_overlay_frame_bytes(camera_id="cam0"))
+        writer.close()
+
+        endpoint = StreamEndpoint(tcp_port=None, socket_path=None)
+        consumer = TagStreamConsumer(endpoint)
+        consumer._sock = reader
+
+        result = consumer.read()
+
+        assert isinstance(result, aprilcam_pb2.OverlayFrame)
+        assert result.camera_id == "cam0"
+        assert len(result.elements) == 1
+        consumer.close()
 
     def test_read_before_connect_raises(self):
         endpoint = StreamEndpoint(tcp_port=None, socket_path=None)

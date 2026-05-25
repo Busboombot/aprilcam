@@ -1,6 +1,8 @@
 ---
-status: pending
-sprint: '004'
+status: done
+sprint: '005'
+tickets:
+- '001'
 ---
 
 # AprilCam Daemon Protocol Specification

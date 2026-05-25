@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import socket
 import struct
-from typing import Iterator
+from typing import Iterator, Union
 
 import cv2
 import numpy as np
 
 from aprilcam.client.models import ImageFrame, StreamEndpoint, TagFrame
+from aprilcam.proto import aprilcam_pb2
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +163,10 @@ class ImageStreamConsumer:
 
 
 class TagStreamConsumer:
-    """Reads length-prefixed protobuf ``TagFrame`` messages from a stream socket.
+    """Reads length-prefixed protobuf ``StreamMessage`` messages from a stream socket.
+
+    Each message is a ``StreamMessage`` oneof that wraps either a ``TagFrame``
+    or an ``OverlayFrame``.  ``read()`` returns the appropriate Python object.
 
     Prefer Unix socket when ``endpoint.socket_path`` is set; fall back to TCP.
 
@@ -170,8 +174,8 @@ class TagStreamConsumer:
 
         consumer = TagStreamConsumer(endpoint)
         consumer.connect()
-        for tag_frame in consumer:      # TagFrame Pydantic model
-            process(tag_frame)
+        for msg in consumer:            # TagFrame or aprilcam_pb2.OverlayFrame
+            process(msg)
         consumer.close()
     """
 
@@ -209,23 +213,34 @@ class TagStreamConsumer:
     # Reading
     # ------------------------------------------------------------------
 
-    def read(self) -> TagFrame:
-        """Read one message and return a ``TagFrame`` Pydantic model."""
-        from aprilcam.proto import aprilcam_pb2
+    def read(self) -> Union[TagFrame, aprilcam_pb2.OverlayFrame]:
+        """Read one message and return a ``TagFrame`` or ``OverlayFrame``.
 
+        The wire format is a length-prefixed ``StreamMessage`` protobuf.
+        The ``payload`` oneof is inspected and the appropriate object is
+        returned:
+
+        * ``tag_frame`` field → :class:`~aprilcam.client.models.TagFrame`
+        * ``overlay`` field   → :class:`aprilcam_pb2.OverlayFrame`
+        """
         if self._sock is None:
             raise RuntimeError("TagStreamConsumer is not connected")
 
         data = _read_length_prefixed(self._sock)
-        msg = aprilcam_pb2.TagFrame()
-        msg.ParseFromString(data)
-        return TagFrame.from_proto(msg)
+        stream_msg = aprilcam_pb2.StreamMessage()
+        stream_msg.ParseFromString(data)
+        if stream_msg.HasField("tag_frame"):
+            return TagFrame.from_proto(stream_msg.tag_frame)
+        elif stream_msg.HasField("overlay"):
+            return stream_msg.overlay
+        else:
+            raise ValueError("StreamMessage has no known payload field")
 
     # ------------------------------------------------------------------
     # Iteration
     # ------------------------------------------------------------------
 
-    def __iter__(self) -> Iterator[TagFrame]:
+    def __iter__(self) -> Iterator[Union[TagFrame, aprilcam_pb2.OverlayFrame]]:
         """Yield TagFrame objects until the connection closes."""
         try:
             while True:
