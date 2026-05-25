@@ -146,16 +146,20 @@ message ImageFrame {
 // ---------------------------------------------------------------------------
 
 // OverlayElement — one drawable shape in world-coordinate space (cm).
-// type values: "arc", "arrow", "point", "polyline"
+// type values: "arc", "arrow", "point", "polyline", "text", "rect", "polygon"
 // arc:      params = [cx, cy, radius, start_deg, end_deg]
 // arrow:    params = [x1, y1, x2, y2]
 // point:    params = [x, y, radius_cm]
 // polyline: params = [x0, y0, x1, y1, ...]
+// text:     params = [x, y] or [x, y, font_scale]; content in text field
+// rect:     params = [x1, y1, x2, y2]
+// polygon:  params = [x0, y0, x1, y1, ...]; closed; thickness=-1 fills
 message OverlayElement {
   string         type      = 1;
   repeated float params    = 2;
   repeated int32 color     = 3;  // [R, G, B] 0-255
   int32          thickness = 4;  // -1 = filled
+  string         text      = 5;  // content for "text" type elements
 }
 
 // OverlayFrame — a set of overlay elements pushed to the tag stream.
