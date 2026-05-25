@@ -414,6 +414,24 @@ class AprilCamServicer(aprilcam_pb2_grpc.AprilCamServicer):
             tcp_port=endpoint.tcp_port or 0,
         )
 
+    def PublishOverlay(
+        self,
+        request: aprilcam_pb2.PublishOverlayRequest,
+        context: grpc.ServicerContext,
+    ) -> aprilcam_pb2.StatusReply:
+        """Forward an overlay frame to all tag stream subscribers for a camera."""
+        producer = self._tag_producers.get(request.cam_name)
+        if producer is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(
+                f"Camera '{request.cam_name}' not found or not streaming"
+            )
+            return aprilcam_pb2.StatusReply(
+                ok=False, error=f"Camera '{request.cam_name}' not found"
+            )
+        producer.publish_overlay(request.overlay)
+        return aprilcam_pb2.StatusReply(ok=True)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

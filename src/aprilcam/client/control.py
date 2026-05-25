@@ -277,6 +277,44 @@ class DaemonControl:
         consumer.connect()
         return consumer
 
+    def publish_overlay(
+        self, cam_name: str, elements: list, ttl: float = 1.0
+    ) -> bool:
+        """Push overlay elements to all tag stream subscribers for this camera.
+
+        Any process with DaemonControl access can call this directly (not only
+        via MCP). Useful for robots updating at 5-10 Hz.
+
+        Args:
+            cam_name: Camera name returned by open_camera().
+            elements: List of dicts with keys: type (str), params (list[float]),
+                      color (list[int] RGB), thickness (int, -1=filled).
+            ttl: Seconds before the view drops the overlay (default 1.0).
+
+        Returns:
+            True if the daemon accepted the overlay, False otherwise.
+        """
+        stub = self._stub_or_raise()
+        overlay_elements = [
+            aprilcam_pb2.OverlayElement(
+                type=e["type"],
+                params=list(e.get("params", [])),
+                color=list(e.get("color", [255, 255, 255])),
+                thickness=int(e.get("thickness", 2)),
+            )
+            for e in elements
+        ]
+        overlay = aprilcam_pb2.OverlayFrame(
+            timestamp=time.time(),
+            ttl=float(ttl),
+            elements=overlay_elements,
+            camera_id=cam_name,
+        )
+        reply = stub.PublishOverlay(
+            aprilcam_pb2.PublishOverlayRequest(cam_name=cam_name, overlay=overlay)
+        )
+        return reply.ok
+
     def shutdown(self) -> None:
         """Send the Shutdown RPC; the daemon process will exit."""
         stub = self._stub_or_raise()
