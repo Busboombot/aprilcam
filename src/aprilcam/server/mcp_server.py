@@ -1538,7 +1538,11 @@ async def open_camera(
     """Open a camera by index, name pattern, or screen capture and return a camera handle.
 
     Workflow: Start here. The returned camera_id is used by capture_frame,
-    create_playfield, start_detection, and start_live_view.
+    create_playfield, start_detection, start_live_view, and set_live_overlay.
+
+    If you are writing a robot program that needs high-frequency tag access
+    or live overlay drawing, call get_robot_api_guide() first — it shows the
+    equivalent DaemonControl Python API for use without MCP at runtime.
 
     The returned camera_id is a deterministic name derived from the camera
     (e.g. ``"arducam-ov9782-usb-camera"``), not a UUID.
@@ -3718,8 +3722,9 @@ async def set_live_overlay(camera_id: str, elements_json: str, ttl: float = 1.0)
     ttl: Seconds before the view automatically drops the overlay (default 1.0).
          Call repeatedly at your desired update rate (5-10 Hz for robot state).
 
-    Any process with DaemonControl access can also call
-    DaemonControl.publish_overlay() directly without going through MCP.
+    For robot programs that push overlays at 5-50 Hz, call
+    get_robot_api_guide() to get the DaemonControl.publish_overlay() Python
+    API — it skips MCP entirely and talks directly to the daemon over gRPC.
 
     Returns "ok" or an error string.
     """
@@ -3757,6 +3762,55 @@ async def clear_live_overlay(camera_id: str) -> list[TextContent]:
     if ok:
         return [TextContent(type="text", text="ok")]
     return [TextContent(type="text", text="Error: could not clear overlay (camera not found or not streaming)")]
+
+
+# ---------------------------------------------------------------------------
+# Documentation resources — exposed via MCP Resources protocol so agents
+# can read them with list_resources / read_resource, and also via a tool
+# for clients that do not support the Resources protocol.
+# ---------------------------------------------------------------------------
+
+_DOCS_DIR = Path(__file__).parent.parent.parent.parent / "docs"
+
+
+@server.resource("aprilcam://docs/robot-api")
+def _resource_robot_api() -> str:
+    """Robot Direct API guide — DaemonControl, publish_overlay, tag stream."""
+    path = _DOCS_DIR / "robot-direct-api.md"
+    return path.read_text() if path.exists() else "Guide not found."
+
+
+@server.resource("aprilcam://docs/daemon-interface")
+def _resource_daemon_interface() -> str:
+    """Daemon interface specification — sockets, wire format, configuration."""
+    path = _DOCS_DIR / "daemon-interface.md"
+    return path.read_text() if path.exists() else "Guide not found."
+
+
+@server.tool()
+async def get_robot_api_guide() -> list[TextContent]:
+    """Return the Robot Direct API guide as text.
+
+    Read this before writing any robot program that needs high-frequency tag
+    access or live overlay drawing. The guide covers:
+
+      - DaemonControl: connect, open_camera, get_tags, get_tag_stream,
+        get_image_stream, publish_overlay, close
+      - Live overlay element types: arc, arrow, point, polyline (world cm coords)
+      - Persistent paths: write paths.json directly for waypoint display
+      - TagStreamConsumer: reading the multiplexed tag+overlay socket
+      - Configuration via Config.load() and environment variables
+      - Full 10 Hz robot control-loop code example
+
+    Also available as an MCP Resource at: aprilcam://docs/robot-api
+
+    For agents using the MCP tools interactively, the robot guide shows the
+    equivalent Python API you can hand off to a robot program so it can
+    operate autonomously without MCP at runtime.
+    """
+    path = _DOCS_DIR / "robot-direct-api.md"
+    text = path.read_text() if path.exists() else "Guide not found."
+    return [TextContent(type="text", text=text)]
 
 
 # ---------------------------------------------------------------------------
