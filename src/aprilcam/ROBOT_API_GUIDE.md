@@ -136,6 +136,9 @@ Colors are `[R, G, B]` each 0-255.  Thickness is pixels; `-1` = filled.
 | `"arrow"` | `[x1, y1, x2, y2]` | Arrow from tail to head |
 | `"point"` | `[x, y, radius_cm]` | Circle at world position |
 | `"polyline"` | `[x0, y0, x1, y1, …]` | Open polyline |
+| `"text"` | `[x, y]` or `[x, y, font_scale]` | Text label at world position; set `"text"` key in element dict |
+| `"rect"` | `[x1, y1, x2, y2]` | Rectangle; `thickness=-1` fills |
+| `"polygon"` | `[x0, y0, x1, y1, …]` | Closed polygon; `thickness=-1` fills |
 
 ### Robot control-loop pattern
 
@@ -176,6 +179,7 @@ try:
                 {"type": "arrow",
                  "params": [rx, ry, ax, ay],
                  "color": [240, 240, 240], "thickness": 3},
+                {"type": "text", "params": [rx, ry], "text": f"tag {robot_tag.id}", "color": [255, 230, 0]},
                 # pure-pursuit lookahead arc
                 {"type": "arc",
                  "params": [rx, ry, lookahead_r,
