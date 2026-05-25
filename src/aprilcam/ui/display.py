@@ -521,6 +521,72 @@ class PlayfieldDisplay:
                 except Exception:
                     pass
 
+    def draw_live_overlay(
+        self,
+        frame: np.ndarray,
+        overlay_frame,  # aprilcam_pb2.OverlayFrame
+        homography: Optional[np.ndarray],
+    ) -> None:
+        """Draw live overlay elements onto *frame* in-place.
+
+        No-op when homography is None or the overlay has expired (TTL check).
+        Element coordinates are world cm; color fields are [R, G, B].
+        """
+        import time
+        if homography is None:
+            return
+        if time.time() - overlay_frame.timestamp > overlay_frame.ttl:
+            return
+
+        H_inv = np.linalg.inv(homography)
+
+        def _w2d(x: float, y: float):
+            hvec = H_inv @ np.array([x, y, 1.0])
+            sx, sy = hvec[0] / hvec[2], hvec[1] / hvec[2]
+            src_pt = np.array([[sx, sy]], dtype=np.float32)
+            disp_pt = self._map_points_to_display(src_pt).reshape(2)
+            return int(round(float(disp_pt[0]))), int(round(float(disp_pt[1])))
+
+        for elem in overlay_frame.elements:
+            try:
+                p = list(elem.params)
+                color_rgb = list(elem.color) if elem.color else [0, 255, 0]
+                bgr = (color_rgb[2], color_rgb[1], color_rgb[0])
+                t = elem.thickness if elem.thickness != 0 else 2
+
+                if elem.type == "arc":
+                    cx, cy, r, start_deg, end_deg = p[0], p[1], p[2], p[3], p[4]
+                    cx_d, cy_d = _w2d(cx, cy)
+                    rx_d, ry_d = _w2d(cx + r, cy)
+                    ryx_d, ryy_d = _w2d(cx, cy + r)
+                    rx = max(1, int(round(np.linalg.norm([rx_d - cx_d, ry_d - cy_d]))))
+                    ry = max(1, int(round(np.linalg.norm([ryx_d - cx_d, ryy_d - cy_d]))))
+                    angle = float(np.degrees(np.arctan2(ry_d - cy_d, rx_d - cx_d)))
+                    cv.ellipse(frame, (cx_d, cy_d), (rx, ry), angle,
+                               float(start_deg), float(end_deg), bgr, t)
+
+                elif elem.type == "arrow":
+                    x1, y1, x2, y2 = p[0], p[1], p[2], p[3]
+                    pt1 = _w2d(x1, y1)
+                    pt2 = _w2d(x2, y2)
+                    cv.arrowedLine(frame, pt1, pt2, bgr, t, tipLength=0.2)
+
+                elif elem.type == "point":
+                    x, y, radius_cm = p[0], p[1], p[2]
+                    cx_d, cy_d = _w2d(x, y)
+                    rx_d, ry_d = _w2d(x + radius_cm, y)
+                    r_px = max(1, int(round(np.linalg.norm([rx_d - cx_d, ry_d - cy_d]))))
+                    fill = cv.FILLED if t < 0 else t
+                    cv.circle(frame, (cx_d, cy_d), r_px, bgr, fill)
+
+                elif elem.type == "polyline":
+                    pts_world = [(p[i], p[i + 1]) for i in range(0, len(p) - 1, 2)]
+                    disp_pts = np.array([_w2d(x, y) for x, y in pts_world], dtype=np.int32)
+                    cv.polylines(frame, [disp_pts], isClosed=False, color=bgr, thickness=t)
+
+            except Exception:
+                pass
+
     def pause(self, frame: np.ndarray, text: str = " Paused: Press Space to Run") -> None:
         """Overlay a paused message onto the given frame."""
         if frame is None:
