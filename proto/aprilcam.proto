@@ -22,6 +22,9 @@ service AprilCam {
   // Stream discovery — allocates a socket/port pair on demand
   rpc GetImageStream    (StreamRequest)       returns (StreamEndpoint);
   rpc GetTagStream      (StreamRequest)       returns (StreamEndpoint);
+
+  // Live overlay injection — push overlay elements to all tag stream subscribers
+  rpc PublishOverlay    (PublishOverlayRequest) returns (StatusReply);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,4 +139,53 @@ message ImageFrame {
   bytes  jpeg        = 3;
   int32  width       = 4;
   int32  height      = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Overlay messages (multiplexed on the tag stream socket)
+// ---------------------------------------------------------------------------
+
+// OverlayElement — one drawable shape in world-coordinate space (cm).
+// type values: "arc", "arrow", "point", "polyline"
+// arc:      params = [cx, cy, radius, start_deg, end_deg]
+// arrow:    params = [x1, y1, x2, y2]
+// point:    params = [x, y, radius_cm]
+// polyline: params = [x0, y0, x1, y1, ...]
+message OverlayElement {
+  string         type      = 1;
+  repeated float params    = 2;
+  repeated int32 color     = 3;  // [R, G, B] 0-255
+  int32          thickness = 4;  // -1 = filled
+}
+
+// OverlayFrame — a set of overlay elements pushed to the tag stream.
+// The view drops this frame if (now - timestamp) > ttl.
+message OverlayFrame {
+  double                  timestamp = 1;
+  float                   ttl       = 2;
+  repeated OverlayElement elements  = 3;
+  string                  camera_id = 4;
+}
+
+// StreamMessage — oneof wrapper multiplexing TagFrame and OverlayFrame
+// on the same length-prefixed binary stream socket.
+message StreamMessage {
+  oneof payload {
+    TagFrame     tag_frame = 1;
+    OverlayFrame overlay   = 2;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PublishOverlay RPC messages
+// ---------------------------------------------------------------------------
+
+message PublishOverlayRequest {
+  string       cam_name = 1;
+  OverlayFrame overlay  = 2;
+}
+
+message StatusReply {
+  bool   ok    = 1;
+  string error = 2;
 }
