@@ -99,7 +99,8 @@ class AprilCamServicer(aprilcam_pb2_grpc.AprilCamServicer):
 
         with self._cam_lock:
             if cam_name in self._cameras:
-                return aprilcam_pb2.OpenCameraResponse(cam_name=cam_name)
+                camera_dir = str(self._config.cameras_dir / cam_name)
+                return aprilcam_pb2.OpenCameraResponse(cam_name=cam_name, camera_dir=camera_dir)
 
             # Determine detection_fps: calibration.json > config default
             import json as _json
@@ -123,7 +124,8 @@ class AprilCamServicer(aprilcam_pb2_grpc.AprilCamServicer):
 
             self._cameras[cam_name] = pipeline
 
-        return aprilcam_pb2.OpenCameraResponse(cam_name=cam_name)
+        camera_dir = str(self._config.cameras_dir / cam_name)
+        return aprilcam_pb2.OpenCameraResponse(cam_name=cam_name, camera_dir=camera_dir)
 
     def CloseCamera(
         self,
