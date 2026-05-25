@@ -584,6 +584,27 @@ class PlayfieldDisplay:
                     disp_pts = np.array([_w2d(x, y) for x, y in pts_world], dtype=np.int32)
                     cv.polylines(frame, [disp_pts], isClosed=False, color=bgr, thickness=t)
 
+                elif elem.type == "text":
+                    x, y = p[0], p[1]
+                    font_scale = float(p[2]) if len(p) > 2 else 0.6
+                    cx_d, cy_d = _w2d(x, y)
+                    self._draw_text_with_outline(
+                        frame, elem.text, (cx_d, cy_d),
+                        color=bgr, font_scale=font_scale, thickness=max(1, t),
+                    )
+
+                elif elem.type == "rect":
+                    x1, y1, x2, y2 = p[0], p[1], p[2], p[3]
+                    cv.rectangle(frame, _w2d(x1, y1), _w2d(x2, y2), bgr, cv.FILLED if t < 0 else t)
+
+                elif elem.type == "polygon":
+                    pts_world = [(p[i], p[i + 1]) for i in range(0, len(p) - 1, 2)]
+                    disp_pts = np.array([_w2d(x, y) for x, y in pts_world], dtype=np.int32)
+                    if t < 0:
+                        cv.fillPoly(frame, [disp_pts], bgr)
+                    else:
+                        cv.polylines(frame, [disp_pts], isClosed=True, color=bgr, thickness=t)
+
             except Exception:
                 pass
 
