@@ -207,8 +207,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         try:
             # Open both cameras
-            pri_name = dc.open_camera(pri_idx)
-            sec_name = dc.open_camera(sec_idx)
+            pri_name, _ = dc.open_camera(pri_idx)
+            sec_name, _ = dc.open_camera(sec_idx)
 
             # Warm up
             for _ in range(10):
@@ -269,7 +269,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for idx, label in camera_indices:
             print(f"Calibrating [{idx}] {label} ...")
             try:
-                cam_name = dc.open_camera(idx)
+                cam_name, _ = dc.open_camera(idx)
 
                 for _ in range(10):
                     dc.capture_frame(cam_name)

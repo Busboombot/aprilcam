@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         camera_arg = args.camera
         try:
             cam_index = int(camera_arg)
-            cam_name = dc.open_camera(cam_index)
+            cam_name, _ = dc.open_camera(cam_index)
         except ValueError:
             # camera_arg is a name, not an index — verify it is open
             info = dc.get_camera_info(camera_arg)
