@@ -301,6 +301,7 @@ class DaemonControl:
                 params=list(e.get("params", [])),
                 color=list(e.get("color", [255, 255, 255])),
                 thickness=int(e.get("thickness", 2)),
+                text=str(e.get("text", "")),
             )
             for e in elements
         ]

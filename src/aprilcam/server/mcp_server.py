@@ -3710,14 +3710,18 @@ async def set_live_overlay(camera_id: str, elements_json: str, ttl: float = 1.0)
     Workflow: open_camera → set_live_overlay (no playfield required).
 
     elements_json: JSON array of element dicts. Each element has:
-      type (str): "arc", "arrow", "point", or "polyline"
+      type (str): "arc", "arrow", "point", "polyline", "text", "rect", or "polygon"
       params (list[float]): type-specific coordinates in world cm:
         arc:      [cx, cy, radius, start_deg, end_deg]
         arrow:    [x1, y1, x2, y2]
         point:    [x, y, radius_cm]
         polyline: [x0, y0, x1, y1, ...]
+        text:     params=[x, y] or [x, y, font_scale]; text field holds the string
+        rect:     params=[x1, y1, x2, y2]; thickness=-1 fills
+        polygon:  params=[x0, y0, x1, y1, ...]; closed; thickness=-1 fills
       color (list[int]): [R, G, B] each 0-255 (optional, default white)
       thickness (int): line width in pixels; -1 = filled (optional, default 2)
+      text (str): string content for "text" type elements (optional for other types)
 
     ttl: Seconds before the view automatically drops the overlay (default 1.0).
          Call repeatedly at your desired update rate (5-10 Hz for robot state).
