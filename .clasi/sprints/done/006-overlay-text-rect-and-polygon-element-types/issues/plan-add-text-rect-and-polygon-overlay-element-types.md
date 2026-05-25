@@ -1,5 +1,12 @@
 ---
-status: pending
+status: in-progress
+sprint: '006'
+tickets:
+- 006-001
+- 006-002
+- 006-003
+- 006-004
+- 006-005
 ---
 
 # Plan: Add Text, Rect, and Polygon Overlay Element Types
