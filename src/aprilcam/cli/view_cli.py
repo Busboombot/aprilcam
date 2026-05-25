@@ -268,9 +268,13 @@ def main(argv: list[str] | None = None) -> int:
         deskew_overlay=True,
     )
 
+    from aprilcam.client.models import TagFrame
+
     # State shared between reader threads and main (Tk) thread
     _latest_tag_frame: list = [first_tag_frame]  # mutable container for thread sharing
     _tag_lock = threading.Lock()
+    _latest_overlay: list = [None]
+    _overlay_lock = threading.Lock()
 
     _detect_objects = threading.Event()
     _latest_objects: list = [[]]
@@ -318,6 +322,11 @@ def main(argv: list[str] | None = None) -> int:
         paths = _load_paths(_paths_file)
         if paths:
             display.draw_paths(disp, paths, boundary, homography)
+
+        with _overlay_lock:
+            overlay = _latest_overlay[0]
+        if overlay is not None and homography is not None:
+            display.draw_live_overlay(disp, overlay, homography)
 
         if _detect_objects.is_set():
             color_clf = _classifier_holder[0]
@@ -394,12 +403,16 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     def _tag_reader_thread():
-        """Continuously read tag frames and update _latest_tag_frame."""
+        """Continuously read tag frames and update _latest_tag_frame or _latest_overlay."""
         while not stop_event.is_set():
             try:
-                tf = tag_consumer.read()
-                with _tag_lock:
-                    _latest_tag_frame[0] = tf
+                msg = tag_consumer.read()
+                if isinstance(msg, TagFrame):
+                    with _tag_lock:
+                        _latest_tag_frame[0] = msg
+                else:  # OverlayFrame proto
+                    with _overlay_lock:
+                        _latest_overlay[0] = msg
             except (EOFError, RuntimeError):
                 stop_event.set()
                 break
