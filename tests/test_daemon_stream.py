@@ -39,6 +39,14 @@ def _read_proto_frame(sock: socket.socket) -> bytes:
     return _recv_exactly(sock, length)
 
 
+def _read_tag_frame(sock: socket.socket) -> aprilcam_pb2.TagFrame:
+    """Read one StreamMessage from *sock* and return its tag_frame payload."""
+    payload = _read_proto_frame(sock)
+    wrapper = aprilcam_pb2.StreamMessage()
+    wrapper.ParseFromString(payload)
+    return wrapper.tag_frame
+
+
 def _make_config(tmp_path: Path) -> Config:
     """Return a Config that uses a short path under /tmp to satisfy AF_UNIX limits."""
     import tempfile
@@ -256,17 +264,13 @@ class TestTagStreamProducer:
             # First publish (establishes baseline positions)
             frame1 = _make_tag_frame(frame_id=1, tags=[{"id": 5, "cx_px": 100.0, "cy_px": 100.0}])
             producer.publish_if_changed(frame1)
-            payload1 = _read_proto_frame(client)
-            msg1 = aprilcam_pb2.TagFrame()
-            msg1.ParseFromString(payload1)
+            msg1 = _read_tag_frame(client)
             assert msg1.frame_id == 1
 
             # Move tag more than 8 px — should trigger publish
             frame2 = _make_tag_frame(frame_id=2, tags=[{"id": 5, "cx_px": 110.0, "cy_px": 100.0}])
             producer.publish_if_changed(frame2)
-            payload2 = _read_proto_frame(client)
-            msg2 = aprilcam_pb2.TagFrame()
-            msg2.ParseFromString(payload2)
+            msg2 = _read_tag_frame(client)
             assert msg2.frame_id == 2
         finally:
             try:
@@ -337,9 +341,7 @@ class TestTagStreamProducer:
             # New tag appears
             frame2 = _make_tag_frame(frame_id=2, tags=[{"id": 7, "cx_px": 200.0, "cy_px": 200.0}])
             producer.publish_if_changed(frame2)
-            payload = _read_proto_frame(client)
-            msg = aprilcam_pb2.TagFrame()
-            msg.ParseFromString(payload)
+            msg = _read_tag_frame(client)
             assert msg.frame_id == 2
             assert len(msg.tags) == 1
             assert msg.tags[0].id == 7
@@ -378,8 +380,9 @@ class TestTagStreamProducer:
             payload = _read_proto_frame(client)  # blocks until heartbeat
             elapsed = time.monotonic() - t0
 
-            msg = aprilcam_pb2.TagFrame()
-            msg.ParseFromString(payload)
+            wrapper = aprilcam_pb2.StreamMessage()
+            wrapper.ParseFromString(payload)
+            msg = wrapper.tag_frame
 
             # Heartbeat should fire within ~1.5s (generous for CI)
             assert elapsed < 2.0, f"Heartbeat took too long: {elapsed:.2f}s"
@@ -413,9 +416,7 @@ class TestTagStreamProducer:
             frame = _make_tag_frame(frame_id=5, tags=[])
             producer.force_publish(frame)
 
-            payload = _read_proto_frame(client)
-            msg = aprilcam_pb2.TagFrame()
-            msg.ParseFromString(payload)
+            msg = _read_tag_frame(client)
             assert msg.frame_id == 5
         finally:
             try:

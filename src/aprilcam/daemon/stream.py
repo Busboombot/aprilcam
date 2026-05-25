@@ -44,8 +44,14 @@ _MAX_SENDER_QUEUE = 2   # drop silently when full; prevents slow subscribers
 
 
 def _frame_bytes(proto_msg) -> bytes:
-    """Serialize a protobuf message to a length-prefixed bytes blob."""
-    payload = proto_msg.SerializeToString()
+    """Serialize proto_msg wrapped in StreamMessage to length-prefixed bytes."""
+    if isinstance(proto_msg, aprilcam_pb2.TagFrame):
+        wrapper = aprilcam_pb2.StreamMessage(tag_frame=proto_msg)
+    elif isinstance(proto_msg, aprilcam_pb2.OverlayFrame):
+        wrapper = aprilcam_pb2.StreamMessage(overlay=proto_msg)
+    else:
+        raise TypeError(f"Unsupported message type: {type(proto_msg)}")
+    payload = wrapper.SerializeToString()
     prefix = struct.pack(_LENGTH_FMT, len(payload))
     return prefix + payload
 
@@ -344,7 +350,9 @@ class ImageStreamProducer(_BaseProducer):
             width=width,
             height=height,
         )
-        self._publish_bytes(_frame_bytes(msg))
+        payload = msg.SerializeToString()
+        prefix = struct.pack(_LENGTH_FMT, len(payload))
+        self._publish_bytes(prefix + payload)
 
 
 # ── TagStreamProducer ─────────────────────────────────────────────────────────
@@ -458,6 +466,10 @@ class TagStreamProducer(_BaseProducer):
         timer incorrectly.
         """
         self._do_publish(tag_frame)
+
+    def publish_overlay(self, overlay_frame: aprilcam_pb2.OverlayFrame) -> None:
+        """Broadcast overlay_frame immediately to all subscribers, bypassing rate limiting."""
+        self._publish_bytes(_frame_bytes(overlay_frame))
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
