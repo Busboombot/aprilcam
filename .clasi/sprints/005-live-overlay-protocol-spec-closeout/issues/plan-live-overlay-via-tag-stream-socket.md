@@ -1,5 +1,15 @@
 ---
-status: pending
+status: in-progress
+sprint: '005'
+tickets:
+- 005-002
+- 005-003
+- 005-004
+- 005-005
+- 005-006
+- 005-007
+- 005-008
+- 005-009
 ---
 
 # Plan: Live Overlay via Tag Stream Socket
