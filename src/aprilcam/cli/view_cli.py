@@ -407,14 +407,26 @@ def main(argv: list[str] | None = None) -> int:
 
         display.draw_overlays(disp, tags, homography)
 
+        # Field origin offsets for A1-centred → raw world coord conversion
+        origin_x = 0.0
+        origin_y = 0.0
+        if tag_frame is not None:
+            fw = tag_frame.field_width_cm
+            fh = tag_frame.field_height_cm
+            if fw > 0:
+                origin_x = fw / 2.0
+                origin_y = fh / 2.0
+
         paths = _load_paths(_paths_file)
         if paths and _show_paths[0]:
-            display.draw_paths(disp, paths, boundary, homography)
+            display.draw_paths(disp, paths, boundary, homography,
+                               origin_x=origin_x, origin_y=origin_y)
 
         with _overlay_lock:
             overlay = _latest_overlay[0]
         if overlay is not None and homography is not None:
-            display.draw_live_overlay(disp, overlay, homography)
+            display.draw_live_overlay(disp, overlay, homography,
+                                      origin_x=origin_x, origin_y=origin_y)
 
         if _detect_objects.is_set():
             color_clf = _classifier_holder[0]

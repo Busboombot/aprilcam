@@ -97,6 +97,8 @@ message TagFrameResponse {
   repeated float homography        = 3;
   // 8 floats: x0,y0, x1,y1, x2,y2, x3,y3 (UL/UR/LR/LL)
   repeated float playfield_corners = 4;
+  float          field_width_cm    = 5;
+  float          field_height_cm   = 6;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +133,9 @@ message TagFrame {
   // 8 floats: x0,y0, x1,y1, x2,y2, x3,y3 (UL/UR/LR/LL)
   repeated float  playfield_corners = 6;
   float           fps               = 7;
+  // Playfield dimensions in cm (0 = unknown); used to convert world_xy to A1-centred
+  float           field_width_cm    = 8;
+  float           field_height_cm   = 9;
 }
 
 // ImageFrame — published on the image stream socket for every camera frame.

@@ -355,11 +355,16 @@ class CameraPipeline:
                 )
             )
 
+        cal_fw = self._calibration.playfield_width_cm if self._calibration else 0.0
+        cal_fh = self._calibration.playfield_height_cm if self._calibration else 0.0
+
         return aprilcam_pb2.TagFrameResponse(
             frame_id=latest.frame_index,
             tags=tag_msgs,
             homography=homo_flat,
             playfield_corners=corners_flat,
+            field_width_cm=float(cal_fw),
+            field_height_cm=float(cal_fh),
         )
 
     # ------------------------------------------------------------------
@@ -449,6 +454,9 @@ class CameraPipeline:
             )
             tag_msgs.append(tag_msg)
 
+        field_w = self._calibration.playfield_width_cm if self._calibration else 0.0
+        field_h = self._calibration.playfield_height_cm if self._calibration else 0.0
+
         return aprilcam_pb2.TagFrame(
             frame_id=self._frame_id,
             ts_mono_ns=ts_mono_ns,
@@ -457,6 +465,8 @@ class CameraPipeline:
             homography=homo_flat,
             playfield_corners=corners_flat,
             fps=float(fps),
+            field_width_cm=float(field_w),
+            field_height_cm=float(field_h),
         )
 
     def _capture_loop(self) -> None:

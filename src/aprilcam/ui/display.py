@@ -385,36 +385,31 @@ class PlayfieldDisplay:
         paths: dict,
         playfield: object,
         homography: Optional[np.ndarray],
+        origin_x: float = 0.0,
+        origin_y: float = 0.0,
     ) -> None:
         """Draw agent-defined paths onto *frame* (in-place).
 
+        Waypoint coordinates are in the A1-centred world frame.  ``origin_x``
+        and ``origin_y`` are the field half-dimensions (field_width/2,
+        field_height/2); they are added back before applying H_inv so the
+        homography receives raw corner-origin coordinates.
+
         Coordinate pipeline (per waypoint):
-          1. World cm → source pixel: apply H_inv = inv(homography) to
-             homogeneous world coordinate [x, y, 1], then divide by the
-             third component.
-          2. Source pixel → display pixel: pass through
-             self._map_points_to_display(...) to handle deskew/crop modes.
-          3. Pixel radius for size_cm: map (x, y) and (x + size_cm/2, y)
-             through the same pipeline; the Euclidean distance between the two
-             display points is the symbol half-extent.
-
-        Draw order: all line segments first (so symbols cover line endpoints),
-        then all waypoint symbols.
-
-        RGB→BGR convention: colors from path dicts are RGB triples [R, G, B].
-        Convert to (B, G, R) tuple immediately before each cv.* call —
-        nowhere else.
+          1. A1-centred world cm → raw world cm: add origin_x, origin_y.
+          2. Raw world cm → source pixel: apply H_inv = inv(homography).
+          3. Source pixel → display pixel: _map_points_to_display.
+          4. Pixel radius for size_cm: same pipeline offset by size_cm/2.
 
         No-op when homography is None (uncalibrated playfield) or paths is empty.
 
         Args:
             frame: The display image to draw onto (modified in place).
             paths: Dict mapping path_id -> path dict (from Path.to_dict()).
-            playfield: The PlayfieldBoundary for coordinate mapping (unused
-                       directly; coordinate mapping uses homography +
-                       _map_points_to_display).
+            playfield: The PlayfieldBoundary (unused directly).
             homography: Optional homography matrix for world-to-pixel mapping.
-                        If None, returns immediately.
+            origin_x: Half the field width in cm (field_width_cm / 2).
+            origin_y: Half the field height in cm (field_height_cm / 2).
         """
         if homography is None:
             return
@@ -424,8 +419,8 @@ class PlayfieldDisplay:
         H_inv = np.linalg.inv(homography)
 
         def _world_to_disp(x: float, y: float):
-            """Return (cx, cy) display-space int coords, or raise on failure."""
-            hvec = H_inv @ np.array([x, y, 1.0])
+            """Return display-space coords; input is A1-centred world cm."""
+            hvec = H_inv @ np.array([x + origin_x, y + origin_y, 1.0])
             sx, sy = hvec[0] / hvec[2], hvec[1] / hvec[2]
             src_pt = np.array([[sx, sy]], dtype=np.float32)
             disp_pt = self._map_points_to_display(src_pt).reshape(2)
@@ -433,7 +428,7 @@ class PlayfieldDisplay:
 
         def _compute_radius(x: float, y: float, size_cm: float, disp_pt: np.ndarray) -> int:
             """Return pixel half-extent for size_cm at world position (x, y)."""
-            hvec2 = H_inv @ np.array([x + size_cm / 2.0, y, 1.0])
+            hvec2 = H_inv @ np.array([x + size_cm / 2.0 + origin_x, y + origin_y, 1.0])
             sx2, sy2 = hvec2[0] / hvec2[2], hvec2[1] / hvec2[2]
             src_pt2 = np.array([[sx2, sy2]], dtype=np.float32)
             disp_pt2 = self._map_points_to_display(src_pt2).reshape(2)
@@ -526,11 +521,17 @@ class PlayfieldDisplay:
         frame: np.ndarray,
         overlay_frame,  # aprilcam_pb2.OverlayFrame
         homography: Optional[np.ndarray],
+        origin_x: float = 0.0,
+        origin_y: float = 0.0,
     ) -> None:
         """Draw live overlay elements onto *frame* in-place.
 
+        Element coordinates are in the A1-centred world frame (cm).
+        ``origin_x`` / ``origin_y`` (field_width/2, field_height/2) are added
+        back before applying H_inv to convert to raw corner-origin world coords
+        that the homography matrix expects.
+
         No-op when homography is None or the overlay has expired (TTL check).
-        Element coordinates are world cm; color fields are [R, G, B].
         """
         import time
         if homography is None:
@@ -541,7 +542,7 @@ class PlayfieldDisplay:
         H_inv = np.linalg.inv(homography)
 
         def _w2d(x: float, y: float):
-            hvec = H_inv @ np.array([x, y, 1.0])
+            hvec = H_inv @ np.array([x + origin_x, y + origin_y, 1.0])
             sx, sy = hvec[0] / hvec[2], hvec[1] / hvec[2]
             src_pt = np.array([[sx, sy]], dtype=np.float32)
             disp_pt = self._map_points_to_display(src_pt).reshape(2)

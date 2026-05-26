@@ -998,11 +998,13 @@ def _compute_gripper_world_xy(
     tag_dict: dict,
     homography: Optional[np.ndarray],
     offset_cm: float = 14.0,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
 ) -> Optional[list[float]]:
-    """Compute the gripper position in world coords for a robot tag.
+    """Compute the gripper position in A1-centred world coords for a robot tag.
 
-    Returns [x, y] in world units, or None if homography is unavailable
-    or the geometry is degenerate.
+    Returns [x, y] in world units (A1-centred), or None if homography is
+    unavailable or the geometry is degenerate.
     """
     if homography is None or homography.size != 9:
         return None
@@ -1013,7 +1015,7 @@ def _compute_gripper_world_xy(
             (corners[0][0] + corners[1][0]) * 0.5,
             (corners[0][1] + corners[1][1]) * 0.5,
         ]
-        # Map center and top-mid to world coords
+        # Map center and top-mid to raw world coords; direction is unaffected by origin
         cvec = np.array([cx, cy, 1.0])
         cw = homography @ cvec
         cw_xy = np.array([cw[0] / cw[2], cw[1] / cw[2]])
@@ -1028,7 +1030,7 @@ def _compute_gripper_world_xy(
             return None
         w_unit = w_dir / w_norm
         gripper = cw_xy + w_unit * offset_cm
-        return [float(gripper[0]), float(gripper[1])]
+        return [float(gripper[0]) - origin_x, float(gripper[1]) - origin_y]
     except Exception:
         return None
 
@@ -1050,15 +1052,21 @@ def _handle_get_tags(source_id: str) -> dict:
         # Add gripper position for the robot tag if configured
         if entry.robot_tag_id is not None:
             homography = None
+            origin_x = 0.0
+            origin_y = 0.0
             try:
                 pf_entry = playfield_registry.get(source_id)
                 homography = pf_entry.homography
+                if pf_entry.field_spec is not None:
+                    origin_x = pf_entry.field_spec.width_cm / 2.0
+                    origin_y = pf_entry.field_spec.height_cm / 2.0
             except KeyError:
                 pass
             for tag in result.get("tags", []):
                 if tag["id"] == entry.robot_tag_id:
                     tag["gripper_world_xy"] = _compute_gripper_world_xy(
-                        tag, homography, offset_cm=entry.gripper_offset_cm
+                        tag, homography, offset_cm=entry.gripper_offset_cm,
+                        origin_x=origin_x, origin_y=origin_y,
                     )
 
         return result
@@ -1138,14 +1146,19 @@ def _handle_get_objects(source_id: str) -> dict:
         if frame is None:
             return {"error": "No frames captured yet"}
 
-        # Get homography and playfield polygon if this source is a playfield.
+        # Get homography, field dimensions, and playfield polygon if this source is a playfield.
         homography = None
         pf_poly = None
+        origin_x = 0.0
+        origin_y = 0.0
         try:
             pf_entry = playfield_registry.get(source_id)
             if pf_entry.homography is not None:
                 homography = pf_entry.homography
             pf_poly = pf_entry.playfield.get_polygon()
+            if pf_entry.field_spec is not None:
+                origin_x = pf_entry.field_spec.width_cm / 2.0
+                origin_y = pf_entry.field_spec.height_cm / 2.0
         except (KeyError, AttributeError):
             pass
 
@@ -1176,12 +1189,17 @@ def _handle_get_objects(source_id: str) -> dict:
                 continue
             objects.append(obj)
 
+        def _centre(wxy):
+            if wxy is None:
+                return None
+            return [wxy[0] - origin_x, wxy[1] - origin_y]
+
         return {
             "source_id": source_id,
             "objects": [
                 {
                     "center_px": list(o.center_px),
-                    "world_xy": list(o.world_xy) if o.world_xy else None,
+                    "world_xy": _centre(o.world_xy),
                     "color": o.color,
                     "bbox": list(o.bbox),
                     "area_px": o.area_px,
@@ -2218,17 +2236,22 @@ async def get_composite_tags(
         detections = _detect_apriltags_on_frame(frame_sec)
         mapped = map_tags_to_primary(detections, comp.homography)
 
-        # Add world_xy if composite has a calibrated playfield
+        # Add world_xy if composite has a calibrated playfield (A1-centred)
         if comp.playfield_id:
             try:
                 pf_entry = playfield_registry.get(comp.playfield_id)
                 if pf_entry.homography is not None:
+                    ox = pf_entry.field_spec.width_cm / 2.0 if pf_entry.field_spec else 0.0
+                    oy = pf_entry.field_spec.height_cm / 2.0 if pf_entry.field_spec else 0.0
                     for tag in mapped:
                         cx, cy = tag["center_px"]
                         vec = np.array([cx, cy, 1.0], dtype=np.float64)
                         Xw = pf_entry.homography @ vec
                         if abs(Xw[2]) > 1e-9:
-                            tag["world_xy"] = [float(Xw[0] / Xw[2]), float(Xw[1] / Xw[2])]
+                            tag["world_xy"] = [
+                                float(Xw[0] / Xw[2]) - ox,
+                                float(Xw[1] / Xw[2]) - oy,
+                            ]
             except KeyError:
                 pass  # playfield not found, skip world coords
 
