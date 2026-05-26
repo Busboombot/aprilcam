@@ -41,10 +41,12 @@ class CollapsibleFrame(tk.Frame):
         header_fg: str = "#aaaaaa",
         on_expand=None,
         on_collapse=None,
+        expandable: bool = True,
         **kwargs,
     ):
         super().__init__(parent, bg=bg, **kwargs)
         self._expanded = True
+        self._expandable = expandable
         self._on_expand = on_expand
         self._on_collapse = on_collapse
 
@@ -80,12 +82,15 @@ class CollapsibleFrame(tk.Frame):
             self.content.grid_remove()
             self._toggle_lbl.config(text="▶")
             self._expanded = False
+            self.pack_configure(expand=False, fill=tk.X)
             if self._on_collapse:
                 self._on_collapse()
         else:
             self.content.grid()
             self._toggle_lbl.config(text="▼")
             self._expanded = True
+            if self._expandable:
+                self.pack_configure(expand=True, fill=tk.BOTH)
             if self._on_expand:
                 self._on_expand()
 
@@ -288,11 +293,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     cam_name: Optional[str] = None
+    _camera_dir: Optional[str] = None
     try:
         camera_arg = args.camera
         try:
             cam_index = int(camera_arg)
-            cam_name, _ = dc.open_camera(cam_index)
+            cam_name, _camera_dir = dc.open_camera(cam_index)
         except ValueError:
             # camera_arg is a name, not an index — verify it is open
             info = dc.get_camera_info(camera_arg)
@@ -359,7 +365,11 @@ def main(argv: list[str] | None = None) -> int:
     _classifier_holder: list = [None]  # lazy-init ColorClassifier
     _show_paths: list = [True]  # mutable container; render loop checks [0]
 
-    _paths_file = config.cameras_dir / cam_name / "paths.json"
+    _paths_file = (
+        Path(_camera_dir) / "paths.json"
+        if _camera_dir
+        else config.cameras_dir / cam_name / "paths.json"
+    )
 
     def _process_frame_and_tags(frame_bgr: "np.ndarray", tag_frame):
         """Apply tag overlay to frame_bgr; return (disp, status_dict, raw_tags_dicts)."""
@@ -532,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     STAT_FG = "#88ccff"
 
     # ── Status block (top of right panel) ────────────────────────────────
-    cf_status = CollapsibleFrame(right_frame, title="Camera Status", bg=PANEL_BG, header_fg="#aaaaaa")
+    cf_status = CollapsibleFrame(right_frame, title="Camera Status", bg=PANEL_BG, header_fg="#aaaaaa", expandable=False)
     cf_status.pack(fill=tk.X, padx=8, pady=(8, 4))
     status_frame = cf_status.content
 
@@ -551,7 +561,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── Mobile tags section ───────────────────────────────────────────────
     cf_mob = CollapsibleFrame(right_frame, title="Mobile Tags", bg=PANEL_BG, header_fg=MOB_FG)
-    cf_mob.pack(fill=tk.X, padx=8, pady=(4, 2))
+    cf_mob.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 2))
     mob_frame = cf_mob.content
 
     mobile_text = tk.Text(
@@ -598,7 +608,8 @@ def main(argv: list[str] | None = None) -> int:
         on_collapse=_on_obj_collapse,
         on_expand=_lazy_start_objects,
     )
-    cf_obj.pack(fill=tk.X, padx=8, pady=(4, 2))
+    cf_obj.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 2))
+    _lazy_start_objects()  # detection starts on since section starts expanded
     obj_outer = cf_obj.content
 
     obj_text = tk.Text(
@@ -625,7 +636,7 @@ def main(argv: list[str] | None = None) -> int:
         on_collapse=_on_paths_collapse,
         on_expand=_on_paths_expand,
     )
-    cf_paths.pack(fill=tk.X, padx=8, pady=(4, 8))
+    cf_paths.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
 
     # Inner scrollable container for path rows
     paths_canvas = tk.Canvas(cf_paths.content, bg=PANEL_BG, highlightthickness=0, height=120)
@@ -746,14 +757,15 @@ def main(argv: list[str] | None = None) -> int:
             # Delete button
             del_btn = tk.Button(
                 row,
-                text="✕",  # multiplication X
-                font=("Helvetica", 9),
-                bg=PANEL_BG, fg="#cc4444",
-                activebackground="#333", activeforeground="#ff6666",
-                relief=tk.FLAT, padx=2, pady=0,
+                text="✕",
+                font=("Helvetica", 9, "bold"),
+                bg="#000000", fg="#cc4444",
+                activebackground="#1a0000", activeforeground="#ff4444",
+                relief=tk.FLAT, bd=0, highlightthickness=0,
+                padx=4, pady=1,
                 command=lambda pid=path_id: _delete_path(pid),
             )
-            del_btn.pack(side=tk.RIGHT)
+            del_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
     # ── Mobility tracking (main-thread only) ──────────────────────────────
     _vel_counts: dict[int, int] = {}
