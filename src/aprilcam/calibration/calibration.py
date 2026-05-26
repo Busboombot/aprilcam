@@ -280,12 +280,16 @@ def save_calibration_to_camera_dir(
         "detection_fps",
     }
     preserved: dict = {}
+    existing_camera_position: Optional[dict] = None
     if cal_file.exists():
         try:
             existing_data = json.loads(cal_file.read_text())
             preserved = {k: v for k, v in existing_data.items() if k not in _CALIBRATION_KEYS}
             if "detection_fps" in existing_data:
                 detection_fps = int(existing_data["detection_fps"])
+            # Preserve camera_position from existing file if the new cal doesn't have one
+            if existing_data.get("camera_position"):
+                existing_camera_position = existing_data["camera_position"]
         except Exception:
             pass
 
@@ -298,6 +302,8 @@ def save_calibration_to_camera_dir(
             "y_offset": cal.camera_position.y_offset,
             "height": cal.camera_position.height,
         }
+    elif existing_camera_position is not None:
+        data["camera_position"] = existing_camera_position
     data.update(preserved)
     cal_file.write_text(json.dumps(data, indent=2))
     return cal_file
