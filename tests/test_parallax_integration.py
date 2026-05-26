@@ -82,7 +82,7 @@ def _run_pipeline_postprocess(pipeline, tag_records):
                 corrected.append(tr)
                 continue
             wx = tr.world_xy[0] - origin_x
-            wy = tr.world_xy[1] - origin_y
+            wy = origin_y - tr.world_xy[1]
             tag_h = pipeline._tag_heights.get(tr.id, 0.0)
             if pipeline._calibration.camera_position and tag_h > 0.0:
                 wx, wy = pipeline._calibration.correct_world_for_height(wx, wy, tag_h)
@@ -126,10 +126,10 @@ def test_pipeline_applies_correction_to_elevated_tag():
     tr = _make_tag_record(5, (100.0, 80.0))
     result = _run_pipeline_postprocess(pipeline, [tr])
 
-    # After translation: wx=50, wy=40; r=12/180
+    # After translation: wx=50, wy=40-80=-40; r=12/180
     r = 12.0 / 180.0
-    expected_x = 50.0 * (1.0 - r)  # cx=0 so: wx + r*(0 - wx) = wx*(1-r)
-    expected_y = 40.0 * (1.0 - r)
+    expected_x = 50.0 * (1.0 - r)   # cx=0 so: wx + r*(0 - wx) = wx*(1-r)
+    expected_y = -40.0 * (1.0 - r)  # south corner → negative y (y-up)
     assert abs(result[0].world_xy[0] - expected_x) < 0.01
     assert abs(result[0].world_xy[1] - expected_y) < 0.01
 

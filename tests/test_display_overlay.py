@@ -58,7 +58,8 @@ def test_arc_draws():
         type="arc", params=[50.0, 50.0, 10.0, 0.0, 180.0],
         color=[0, 255, 0], thickness=2
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    # origin_y=100 so raw_y = 100-50 = 50, which lands on the 600px frame
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0
 
 
@@ -69,7 +70,7 @@ def test_arrow_draws():
         type="arrow", params=[40.0, 40.0, 60.0, 60.0],
         color=[255, 0, 0], thickness=2
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0
 
 
@@ -80,7 +81,7 @@ def test_point_draws():
         type="point", params=[50.0, 50.0, 3.0],
         color=[0, 0, 255], thickness=-1
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0
 
 
@@ -91,7 +92,7 @@ def test_polyline_draws():
         type="polyline", params=[40.0, 40.0, 50.0, 60.0, 60.0, 40.0],
         color=[255, 255, 0], thickness=2
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0
 
 
@@ -110,7 +111,7 @@ def test_text_draws():
         type="text", params=[50.0, 50.0],
         text="hello", color=[255, 255, 0], thickness=1,
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0
 
 
@@ -120,7 +121,7 @@ def test_text_empty_string_no_raise():
     elem = aprilcam_pb2.OverlayElement(
         type="text", params=[50.0, 50.0], text="",
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     # empty string — no exception, frame may or may not be modified
 
 
@@ -131,7 +132,7 @@ def test_rect_draws():
         type="rect", params=[30.0, 30.0, 70.0, 60.0],
         color=[0, 255, 255], thickness=-1,
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0
 
 
@@ -142,5 +143,5 @@ def test_polygon_draws():
         type="polygon", params=[50.0, 30.0, 70.0, 60.0, 30.0, 60.0],
         color=[255, 0, 200], thickness=-1,
     )
-    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography())
+    d.draw_live_overlay(frame, _overlay([elem]), _identity_homography(), origin_y=100.0)
     assert frame.sum() > 0

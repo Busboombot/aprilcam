@@ -533,7 +533,7 @@ class CameraPipeline:
                         corrected.append(tr)
                         continue
                     wx = tr.world_xy[0] - origin_x
-                    wy = tr.world_xy[1] - origin_y
+                    wy = origin_y - tr.world_xy[1]
                     tag_h = self._tag_heights.get(tr.id, 0.0)
                     if self._calibration.camera_position and tag_h > 0.0:
                         wx, wy = self._calibration.correct_world_for_height(wx, wy, tag_h)

@@ -1030,7 +1030,7 @@ def _compute_gripper_world_xy(
             return None
         w_unit = w_dir / w_norm
         gripper = cw_xy + w_unit * offset_cm
-        return [float(gripper[0]) - origin_x, float(gripper[1]) - origin_y]
+        return [float(gripper[0]) - origin_x, origin_y - float(gripper[1])]
     except Exception:
         return None
 
@@ -1107,7 +1107,7 @@ def _handle_pixel_to_world(
             else:
                 world_points.append([
                     float(vec[0] / vec[2]) - origin_x,
-                    float(vec[1] / vec[2]) - origin_y,
+                    origin_y - float(vec[1] / vec[2]),
                 ])
 
         return {"source_id": source_id, "world_points": world_points}
@@ -1192,7 +1192,7 @@ def _handle_get_objects(source_id: str) -> dict:
         def _centre(wxy):
             if wxy is None:
                 return None
-            return [wxy[0] - origin_x, wxy[1] - origin_y]
+            return [wxy[0] - origin_x, origin_y - wxy[1]]
 
         return {
             "source_id": source_id,
@@ -2250,7 +2250,7 @@ async def get_composite_tags(
                         if abs(Xw[2]) > 1e-9:
                             tag["world_xy"] = [
                                 float(Xw[0] / Xw[2]) - ox,
-                                float(Xw[1] / Xw[2]) - oy,
+                                oy - float(Xw[1] / Xw[2]),
                             ]
             except KeyError:
                 pass  # playfield not found, skip world coords
