@@ -1,14 +1,14 @@
 ---
 id: 008
 title: Parallax correction and calibration restructuring
-status: planning-docs
+status: done
 branch: sprint/008-parallax-correction-and-calibration-restructuring
 use-cases:
-  - SUC-001
-  - SUC-002
-  - SUC-003
+- SUC-001
+- SUC-002
+- SUC-003
 issues:
-  - parallax-correction-and-calibration-restructuring.md
+- parallax-correction-and-calibration-restructuring.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
