@@ -638,6 +638,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     cf_paths.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
 
+    def _clear_all_paths():
+        tmp = _paths_file.with_suffix(".tmp")
+        try:
+            _paths_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text("[]")
+            os.replace(tmp, _paths_file)
+        except Exception:
+            pass
+        _refresh_paths()
+
+    tk.Button(
+        cf_paths._header,
+        text="Clear all",
+        font=("Helvetica", 8),
+        bg="#000000", fg="#cc4444",
+        activebackground="#1a0000", activeforeground="#ff4444",
+        relief=tk.FLAT, bd=0, highlightthickness=0,
+        padx=4, pady=1,
+        command=_clear_all_paths,
+    ).pack(side=tk.RIGHT, padx=(0, 6))
+
     # Inner scrollable container for path rows
     paths_canvas = tk.Canvas(cf_paths.content, bg=PANEL_BG, highlightthickness=0, height=120)
     paths_vsb = tk.Scrollbar(cf_paths.content, orient=tk.VERTICAL, command=paths_canvas.yview)
@@ -690,23 +711,23 @@ def main(argv: list[str] | None = None) -> int:
         # symbol == "none": draw nothing
 
     def _delete_path(path_id: str) -> None:
-        """Remove path_id from paths.json directly, then refresh the Paths panel."""
+        """Remove path_id from paths.json, keeping list format. Then refresh."""
         try:
             raw = json.loads(_paths_file.read_text())
         except Exception:
-            raw = {}
-        if isinstance(raw, list):
-            raw = {
-                item.get("path_id") or item.get("id") or str(i): item
-                for i, item in enumerate(raw)
-                if isinstance(item, dict)
-            }
+            raw = []
         if isinstance(raw, dict):
-            raw.pop(path_id, None)
+            # normalize old dict format to list
+            raw = list(raw.values())
+        remaining = [
+            item for item in raw
+            if isinstance(item, dict)
+            and (item.get("path_id") or item.get("id")) != path_id
+        ]
         tmp = _paths_file.with_suffix(".tmp")
         try:
             _paths_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(raw, indent=2))
+            tmp.write_text(json.dumps(remaining, indent=2))
             os.replace(tmp, _paths_file)
         except Exception:
             pass
