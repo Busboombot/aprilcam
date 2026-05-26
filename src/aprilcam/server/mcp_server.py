@@ -49,6 +49,7 @@ from aprilcam.calibration.homography import (
     detect_aruco_4x4,
 )
 from aprilcam.calibration.calibration import (
+    CameraPosition,
     FieldSpec,
     calibrate_from_corners,
 )
@@ -1642,6 +1643,9 @@ async def calibrate_playfield(
     width: float,
     height: float,
     units: str = "inch",
+    camera_height_cm: float = 0.0,
+    camera_x_offset_cm: float = 0.0,
+    camera_y_offset_cm: float = 0.0,
 ) -> list[TextContent]:
     """Calibrate a playfield with real-world measurements to enable pixel-to-world mapping.
 
@@ -1655,14 +1659,27 @@ async def calibrate_playfield(
     Uses the detected corner markers to compute a homography that maps
     pixel coordinates to real-world coordinates in the specified units.
 
+    The camera mounting position is stored in ``calibration.json`` under
+    ``camera_position`` and is used by the daemon pipeline to apply
+    automatic parallax correction for tags elevated above the playfield.
+
     Args:
         playfield_id: The playfield handle from ``create_playfield``.
         width: Real-world width of the playfield between corner markers.
         height: Real-world height of the playfield between corner markers.
         units: Measurement units — ``"inch"`` (default) or ``"cm"``.
+        camera_height_cm: Height of the camera above the playfield surface
+            in cm (default 0.0, which disables parallax correction).
+            Provide the actual measured height to enable automatic parallax
+            correction for elevated tags via the daemon pipeline.
+        camera_x_offset_cm: Horizontal offset of the camera lens from the
+            playfield center, in cm (default 0.0, positive = right).
+        camera_y_offset_cm: Forward/depth offset of the camera lens from
+            the playfield center, in cm (default 0.0, positive = up/forward).
 
     Returns:
-        On success: ``{"playfield_id": "<id>", "calibrated": true, "width_cm": ..., "height_cm": ...}``.
+        On success: ``{"playfield_id": "<id>", "calibrated": true,
+        "width_cm": ..., "height_cm": ..., "camera_height_cm": ...}``.
         On error: ``{"error": "<message>"}``.
     """
     try:
@@ -1700,12 +1717,67 @@ async def calibrate_playfield(
         entry.field_spec = field_spec
         entry.homography = H
 
-        return [TextContent(type="text", text=json.dumps({
+        # Persist calibration to the daemon's per-camera directory, including
+        # camera_position so the daemon pipeline can apply parallax correction.
+        per_camera_path: str | None = None
+        try:
+            camera_id = entry.camera_id
+            camera_dir_str = _cam_info.get(camera_id, {}).get("camera_dir", "")
+            if camera_dir_str:
+                cap = registry._cameras.get(camera_id)
+                cap_w, cap_h = 0, 0
+                if cap is not None:
+                    import cv2
+                    cap_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    cap_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                from aprilcam.camera.camutil import get_device_name
+                from aprilcam.calibration.calibration import (
+                    CameraCalibration,
+                    save_calibration_to_camera_dir,
+                )
+
+                cam_idx: int | None = None
+                if camera_id.startswith("cam_"):
+                    try:
+                        cam_idx = int(camera_id.split("_", 1)[1])
+                    except (ValueError, IndexError):
+                        pass
+                dev_name = get_device_name(cam_idx) if cam_idx is not None else camera_id
+
+                cal = CameraCalibration(
+                    device_name=dev_name,
+                    resolution=(cap_w, cap_h) if cap_w and cap_h else (0, 0),
+                    homography=H,
+                    camera_position=CameraPosition(
+                        x_offset=camera_x_offset_cm,
+                        y_offset=camera_y_offset_cm,
+                        height=camera_height_cm,
+                    ),
+                )
+                pc_path = save_calibration_to_camera_dir(
+                    cal,
+                    camera_dir_str,
+                    field_width_cm=field_spec.width_cm,
+                    field_height_cm=field_spec.height_cm,
+                )
+                per_camera_path = str(pc_path)
+        except Exception as _persist_exc:
+            import logging
+            logging.getLogger("aprilcam").warning(
+                "Failed to persist calibration: %s", _persist_exc
+            )
+
+        result: dict = {
             "playfield_id": playfield_id,
             "calibrated": True,
             "width_cm": field_spec.width_cm,
             "height_cm": field_spec.height_cm,
-        }))]
+            "camera_height_cm": camera_height_cm,
+        }
+        if per_camera_path:
+            result["homography_file"] = per_camera_path
+        return [TextContent(type="text", text=json.dumps(result))]
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Unexpected error: {exc}"}))]
 
@@ -2439,7 +2511,10 @@ async def stop_stream(source_id: str) -> list[TextContent]:
 
 
 @server.tool()
-async def get_tags(source_id: str) -> list[TextContent]:
+async def get_tags(
+    source_id: str,
+    tag_heights_json: Optional[str] = None,
+) -> list[TextContent]:
     """Return the latest tag detections from a running detection loop.
 
     **Primary tool for tag world coordinates.** When the source is a
@@ -2454,9 +2529,26 @@ async def get_tags(source_id: str) -> list[TextContent]:
 
     Use ``start_detection`` only for legacy code; ``stream_tags`` is preferred.
 
+    Parallax correction: when ``tag_heights_json`` is provided, the
+    ``world_xy`` for each matching tag is corrected for parallax using
+    the camera position stored in ``calibration.json``.  The per-call
+    heights are merged over any heights already stored in calibration —
+    per-call values take precedence for matching tag IDs.  Pass
+    ``{"id": 0}`` for a tag to suppress correction for that tag.
+
+    Note: the daemon pipeline also applies persistent ``tag_heights``
+    automatically when detection is running via ``stream_tags``/
+    ``start_detection``.  Use ``tag_heights_json`` here for ad-hoc
+    per-call overrides without restarting detection.
+
     Args:
         source_id: The playfield_id (or camera handle) passed to ``stream_tags``
             (or ``start_detection``).
+        tag_heights_json: Optional JSON object mapping tag ID strings to height
+            in cm (e.g. ``'{"5": 11.8, "12": 7.5}'``).  Heights are merged
+            over persisted ``calibration.tag_heights``; per-call values
+            take precedence.  A height of ``0`` suppresses correction for
+            that tag.  Invalid JSON returns ``{"error": "..."}``.
 
     Returns:
         On success: ``{"source_id": "<id>", "frame": <int>, "tags": [...]}``.
@@ -2464,7 +2556,9 @@ async def get_tags(source_id: str) -> list[TextContent]:
           - ``id``: marker ID (int)
           - ``center_px``: [x, y] pixel position
           - ``corners_px``: list of 4 [x, y] corner points
-          - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated
+          - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated;
+            parallax-corrected when ``tag_heights_json`` is supplied and
+            ``camera_position`` is set in calibration
           - ``orientation_yaw``: heading in radians
           - ``vel_px``: [vx, vy] velocity in pixels/s, or null if not yet computed
           - ``in_playfield``: bool, true if the tag center is inside the playfield polygon
@@ -2474,6 +2568,57 @@ async def get_tags(source_id: str) -> list[TextContent]:
         On error: ``{"error": "<message>"}``.
     """
     result = _handle_get_tags(source_id)
+    if "error" in result:
+        return [TextContent(type="text", text=json.dumps(result))]
+
+    if tag_heights_json is not None:
+        # Parse the per-call height override
+        try:
+            override: dict[int, float] = {
+                int(k): float(v)
+                for k, v in json.loads(tag_heights_json).items()
+            }
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            return [TextContent(type="text", text=json.dumps(
+                {"error": f"Invalid tag_heights_json: {exc}"}
+            ))]
+
+        # Resolve calibration for this source (playfield → camera dir)
+        calibration = None
+        try:
+            camera_id: str | None = None
+            try:
+                pf_entry = playfield_registry.get(source_id)
+                camera_id = pf_entry.camera_id
+            except KeyError:
+                camera_id = source_id
+
+            if camera_id is not None:
+                camera_dir_str = _cam_info.get(camera_id, {}).get("camera_dir", "")
+                if camera_dir_str:
+                    from aprilcam.calibration.calibration import (
+                        load_calibration_from_camera_dir,
+                    )
+                    calibration = load_calibration_from_camera_dir(camera_dir_str)
+        except Exception:
+            pass
+
+        # Merge persisted tag_heights with per-call override
+        merged: dict[int, float] = {}
+        if calibration and calibration.tag_heights:
+            merged.update(calibration.tag_heights)
+        merged.update(override)
+
+        # Apply parallax correction to each tag's world_xy
+        if calibration and calibration.camera_position and merged:
+            for tag in result.get("tags", []):
+                tag_h = merged.get(tag.get("id", -1), 0.0)
+                wxy = tag.get("world_xy")
+                if tag_h > 0.0 and wxy is not None:
+                    tag["world_xy"] = list(
+                        calibration.correct_world_for_height(wxy[0], wxy[1], tag_h)
+                    )
+
     return [TextContent(type="text", text=json.dumps(result))]
 
 
