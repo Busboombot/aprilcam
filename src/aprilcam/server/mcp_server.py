@@ -3140,7 +3140,7 @@ async def stop_live_view(view_id: str) -> list[TextContent]:
 # ---------------------------------------------------------------------------
 
 
-def _handle_create_path(playfield_id: str, waypoints_json: str) -> dict:
+def _handle_create_path(playfield_id: str, waypoints_json: str, name: str = "") -> dict:
     """Core logic for create_path — returns result dict or error dict."""
     # 1. Validate playfield exists
     try:
@@ -3203,7 +3203,7 @@ def _handle_create_path(playfield_id: str, waypoints_json: str) -> dict:
             )
         )
 
-    path = path_registry.create(playfield_id, waypoints)
+    path = path_registry.create(playfield_id, waypoints, name=name)
 
     # Persist current path list to paths.json so the live view subscriber
     # can reload it without IPC.
@@ -3254,7 +3254,11 @@ def _handle_clear_paths(playfield_id: str) -> dict:
 
 
 @server.tool()
-async def create_path(playfield_id: str, waypoints_json: str) -> list[TextContent]:
+async def create_path(
+    playfield_id: str,
+    waypoints_json: str,
+    name: str = "",
+) -> list[TextContent]:
     """Create an agent-drawn path on a playfield.
 
     Workflow: open_camera → create_playfield → create_path.
@@ -3280,11 +3284,14 @@ async def create_path(playfield_id: str, waypoints_json: str) -> list[TextConten
                  {"x": 60, "y": 45, "size_cm": 3, "symbol": "filled_circle",
                   "symbol_color": [0, 200, 0], "line_color": [0, 200, 0]}]
 
+        name: Optional display label for the path (shown in the viewer panel).
+            Defaults to ``""`` (viewer falls back to ``path_id``).
+
     Returns:
         On success: ``{"path_id": "path_NNN"}``.
         On error: ``{"error": "<message>"}``.
     """
-    result = _handle_create_path(playfield_id, waypoints_json)
+    result = _handle_create_path(playfield_id, waypoints_json, name=name)
     return [TextContent(type="text", text=json.dumps(result))]
 
 

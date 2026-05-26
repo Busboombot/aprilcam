@@ -9,8 +9,85 @@ import os
 import queue
 import sys
 import threading
+import tkinter as tk
 from pathlib import Path
 from typing import Optional
+
+
+class CollapsibleFrame(tk.Frame):
+    """A tk.Frame with a clickable header that hides/shows its content sub-frame.
+
+    Parameters
+    ----------
+    parent:
+        Parent widget.
+    title:
+        Section title displayed in the header row.
+    bg:
+        Background color for the frame and header.
+    header_fg:
+        Foreground color for the title text.
+    on_expand:
+        Callable invoked (no args) when the section is expanded.
+    on_collapse:
+        Callable invoked (no args) when the section is collapsed.
+    """
+
+    def __init__(
+        self,
+        parent,
+        title: str,
+        bg: str = "#1e1e1e",
+        header_fg: str = "#aaaaaa",
+        on_expand=None,
+        on_collapse=None,
+        **kwargs,
+    ):
+        super().__init__(parent, bg=bg, **kwargs)
+        self._expanded = True
+        self._on_expand = on_expand
+        self._on_collapse = on_collapse
+
+        # Header row
+        self._header = tk.Frame(self, bg=bg, cursor="hand2")
+        self._header.grid(row=0, column=0, sticky="ew")
+        self.columnconfigure(0, weight=1)
+
+        self._toggle_lbl = tk.Label(
+            self._header, text="▼", bg=bg, fg=header_fg,
+            font=("Helvetica", 10, "bold"),
+        )
+        self._toggle_lbl.pack(side=tk.LEFT, padx=(4, 2))
+
+        self._title_lbl = tk.Label(
+            self._header, text=title, bg=bg, fg=header_fg,
+            font=("Helvetica", 10, "bold"), anchor="w",
+        )
+        self._title_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Content frame — callers pack/grid their widgets into this
+        self.content = tk.Frame(self, bg=bg)
+        self.content.grid(row=1, column=0, sticky="nsew")
+        self.rowconfigure(1, weight=1)
+
+        # Bind click on both header widgets
+        for w in (self._header, self._toggle_lbl, self._title_lbl):
+            w.bind("<Button-1>", lambda _e: self.toggle())
+
+    def toggle(self):
+        """Toggle expanded/collapsed state."""
+        if self._expanded:
+            self.content.grid_remove()
+            self._toggle_lbl.config(text="▶")
+            self._expanded = False
+            if self._on_collapse:
+                self._on_collapse()
+        else:
+            self.content.grid()
+            self._toggle_lbl.config(text="▼")
+            self._expanded = True
+            if self._on_expand:
+                self._on_expand()
 
 
 _OBJ_BGR: dict[str, tuple[int, int, int]] = {
@@ -280,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     _latest_objects: list = [[]]
     _obj_lock = threading.Lock()
     _classifier_holder: list = [None]  # lazy-init ColorClassifier
+    _show_paths: list = [True]  # mutable container; render loop checks [0]
 
     _paths_file = config.cameras_dir / cam_name / "paths.json"
 
@@ -320,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
         display.draw_overlays(disp, tags, homography)
 
         paths = _load_paths(_paths_file)
-        if paths:
+        if paths and _show_paths[0]:
             display.draw_paths(disp, paths, boundary, homography)
 
         with _overlay_lock:
@@ -421,7 +499,6 @@ def main(argv: list[str] | None = None) -> int:
     tag_reader = threading.Thread(target=_tag_reader_thread, daemon=True)
 
     # ── Build tkinter window ──────────────────────────────────────────────
-    import tkinter as tk
     import tkinter.font as tkfont
     from PIL import Image, ImageTk
 
@@ -455,12 +532,9 @@ def main(argv: list[str] | None = None) -> int:
     STAT_FG = "#88ccff"
 
     # ── Status block (top of right panel) ────────────────────────────────
-    status_frame = tk.LabelFrame(
-        right_frame, text="Camera Status",
-        font=("Helvetica", 10, "bold"),
-        fg="#aaaaaa", bg=PANEL_BG, padx=8, pady=6,
-    )
-    status_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+    cf_status = CollapsibleFrame(right_frame, title="Camera Status", bg=PANEL_BG, header_fg="#aaaaaa")
+    cf_status.pack(fill=tk.X, padx=8, pady=(8, 4))
+    status_frame = cf_status.content
 
     def _kv_row(parent, row, key, init="--"):
         tk.Label(parent, text=key, font=label_font, fg="#aaaaaa", bg=PANEL_BG,
@@ -476,12 +550,9 @@ def main(argv: list[str] | None = None) -> int:
     var_deskew = _kv_row(status_frame, 3, "Deskew")
 
     # ── Mobile tags section ───────────────────────────────────────────────
-    mob_frame = tk.LabelFrame(
-        right_frame, text="Mobile Tags",
-        font=("Helvetica", 10, "bold"),
-        fg=MOB_FG, bg=PANEL_BG, padx=4, pady=4,
-    )
-    mob_frame.pack(fill=tk.X, padx=8, pady=(4, 2))
+    cf_mob = CollapsibleFrame(right_frame, title="Mobile Tags", bg=PANEL_BG, header_fg=MOB_FG)
+    cf_mob.pack(fill=tk.X, padx=8, pady=(4, 2))
+    mob_frame = cf_mob.content
 
     mobile_text = tk.Text(
         mob_frame, font=mono, bg="#111", fg=MOB_FG,
@@ -494,12 +565,9 @@ def main(argv: list[str] | None = None) -> int:
     mobile_text.pack(fill=tk.BOTH, expand=True)
 
     # ── Stationary tags section ───────────────────────────────────────────
-    stat_outer = tk.LabelFrame(
-        right_frame, text="Stationary Tags",
-        font=("Helvetica", 10, "bold"),
-        fg=STAT_FG, bg=PANEL_BG, padx=4, pady=4,
-    )
-    stat_outer.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 8))
+    cf_stat = CollapsibleFrame(right_frame, title="Stationary Tags", bg=PANEL_BG, header_fg=STAT_FG)
+    cf_stat.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 8))
+    stat_outer = cf_stat.content
 
     stat_text = tk.Text(
         stat_outer, font=mono, bg="#111", fg=STAT_FG,
@@ -511,38 +579,27 @@ def main(argv: list[str] | None = None) -> int:
     stat_sb.pack(side=tk.RIGHT, fill=tk.Y)
     stat_text.pack(fill=tk.BOTH, expand=True)
 
-    # ── Object detection toggle + panel ──────────────────────────────────
+    # ── Object detection collapsible panel ───────────────────────────────
     OBJ_FG = "#44ff88"
 
-    def _toggle_objects():
-        if _detect_objects.is_set():
-            _detect_objects.clear()
-            btn_objects.config(text="Objects: Off", bg="#444444", fg="#aaaaaa")
-            with _obj_lock:
-                _latest_objects[0] = []
-        else:
-            if _classifier_holder[0] is None:
-                from aprilcam.vision.color_classifier import ColorClassifier
-                _classifier_holder[0] = ColorClassifier(min_area=400, max_area=8000)
-            _detect_objects.set()
-            btn_objects.config(text="Objects: On", bg="#226622", fg=OBJ_FG)
+    def _lazy_start_objects():
+        if _classifier_holder[0] is None:
+            from aprilcam.vision.color_classifier import ColorClassifier
+            _classifier_holder[0] = ColorClassifier(min_area=400, max_area=8000)
+        _detect_objects.set()
 
-    btn_objects = tk.Button(
-        right_frame, text="Objects: Off",
-        font=("Helvetica", 10, "bold"),
-        bg="#444444", fg="#aaaaaa",
-        activebackground="#333333", activeforeground="#dddddd",
-        relief=tk.FLAT, padx=8, pady=4,
-        command=_toggle_objects,
-    )
-    btn_objects.pack(fill=tk.X, padx=8, pady=(4, 2))
+    def _on_obj_collapse():
+        _detect_objects.clear()
+        with _obj_lock:
+            _latest_objects[0] = []
 
-    obj_outer = tk.LabelFrame(
-        right_frame, text="Objects",
-        font=("Helvetica", 10, "bold"),
-        fg=OBJ_FG, bg=PANEL_BG, padx=4, pady=4,
+    cf_obj = CollapsibleFrame(
+        right_frame, title="Objects", bg=PANEL_BG, header_fg=OBJ_FG,
+        on_collapse=_on_obj_collapse,
+        on_expand=_lazy_start_objects,
     )
-    obj_outer.pack(fill=tk.X, padx=8, pady=(2, 8))
+    cf_obj.pack(fill=tk.X, padx=8, pady=(4, 2))
+    obj_outer = cf_obj.content
 
     obj_text = tk.Text(
         obj_outer, font=mono, bg="#111", fg=OBJ_FG,
@@ -553,6 +610,150 @@ def main(argv: list[str] | None = None) -> int:
     obj_text.configure(yscrollcommand=obj_sb.set)
     obj_sb.pack(side=tk.RIGHT, fill=tk.Y)
     obj_text.pack(fill=tk.BOTH, expand=True)
+
+    # ── Paths section ─────────────────────────────────────────────────────
+    PATH_FG = "#88aaff"
+
+    def _on_paths_collapse():
+        _show_paths[0] = False
+
+    def _on_paths_expand():
+        _show_paths[0] = True
+
+    cf_paths = CollapsibleFrame(
+        right_frame, title="Paths", bg=PANEL_BG, header_fg=PATH_FG,
+        on_collapse=_on_paths_collapse,
+        on_expand=_on_paths_expand,
+    )
+    cf_paths.pack(fill=tk.X, padx=8, pady=(4, 8))
+
+    # Inner scrollable container for path rows
+    paths_canvas = tk.Canvas(cf_paths.content, bg=PANEL_BG, highlightthickness=0, height=120)
+    paths_vsb = tk.Scrollbar(cf_paths.content, orient=tk.VERTICAL, command=paths_canvas.yview)
+    paths_canvas.configure(yscrollcommand=paths_vsb.set)
+    paths_vsb.pack(side=tk.RIGHT, fill=tk.Y)
+    paths_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    paths_inner = tk.Frame(paths_canvas, bg=PANEL_BG)
+    paths_canvas_window = paths_canvas.create_window((0, 0), window=paths_inner, anchor="nw")
+
+    def _on_paths_inner_configure(event):
+        paths_canvas.configure(scrollregion=paths_canvas.bbox("all"))
+        paths_canvas.itemconfig(paths_canvas_window, width=paths_canvas.winfo_width())
+
+    paths_inner.bind("<Configure>", _on_paths_inner_configure)
+    paths_canvas.bind("<Configure>", lambda e: paths_canvas.itemconfig(
+        paths_canvas_window, width=e.width
+    ))
+
+    # ── Paths helpers ─────────────────────────────────────────────────────
+
+    def _rgb_to_hex(rgb) -> str:
+        """Convert an RGB list/tuple to a Tkinter hex color string."""
+        r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _draw_symbol_on_canvas(c: tk.Canvas, symbol: str, color_hex: str) -> None:
+        """Draw the given symbol on a 16x16 canvas."""
+        c.delete("all")
+        pad = 2
+        s = 16 - 2 * pad
+        cx, cy = 8, 8
+        if symbol == "square":
+            c.create_rectangle(pad, pad, pad + s, pad + s, outline=color_hex, width=1)
+        elif symbol == "filled_square":
+            c.create_rectangle(pad, pad, pad + s, pad + s, fill=color_hex, outline="")
+        elif symbol == "circle":
+            c.create_oval(pad, pad, pad + s, pad + s, outline=color_hex, width=1)
+        elif symbol == "filled_circle":
+            c.create_oval(pad, pad, pad + s, pad + s, fill=color_hex, outline="")
+        elif symbol in ("triangle", "filled_triangle"):
+            pts = [cx, pad, pad, pad + s, pad + s, pad + s]
+            if symbol == "triangle":
+                c.create_polygon(pts, outline=color_hex, fill="", width=1)
+            else:
+                c.create_polygon(pts, fill=color_hex, outline="")
+        elif symbol == "x":
+            c.create_line(pad, pad, pad + s, pad + s, fill=color_hex, width=1)
+            c.create_line(pad + s, pad, pad, pad + s, fill=color_hex, width=1)
+        # symbol == "none": draw nothing
+
+    def _delete_path(path_id: str) -> None:
+        """Remove path_id from paths.json directly, then refresh the Paths panel."""
+        try:
+            raw = json.loads(_paths_file.read_text())
+        except Exception:
+            raw = {}
+        if isinstance(raw, list):
+            raw = {
+                item.get("path_id") or item.get("id") or str(i): item
+                for i, item in enumerate(raw)
+                if isinstance(item, dict)
+            }
+        if isinstance(raw, dict):
+            raw.pop(path_id, None)
+        tmp = _paths_file.with_suffix(".tmp")
+        try:
+            _paths_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(raw, indent=2))
+            os.replace(tmp, _paths_file)
+        except Exception:
+            pass
+        _refresh_paths()
+
+    def _refresh_paths() -> None:
+        """Rebuild the Paths panel rows from _load_paths()."""
+        for w in paths_inner.winfo_children():
+            w.destroy()
+
+        paths = _load_paths(_paths_file)
+        if not paths:
+            tk.Label(
+                paths_inner, text="(no paths)", bg=PANEL_BG, fg="#666666",
+                font=("Helvetica", 9),
+            ).pack(anchor="w", padx=6, pady=2)
+            return
+
+        for path_id, path_dict in sorted(paths.items()):
+            wps = path_dict.get("waypoints", [])
+            first_wp = wps[0] if wps else {}
+            sym = first_wp.get("symbol", "none")
+            sym_color = first_wp.get("symbol_color", [180, 180, 180])
+            line_color = first_wp.get("line_color", [180, 180, 180])
+            label_text = path_dict.get("name") or path_id
+
+            row = tk.Frame(paths_inner, bg=PANEL_BG)
+            row.pack(fill=tk.X, padx=4, pady=1)
+
+            # Symbol preview canvas
+            sym_canvas = tk.Canvas(row, width=16, height=16, bg=PANEL_BG,
+                                   highlightthickness=0)
+            sym_canvas.pack(side=tk.LEFT, padx=(0, 3))
+            _draw_symbol_on_canvas(sym_canvas, sym, _rgb_to_hex(sym_color))
+
+            # Line color swatch
+            swatch = tk.Canvas(row, width=20, height=4, bg=PANEL_BG,
+                               highlightthickness=0)
+            swatch.pack(side=tk.LEFT, padx=(0, 6))
+            swatch.create_rectangle(0, 0, 20, 4, fill=_rgb_to_hex(line_color), outline="")
+
+            # Name/id label
+            tk.Label(
+                row, text=label_text, bg=PANEL_BG, fg=PATH_FG,
+                font=("Helvetica", 9), anchor="w",
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # Delete button
+            del_btn = tk.Button(
+                row,
+                text="✕",  # multiplication X
+                font=("Helvetica", 9),
+                bg=PANEL_BG, fg="#cc4444",
+                activebackground="#333", activeforeground="#ff6666",
+                relief=tk.FLAT, padx=2, pady=0,
+                command=lambda pid=path_id: _delete_path(pid),
+            )
+            del_btn.pack(side=tk.RIGHT)
 
     # ── Mobility tracking (main-thread only) ──────────────────────────────
     _vel_counts: dict[int, int] = {}
@@ -651,6 +852,8 @@ def main(argv: list[str] | None = None) -> int:
             _set_text(obj_text, "(none detected)\n")
         else:
             _set_text(obj_text, "(detection off)\n")
+
+        _refresh_paths()
 
         root.after(33, _poll)
 

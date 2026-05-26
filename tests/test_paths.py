@@ -160,6 +160,48 @@ def test_to_dict_round_trip():
 
 
 # ---------------------------------------------------------------------------
+# name field tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_with_name_stores_name():
+    """PathRegistry.create with name= stores that name on the returned Path."""
+    registry = PathRegistry()
+    path = registry.create("pf_0", [make_waypoint()], name="Test")
+    assert path.name == "Test"
+
+
+def test_create_without_name_defaults_to_empty_string():
+    """PathRegistry.create without name= defaults to empty string."""
+    registry = PathRegistry()
+    path = registry.create("pf_0", [make_waypoint()])
+    assert path.name == ""
+
+
+def test_to_dict_includes_name_when_set():
+    """to_dict() includes name key with correct value when name is set."""
+    registry = PathRegistry()
+    path = registry.create("pf_0", [make_waypoint()], name="Test")
+    d = path.to_dict()
+    assert d["name"] == "Test"
+
+
+def test_to_dict_includes_name_when_default():
+    """to_dict() includes name key with empty string when using default."""
+    registry = PathRegistry()
+    path = registry.create("pf_0", [make_waypoint()])
+    d = path.to_dict()
+    assert d["name"] == ""
+
+
+def test_path_dataclass_name_field_is_optional():
+    """Path can be constructed without name (backward compatibility)."""
+    wp = make_waypoint()
+    path = Path(path_id="path_000", playfield_id="pf_0", waypoints=[wp])
+    assert path.name == ""
+
+
+# ---------------------------------------------------------------------------
 # VALID_SYMBOLS sanity check
 # ---------------------------------------------------------------------------
 

@@ -504,12 +504,17 @@ class CameraPipeline:
             # Apply parallax correction for tags elevated above the playfield.
             # Only runs when a camera_position with non-zero height is configured.
             if self._calibration and self._calibration.camera_position:
+                import dataclasses as _dc
+                corrected = []
                 for tr in tag_records:
                     tag_h = self._calibration.tag_heights.get(tr.id, 0.0)
                     if tag_h > 0.0 and tr.world_xy is not None:
-                        tr.world_xy = self._calibration.correct_world_for_height(
+                        new_xy = self._calibration.correct_world_for_height(
                             tr.world_xy[0], tr.world_xy[1], tag_h
                         )
+                        tr = _dc.replace(tr, world_xy=new_xy)
+                    corrected.append(tr)
+                tag_records = corrected
 
             # Store in ring buffer
             frame_record = FrameRecord(
