@@ -1,0 +1,62 @@
+{
+  "path_odom": {
+    "path_id": "path_odom",
+    "playfield_id": "pf_arducam-ov9782-usb-camera",
+    "waypoints": [
+      {
+        "x": 77.98423767089844,
+        "y": 15.80187702178955,
+        "size_cm": 0.6,
+        "symbol": "none",
+        "symbol_color": [
+          230,
+          60,
+          60
+        ],
+        "line_color": [
+          230,
+          60,
+          60
+        ]
+      }
+    ]
+  },
+  "path_route_markers": {
+    "path_id": "path_route_markers",
+    "playfield_id": "pf_arducam-ov9782-usb-camera",
+    "waypoints": [
+      {
+        "x": 67.14,
+        "y": 43.92,
+        "size_cm": 3.0,
+        "symbol": "filled_circle",
+        "symbol_color": [
+          0,
+          200,
+          255
+        ],
+        "line_color": [
+          0,
+          200,
+          255
+        ]
+      },
+      {
+        "x": 67.14,
+        "y": 43.92,
+        "size_cm": 2.5,
+        "symbol": "filled_circle",
+        "symbol_color": [
+          255,
+          140,
+          0
+        ],
+        "line_color": [
+          255,
+          140,
+          0
+        ]
+      }
+    ]
+  }
+}
