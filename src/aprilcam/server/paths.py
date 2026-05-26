@@ -107,11 +107,15 @@ class Path:
         The playfield this path belongs to.
     waypoints:
         Ordered list of :class:`Waypoint` objects.
+    name:
+        Optional human-readable display label. Defaults to ``""``; the viewer
+        falls back to ``path_id`` when blank.
     """
 
     path_id: str
     playfield_id: str
     waypoints: List[Waypoint]
+    name: str = ""
 
     def to_dict(self) -> dict:
         """Return a plain dict that serialises cleanly with :func:`json.dumps`.
@@ -123,6 +127,7 @@ class Path:
         return {
             "path_id": self.path_id,
             "playfield_id": self.playfield_id,
+            "name": self.name,
             "waypoints": [
                 {
                     "x": wp.x,
@@ -162,7 +167,7 @@ class PathRegistry:
     # Public API
     # ------------------------------------------------------------------
 
-    def create(self, playfield_id: str, waypoints: List[Waypoint]) -> Path:
+    def create(self, playfield_id: str, waypoints: List[Waypoint], name: str = "") -> Path:
         """Create a new path and store it in the registry.
 
         Parameters
@@ -171,6 +176,8 @@ class PathRegistry:
             The playfield this path is attached to.
         waypoints:
             Ordered list of waypoints for the path.
+        name:
+            Optional human-readable display label.  Defaults to ``""``.
 
         Returns
         -------
@@ -180,7 +187,7 @@ class PathRegistry:
         with self._lock:
             path_id = f"path_{self._counter:03d}"
             self._counter += 1
-            path = Path(path_id=path_id, playfield_id=playfield_id, waypoints=list(waypoints))
+            path = Path(path_id=path_id, playfield_id=playfield_id, waypoints=list(waypoints), name=name)
             self._paths[path_id] = path
             return path
 
