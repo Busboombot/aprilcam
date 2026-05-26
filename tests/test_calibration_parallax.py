@@ -173,8 +173,8 @@ def test_load_no_camera_position(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_load_tag_heights(tmp_path):
-    """String keys in tag_heights JSON are converted to int."""
+def test_load_ignores_legacy_tag_heights(tmp_path):
+    """tag_heights in calibration.json is silently ignored (moved to tags.json)."""
     _write_json(tmp_path, {
         "device_name": "TestCam",
         "resolution": [640, 480],
@@ -183,19 +183,7 @@ def test_load_tag_heights(tmp_path):
     })
     cal = load_calibration_from_camera_dir(tmp_path)
     assert cal is not None
-    assert cal.tag_heights == {5: 11.8, 12: 7.5}
-
-
-def test_load_no_tag_heights(tmp_path):
-    """Absent tag_heights key → empty dict."""
-    _write_json(tmp_path, {
-        "device_name": "TestCam",
-        "resolution": [640, 480],
-        "homography": _IDENTITY_H.tolist(),
-    })
-    cal = load_calibration_from_camera_dir(tmp_path)
-    assert cal is not None
-    assert cal.tag_heights == {}
+    assert not hasattr(cal, "tag_heights")
 
 
 # ---------------------------------------------------------------------------
@@ -221,20 +209,12 @@ def test_save_camera_position(tmp_path):
     assert data["camera_position"] == {"x_offset": 5.0, "y_offset": 2.0, "height": 150.0}
 
 
-def test_save_tag_heights(tmp_path):
-    """tag_heights is written with string keys."""
-    cal = _minimal_cal(tag_heights={3: 12.5, 7: 8.0})
-    save_calibration_to_camera_dir(cal, tmp_path, 101.0, 89.0)
-    data = json.loads((tmp_path / "calibration.json").read_text())
-    assert data["tag_heights"] == {"3": 12.5, "7": 8.0}
-
-
-def test_save_tag_heights_absent_when_empty(tmp_path):
-    """Empty tag_heights writes an empty dict (not absent)."""
+def test_save_no_tag_heights(tmp_path):
+    """tag_heights is not written to calibration.json (moved to tags.json)."""
     cal = _minimal_cal()
     save_calibration_to_camera_dir(cal, tmp_path, 101.0, 89.0)
     data = json.loads((tmp_path / "calibration.json").read_text())
-    assert data["tag_heights"] == {}
+    assert "tag_heights" not in data
 
 
 def test_user_managed_keys_preserved(tmp_path):
@@ -284,12 +264,10 @@ def test_load_field_dimensions_old_format(tmp_path):
 
 
 def test_round_trip(tmp_path):
-    """Save CameraCalibration with camera_position and tag_heights; reload and compare."""
+    """Save CameraCalibration with camera_position; reload and compare."""
     pos = CameraPosition(x_offset=3.0, y_offset=-1.5, height=200.0)
-    heights = {1: 5.0, 4: 12.0, 9: 8.5}
     cal = _minimal_cal(
         camera_position=pos,
-        tag_heights=heights,
         playfield_width_cm=101.0,
         playfield_height_cm=89.0,
     )
@@ -303,4 +281,3 @@ def test_round_trip(tmp_path):
     assert loaded.camera_position.x_offset == 3.0
     assert loaded.camera_position.y_offset == -1.5
     assert loaded.camera_position.height == 200.0
-    assert loaded.tag_heights == {1: 5.0, 4: 12.0, 9: 8.5}

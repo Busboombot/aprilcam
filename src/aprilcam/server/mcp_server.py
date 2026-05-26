@@ -1073,9 +1073,14 @@ def _handle_pixel_to_world(
     """Convert pixel coordinates to world coordinates using the source homography."""
     try:
         homography = None
+        origin_x = 0.0
+        origin_y = 0.0
         try:
             pf_entry = playfield_registry.get(source_id)
             homography = pf_entry.homography
+            if pf_entry.field_spec is not None:
+                origin_x = pf_entry.field_spec.width_cm / 2.0
+                origin_y = pf_entry.field_spec.height_cm / 2.0
         except KeyError:
             pass
 
@@ -1092,7 +1097,10 @@ def _handle_pixel_to_world(
             if abs(vec[2]) < 1e-9:
                 world_points.append(None)
             else:
-                world_points.append([float(vec[0] / vec[2]), float(vec[1] / vec[2])])
+                world_points.append([
+                    float(vec[0] / vec[2]) - origin_x,
+                    float(vec[1] / vec[2]) - origin_y,
+                ])
 
         return {"source_id": source_id, "world_points": world_points}
     except Exception as exc:
@@ -2513,42 +2521,26 @@ async def stop_stream(source_id: str) -> list[TextContent]:
 @server.tool()
 async def get_tags(
     source_id: str,
-    tag_heights_json: Optional[str] = None,
 ) -> list[TextContent]:
     """Return the latest tag detections from a running detection loop.
 
     **Primary tool for tag world coordinates.** When the source is a
     calibrated playfield, each tag record already includes ``world_xy``
-    (x, y in cm) — no separate conversion step needed. Use
+    (x, y in cm) in the A1-centred coordinate system (AprilTag 1 at
+    origin, x right, y up) — no separate conversion step needed. Use
     ``pixel_to_world`` only when you have raw pixel coordinates from
     somewhere else.
+
+    Parallax correction and origin translation are applied automatically
+    by the detection pipeline using ``data/aprilcam/tags.json``.
 
     Requires an active detection loop. Recommended workflow:
     ``open_camera`` → ``create_playfield`` → ``stream_tags`` (preferred) →
     ``get_tags`` (poll as needed) → ``stop_stream``.
 
-    Use ``start_detection`` only for legacy code; ``stream_tags`` is preferred.
-
-    Parallax correction: when ``tag_heights_json`` is provided, the
-    ``world_xy`` for each matching tag is corrected for parallax using
-    the camera position stored in ``calibration.json``.  The per-call
-    heights are merged over any heights already stored in calibration —
-    per-call values take precedence for matching tag IDs.  Pass
-    ``{"id": 0}`` for a tag to suppress correction for that tag.
-
-    Note: the daemon pipeline also applies persistent ``tag_heights``
-    automatically when detection is running via ``stream_tags``/
-    ``start_detection``.  Use ``tag_heights_json`` here for ad-hoc
-    per-call overrides without restarting detection.
-
     Args:
         source_id: The playfield_id (or camera handle) passed to ``stream_tags``
             (or ``start_detection``).
-        tag_heights_json: Optional JSON object mapping tag ID strings to height
-            in cm (e.g. ``'{"5": 11.8, "12": 7.5}'``).  Heights are merged
-            over persisted ``calibration.tag_heights``; per-call values
-            take precedence.  A height of ``0`` suppresses correction for
-            that tag.  Invalid JSON returns ``{"error": "..."}``.
 
     Returns:
         On success: ``{"source_id": "<id>", "frame": <int>, "tags": [...]}``.
@@ -2556,9 +2548,7 @@ async def get_tags(
           - ``id``: marker ID (int)
           - ``center_px``: [x, y] pixel position
           - ``corners_px``: list of 4 [x, y] corner points
-          - ``world_xy``: [x_cm, y_cm] world position, or null if uncalibrated;
-            parallax-corrected when ``tag_heights_json`` is supplied and
-            ``camera_position`` is set in calibration
+          - ``world_xy``: [x_cm, y_cm] A1-centred world position, or null if uncalibrated
           - ``orientation_yaw``: heading in radians
           - ``vel_px``: [vx, vy] velocity in pixels/s, or null if not yet computed
           - ``in_playfield``: bool, true if the tag center is inside the playfield polygon
@@ -2570,54 +2560,6 @@ async def get_tags(
     result = _handle_get_tags(source_id)
     if "error" in result:
         return [TextContent(type="text", text=json.dumps(result))]
-
-    if tag_heights_json is not None:
-        # Parse the per-call height override
-        try:
-            override: dict[int, float] = {
-                int(k): float(v)
-                for k, v in json.loads(tag_heights_json).items()
-            }
-        except (json.JSONDecodeError, ValueError, TypeError) as exc:
-            return [TextContent(type="text", text=json.dumps(
-                {"error": f"Invalid tag_heights_json: {exc}"}
-            ))]
-
-        # Resolve calibration for this source (playfield → camera dir)
-        calibration = None
-        try:
-            camera_id: str | None = None
-            try:
-                pf_entry = playfield_registry.get(source_id)
-                camera_id = pf_entry.camera_id
-            except KeyError:
-                camera_id = source_id
-
-            if camera_id is not None:
-                camera_dir_str = _cam_info.get(camera_id, {}).get("camera_dir", "")
-                if camera_dir_str:
-                    from aprilcam.calibration.calibration import (
-                        load_calibration_from_camera_dir,
-                    )
-                    calibration = load_calibration_from_camera_dir(camera_dir_str)
-        except Exception:
-            pass
-
-        # Merge persisted tag_heights with per-call override
-        merged: dict[int, float] = {}
-        if calibration and calibration.tag_heights:
-            merged.update(calibration.tag_heights)
-        merged.update(override)
-
-        # Apply parallax correction to each tag's world_xy
-        if calibration and calibration.camera_position and merged:
-            for tag in result.get("tags", []):
-                tag_h = merged.get(tag.get("id", -1), 0.0)
-                wxy = tag.get("world_xy")
-                if tag_h > 0.0 and wxy is not None:
-                    tag["world_xy"] = list(
-                        calibration.correct_world_for_height(wxy[0], wxy[1], tag_h)
-                    )
 
     return [TextContent(type="text", text=json.dumps(result))]
 

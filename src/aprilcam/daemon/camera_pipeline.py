@@ -139,6 +139,7 @@ class CameraPipeline:
         self._cap: Optional[cv.VideoCapture] = None
         self._april_cam: Optional[AprilCam] = None
         self._calibration = None  # CameraCalibration | None
+        self._tag_heights: dict[int, float] = {}  # loaded from data_dir/tags.json
         self.device_name: str = cam_name  # resolved to OS name in start()
 
         # Ring buffer for tag history
@@ -198,6 +199,13 @@ class CameraPipeline:
         # Load calibration from <cameras_dir>/<cam_name>/calibration.json
         camera_dir = self.config.cameras_dir / self.cam_name
         self._calibration = load_calibration_from_camera_dir(camera_dir)
+        tags_file = self.config.data_dir / "tags.json"
+        try:
+            import json as _json
+            raw = _json.loads(tags_file.read_text())
+            self._tag_heights = {int(k): float(v) for k, v in raw.get("tag_heights", {}).items()}
+        except Exception:
+            self._tag_heights = {}
 
         # Open camera
         cap = cv.VideoCapture(self.index)
@@ -501,18 +509,25 @@ class CameraPipeline:
                 )
                 tag_records = []
 
-            # Apply parallax correction for tags elevated above the playfield.
-            # Only runs when a camera_position with non-zero height is configured.
-            if self._calibration and self._calibration.camera_position:
+            # Translate world_xy to A1-centred coords and apply parallax correction.
+            if self._calibration and (
+                self._calibration.playfield_width_cm > 0
+                or self._calibration.camera_position is not None
+            ):
                 import dataclasses as _dc
+                origin_x = self._calibration.playfield_width_cm / 2.0
+                origin_y = self._calibration.playfield_height_cm / 2.0
                 corrected = []
                 for tr in tag_records:
-                    tag_h = self._calibration.tag_heights.get(tr.id, 0.0)
-                    if tag_h > 0.0 and tr.world_xy is not None:
-                        new_xy = self._calibration.correct_world_for_height(
-                            tr.world_xy[0], tr.world_xy[1], tag_h
-                        )
-                        tr = _dc.replace(tr, world_xy=new_xy)
+                    if tr.world_xy is None:
+                        corrected.append(tr)
+                        continue
+                    wx = tr.world_xy[0] - origin_x
+                    wy = tr.world_xy[1] - origin_y
+                    tag_h = self._tag_heights.get(tr.id, 0.0)
+                    if self._calibration.camera_position and tag_h > 0.0:
+                        wx, wy = self._calibration.correct_world_for_height(wx, wy, tag_h)
+                    tr = _dc.replace(tr, world_xy=(wx, wy))
                     corrected.append(tr)
                 tag_records = corrected
 

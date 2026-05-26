@@ -83,23 +83,18 @@ class CameraCalibration:
     playfield_width_cm: float = 0.0
     playfield_height_cm: float = 0.0
     camera_position: Optional[CameraPosition] = None
-    tag_heights: dict = field(default_factory=dict)  # int → float (cm above playfield)
-
     def correct_world_for_height(
         self, wx: float, wy: float, tag_height_cm: float
     ) -> tuple:
         """Apply parallax correction for a tag elevated above the playfield.
 
-        Camera is at world position ``(x_offset, y_offset, height)``.
-        The uncorrected homography result ``(wx, wy)`` assumes the tag
-        lies on the ``z=0`` plane.  When the tag is at height
-        *tag_height_cm*, the true playfield projection is:
+        ``wx`` and ``wy`` must already be in the **A1-centred** coordinate
+        system (origin at AprilTag 1, x right, y up).  ``x_offset`` and
+        ``y_offset`` in *camera_position* are the camera's horizontal
+        displacement from being directly above A1; ``0, 0`` means centred.
 
-            wx_corrected = wx + (h/H) * (cx - wx)
-            wy_corrected = wy + (h/H) * (cy - wy)
-
-        where ``H`` is the camera height, ``h`` is the tag height, and
-        ``(cx, cy)`` is the camera's horizontal offset above the field.
+            wx_corrected = wx + (h/H) * (x_offset - wx)
+            wy_corrected = wy + (h/H) * (y_offset - wy)
 
         Returns ``(wx, wy)`` unchanged when:
         - *camera_position* is ``None``, or
@@ -229,8 +224,6 @@ def load_calibration_from_camera_dir(
       for files written in the old format.
     - ``camera_position``: constructed from ``data["camera_position"]``
       dict when present; ``None`` otherwise.
-    - ``tag_heights``: ``{int(k): float(v) ...}`` from
-      ``data["tag_heights"]``; empty dict when absent.
     """
     cal_file = Path(camera_dir) / "calibration.json"
     if not cal_file.exists():
@@ -242,12 +235,10 @@ def load_calibration_from_camera_dir(
         ph = float(pf.get("height") or data.get("field_height_cm") or 0.0)
         cp_dict = data.get("camera_position")
         camera_position = CameraPosition(**cp_dict) if cp_dict else None
-        tag_heights = {int(k): float(v) for k, v in data.get("tag_heights", {}).items()}
         cal = CameraCalibration.from_dict(data)
         cal.playfield_width_cm = pw
         cal.playfield_height_cm = ph
         cal.camera_position = camera_position
-        cal.tag_heights = tag_heights
         return cal
     except Exception:
         return None
@@ -272,8 +263,8 @@ def save_calibration_to_camera_dir(
     keys are no longer written.  When present in an existing file they are
     treated as owned (not user-managed) so they are dropped on the next save.
 
-    ``camera_position`` and ``tag_heights`` from *cal* are written when
-    present; any user-managed keys not in the owned set are preserved.
+    ``camera_position`` from *cal* is written when present; any
+    user-managed keys not in the owned set are preserved.
     """
     camera_dir = Path(camera_dir)
     camera_dir.mkdir(parents=True, exist_ok=True)
@@ -285,7 +276,7 @@ def save_calibration_to_camera_dir(
         "device_name", "resolution", "homography", "tags_used", "rms_error",
         "camera_matrix", "dist_coeffs",
         "field_width_cm", "field_height_cm",  # old keys — owned so they are dropped
-        "playfield", "camera_position", "tag_heights",
+        "playfield", "camera_position",
         "detection_fps",
     }
     preserved: dict = {}
@@ -307,7 +298,6 @@ def save_calibration_to_camera_dir(
             "y_offset": cal.camera_position.y_offset,
             "height": cal.camera_position.height,
         }
-    data["tag_heights"] = {str(k): v for k, v in cal.tag_heights.items()}
     data.update(preserved)
     cal_file.write_text(json.dumps(data, indent=2))
     return cal_file

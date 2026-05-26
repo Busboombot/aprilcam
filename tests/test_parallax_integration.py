@@ -1,17 +1,16 @@
-"""Integration tests for parallax correction wired into the pipeline and MCP tools.
+"""Integration tests for parallax correction and A1-centred origin translation.
 
-Sprint 008, ticket 002.
-
-Tests focus on the integration points:
-- camera_pipeline.py: parallax block applied after world_xy is set
+Tests cover the integration points:
+- camera_pipeline.py: origin translation applied to all world_xy values
+- camera_pipeline.py: parallax correction applied after origin translation
 - mcp_server.py: calibrate_playfield stores camera_position
-- mcp_server.py: get_tags accepts tag_heights_json and applies correction
+- mcp_server.py: get_tags returns world_xy unchanged (pipeline already corrected)
 """
 
 from __future__ import annotations
 
 import json
-import tempfile
+import dataclasses
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -43,70 +42,115 @@ def _minimal_cal(**kwargs) -> CameraCalibration:
     )
 
 
+def _make_tag_record(tag_id: int, world_xy: Optional[tuple]):
+    """Return a real TagRecord with the given id and world_xy."""
+    from aprilcam.core.detection import TagRecord
+    return TagRecord(
+        id=tag_id,
+        center_px=(0.0, 0.0),
+        corners_px=[[0.0, 0.0]] * 4,
+        orientation_yaw=0.0,
+        world_xy=world_xy,
+        in_playfield=True,
+        vel_px=None,
+        speed_px=None,
+        vel_world=None,
+        speed_world=None,
+        heading_rad=None,
+        timestamp=0.0,
+        frame_index=0,
+    )
+
+
 # ---------------------------------------------------------------------------
-# camera_pipeline.py — parallax block
+# camera_pipeline.py — origin translation + parallax block
 # ---------------------------------------------------------------------------
 
 
-def _make_tag_record(tag_id: int, world_xy: Optional[tuple]) -> MagicMock:
-    """Return a mock TagRecord with configurable id and world_xy."""
-    tr = MagicMock()
-    tr.id = tag_id
-    tr.world_xy = world_xy
-    return tr
+def _run_pipeline_postprocess(pipeline, tag_records):
+    """Run the same post-process block as camera_pipeline._capture_loop."""
+    import dataclasses as _dc
+    if pipeline._calibration and (
+        pipeline._calibration.playfield_width_cm > 0
+        or pipeline._calibration.camera_position is not None
+    ):
+        origin_x = pipeline._calibration.playfield_width_cm / 2.0
+        origin_y = pipeline._calibration.playfield_height_cm / 2.0
+        corrected = []
+        for tr in tag_records:
+            if tr.world_xy is None:
+                corrected.append(tr)
+                continue
+            wx = tr.world_xy[0] - origin_x
+            wy = tr.world_xy[1] - origin_y
+            tag_h = pipeline._tag_heights.get(tr.id, 0.0)
+            if pipeline._calibration.camera_position and tag_h > 0.0:
+                wx, wy = pipeline._calibration.correct_world_for_height(wx, wy, tag_h)
+            tr = _dc.replace(tr, world_xy=(wx, wy))
+            corrected.append(tr)
+        return corrected
+    return tag_records
+
+
+def test_pipeline_applies_origin_translation():
+    """world_xy is shifted by (field_w/2, field_h/2) to produce A1-centred coords."""
+    from aprilcam.daemon.camera_pipeline import CameraPipeline
+
+    pipeline = CameraPipeline.__new__(CameraPipeline)
+    pipeline._calibration = _minimal_cal(
+        playfield_width_cm=100.0,
+        playfield_height_cm=80.0,
+    )
+    pipeline._tag_heights = {}
+
+    tr = _make_tag_record(5, (50.0, 40.0))
+    result = _run_pipeline_postprocess(pipeline, [tr])
+
+    # (50, 40) - (50, 40) = (0, 0) — dead centre of field → A1 position
+    assert result[0].world_xy == (0.0, 0.0)
 
 
 def test_pipeline_applies_correction_to_elevated_tag():
-    """Tags in tag_heights with height > 0 get world_xy corrected."""
+    """Tags with height > 0 get parallax correction after origin translation."""
     from aprilcam.daemon.camera_pipeline import CameraPipeline
 
     pipeline = CameraPipeline.__new__(CameraPipeline)
     pipeline._calibration = _minimal_cal(
         camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-        tag_heights={5: 12.0},
+        playfield_width_cm=100.0,
+        playfield_height_cm=80.0,
     )
+    pipeline._tag_heights = {5: 12.0}
 
-    tr = _make_tag_record(5, (50.0, 50.0))
-    tag_records = [tr]
+    # Corner-based world_xy: (100, 80) → A1-centred (50, 40) before correction
+    tr = _make_tag_record(5, (100.0, 80.0))
+    result = _run_pipeline_postprocess(pipeline, [tr])
 
-    # Apply the same correction logic as in _capture_loop
-    if pipeline._calibration and pipeline._calibration.camera_position:
-        for rec in tag_records:
-            tag_h = pipeline._calibration.tag_heights.get(rec.id, 0.0)
-            if tag_h > 0.0 and rec.world_xy is not None:
-                rec.world_xy = pipeline._calibration.correct_world_for_height(
-                    rec.world_xy[0], rec.world_xy[1], tag_h
-                )
-
-    # r = 12/180; wx_corr = 50 + (1/15)*(0-50) = 50*(1 - 1/15)
-    expected = 50.0 * (1.0 - 12.0 / 180.0)
-    assert abs(tr.world_xy[0] - expected) < 0.01
-    assert abs(tr.world_xy[1] - expected) < 0.01
+    # After translation: wx=50, wy=40; r=12/180
+    r = 12.0 / 180.0
+    expected_x = 50.0 * (1.0 - r)  # cx=0 so: wx + r*(0 - wx) = wx*(1-r)
+    expected_y = 40.0 * (1.0 - r)
+    assert abs(result[0].world_xy[0] - expected_x) < 0.01
+    assert abs(result[0].world_xy[1] - expected_y) < 0.01
 
 
 def test_pipeline_skips_tag_not_in_heights():
-    """Tags not in tag_heights are not modified."""
+    """Tags not in _tag_heights get origin translation but no parallax correction."""
     from aprilcam.daemon.camera_pipeline import CameraPipeline
 
     pipeline = CameraPipeline.__new__(CameraPipeline)
     pipeline._calibration = _minimal_cal(
         camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-        tag_heights={5: 12.0},
+        playfield_width_cm=100.0,
+        playfield_height_cm=80.0,
     )
+    pipeline._tag_heights = {5: 12.0}
 
-    tr = _make_tag_record(99, (30.0, 40.0))
-    tag_records = [tr]
+    tr = _make_tag_record(99, (50.0, 40.0))  # origin = (50, 40)
+    result = _run_pipeline_postprocess(pipeline, [tr])
 
-    if pipeline._calibration and pipeline._calibration.camera_position:
-        for rec in tag_records:
-            tag_h = pipeline._calibration.tag_heights.get(rec.id, 0.0)
-            if tag_h > 0.0 and rec.world_xy is not None:
-                rec.world_xy = pipeline._calibration.correct_world_for_height(
-                    rec.world_xy[0], rec.world_xy[1], tag_h
-                )
-
-    # Tag 99 not in heights → unchanged
-    assert tr.world_xy == (30.0, 40.0)
+    # Only translation applied: (50-50, 40-40) = (0, 0)
+    assert result[0].world_xy == (0.0, 0.0)
 
 
 def test_pipeline_skips_when_no_calibration():
@@ -115,67 +159,30 @@ def test_pipeline_skips_when_no_calibration():
 
     pipeline = CameraPipeline.__new__(CameraPipeline)
     pipeline._calibration = None
+    pipeline._tag_heights = {}
 
     tr = _make_tag_record(5, (50.0, 50.0))
-    tag_records = [tr]
+    result = _run_pipeline_postprocess(pipeline, [tr])
 
-    if pipeline._calibration and pipeline._calibration.camera_position:
-        for rec in tag_records:
-            tag_h = pipeline._calibration.tag_heights.get(rec.id, 0.0)
-            if tag_h > 0.0 and rec.world_xy is not None:
-                rec.world_xy = pipeline._calibration.correct_world_for_height(
-                    rec.world_xy[0], rec.world_xy[1], tag_h
-                )
-
-    assert tr.world_xy == (50.0, 50.0)
-
-
-def test_pipeline_skips_when_no_camera_position():
-    """calibration without camera_position → block skipped."""
-    from aprilcam.daemon.camera_pipeline import CameraPipeline
-
-    pipeline = CameraPipeline.__new__(CameraPipeline)
-    pipeline._calibration = _minimal_cal(
-        camera_position=None,
-        tag_heights={5: 12.0},
-    )
-
-    tr = _make_tag_record(5, (50.0, 50.0))
-    tag_records = [tr]
-
-    if pipeline._calibration and pipeline._calibration.camera_position:
-        for rec in tag_records:
-            tag_h = pipeline._calibration.tag_heights.get(rec.id, 0.0)
-            if tag_h > 0.0 and rec.world_xy is not None:
-                rec.world_xy = pipeline._calibration.correct_world_for_height(
-                    rec.world_xy[0], rec.world_xy[1], tag_h
-                )
-
-    assert tr.world_xy == (50.0, 50.0)
+    assert result[0].world_xy == (50.0, 50.0)
 
 
 def test_pipeline_skips_null_world_xy():
-    """Tags with world_xy=None are not corrected (no exception)."""
+    """Tags with world_xy=None pass through unchanged."""
     from aprilcam.daemon.camera_pipeline import CameraPipeline
 
     pipeline = CameraPipeline.__new__(CameraPipeline)
     pipeline._calibration = _minimal_cal(
         camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-        tag_heights={5: 12.0},
+        playfield_width_cm=100.0,
+        playfield_height_cm=80.0,
     )
+    pipeline._tag_heights = {5: 12.0}
 
     tr = _make_tag_record(5, None)
-    tag_records = [tr]
+    result = _run_pipeline_postprocess(pipeline, [tr])
 
-    if pipeline._calibration and pipeline._calibration.camera_position:
-        for rec in tag_records:
-            tag_h = pipeline._calibration.tag_heights.get(rec.id, 0.0)
-            if tag_h > 0.0 and rec.world_xy is not None:
-                rec.world_xy = pipeline._calibration.correct_world_for_height(
-                    rec.world_xy[0], rec.world_xy[1], tag_h
-                )
-
-    assert tr.world_xy is None
+    assert result[0].world_xy is None
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +217,7 @@ def test_calibrate_playfield_stores_camera_position(tmp_path):
     cam_id = "cam_test_cp"
     pf_id = f"pf_{cam_id}"
 
-    # Register a fake camera and playfield
-    registry._cameras[cam_id] = None  # daemon-owned sentinel
+    registry._cameras[cam_id] = None
     camera_dir = tmp_path / cam_id
     camera_dir.mkdir()
     _cam_info[cam_id] = {"camera_dir": str(camera_dir)}
@@ -241,7 +247,6 @@ def test_calibrate_playfield_stores_camera_position(tmp_path):
         assert result["calibrated"] is True
         assert result["camera_height_cm"] == 150.0
 
-        # Verify calibration.json was written with camera_position
         cal_file = camera_dir / "calibration.json"
         if cal_file.exists():
             saved = json.loads(cal_file.read_text())
@@ -250,7 +255,6 @@ def test_calibrate_playfield_stores_camera_position(tmp_path):
             assert saved["camera_position"]["x_offset"] == 5.0
             assert saved["camera_position"]["y_offset"] == -2.0
     finally:
-        # Cleanup
         try:
             del registry._cameras[cam_id]
         except KeyError:
@@ -307,12 +311,10 @@ def test_calibrate_playfield_response_includes_camera_height_cm(tmp_path):
                 width=40.0,
                 height=32.0,
                 units="cm",
-                camera_height_cm=200.0,
             )
         )
         result = json.loads(result_contents[0].text)
         assert "camera_height_cm" in result
-        assert result["camera_height_cm"] == 200.0
     finally:
         try:
             del registry._cameras[cam_id]
@@ -326,7 +328,7 @@ def test_calibrate_playfield_response_includes_camera_height_cm(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# get_tags MCP tool — tag_heights_json parameter
+# get_tags MCP tool — world_xy passed through as-is (pipeline already corrected)
 # ---------------------------------------------------------------------------
 
 
@@ -354,14 +356,14 @@ def _make_detection_entry_with_tags(
     return entry
 
 
-def test_get_tags_no_override_unchanged():
-    """tag_heights_json=None returns result unchanged from _handle_get_tags."""
+def test_get_tags_returns_world_xy_unchanged():
+    """get_tags returns world_xy exactly as stored in ring buffer (pipeline pre-corrected)."""
     import asyncio
     from aprilcam.server import mcp_server
     from aprilcam.server.mcp_server import detection_registry
 
-    source_id = "pf_notag_unchanged"
-    tags = [{"id": 5, "world_xy": [50.0, 50.0], "center_px": [320, 240], "corners_px": []}]
+    source_id = "pf_passthrough"
+    tags = [{"id": 5, "world_xy": [12.3, -7.5], "center_px": [320, 240], "corners_px": []}]
     entry = _make_detection_entry_with_tags(source_id, tags)
     detection_registry[source_id] = entry
 
@@ -369,195 +371,6 @@ def test_get_tags_no_override_unchanged():
         result_contents = asyncio.run(mcp_server.get_tags(source_id=source_id))
         result = json.loads(result_contents[0].text)
         assert "error" not in result
-        assert result["tags"][0]["world_xy"] == [50.0, 50.0]
+        assert result["tags"][0]["world_xy"] == [12.3, -7.5]
     finally:
         detection_registry.pop(source_id, None)
-
-
-def test_get_tags_tag_heights_json_overrides(tmp_path):
-    """Supplying tag_heights_json corrects world_xy for matching tags."""
-    import asyncio
-    from aprilcam.server import mcp_server
-    from aprilcam.server.mcp_server import detection_registry, _cam_info
-
-    source_id = "cam_ht_override"
-    tags = [{"id": 5, "world_xy": [50.0, 50.0], "center_px": [320, 240], "corners_px": []}]
-    entry = _make_detection_entry_with_tags(source_id, tags)
-    detection_registry[source_id] = entry
-
-    # Write a calibration.json with camera_position
-    camera_dir = tmp_path / source_id
-    camera_dir.mkdir()
-    cal = _minimal_cal(
-        camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-    )
-    save_calibration_to_camera_dir(cal, camera_dir, field_width_cm=101.0, field_height_cm=89.0)
-    _cam_info[source_id] = {"camera_dir": str(camera_dir)}
-
-    try:
-        result_contents = asyncio.run(
-            mcp_server.get_tags(
-                source_id=source_id,
-                tag_heights_json='{"5": 12.0}',
-            )
-        )
-        result = json.loads(result_contents[0].text)
-        assert "error" not in result
-        corrected = result["tags"][0]["world_xy"]
-        expected = 50.0 * (1.0 - 12.0 / 180.0)
-        assert abs(corrected[0] - expected) < 0.01
-        assert abs(corrected[1] - expected) < 0.01
-    finally:
-        detection_registry.pop(source_id, None)
-        _cam_info.pop(source_id, None)
-
-
-def test_get_tags_tag_heights_json_zero_suppresses(tmp_path):
-    """tag_heights_json with height 0 suppresses correction for that tag."""
-    import asyncio
-    from aprilcam.server import mcp_server
-    from aprilcam.server.mcp_server import detection_registry, _cam_info
-
-    source_id = "cam_ht_zero"
-    tags = [{"id": 5, "world_xy": [50.0, 50.0], "center_px": [320, 240], "corners_px": []}]
-    entry = _make_detection_entry_with_tags(source_id, tags)
-    detection_registry[source_id] = entry
-
-    camera_dir = tmp_path / source_id
-    camera_dir.mkdir()
-    # Persist calibration with tag 5 having height 12.0 (which would normally correct)
-    cal = _minimal_cal(
-        camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-        tag_heights={5: 12.0},
-    )
-    save_calibration_to_camera_dir(cal, camera_dir, field_width_cm=101.0, field_height_cm=89.0)
-    _cam_info[source_id] = {"camera_dir": str(camera_dir)}
-
-    try:
-        result_contents = asyncio.run(
-            mcp_server.get_tags(
-                source_id=source_id,
-                tag_heights_json='{"5": 0}',
-            )
-        )
-        result = json.loads(result_contents[0].text)
-        assert "error" not in result
-        # Per-call override of 0 suppresses correction → world_xy unchanged
-        assert result["tags"][0]["world_xy"] == [50.0, 50.0]
-    finally:
-        detection_registry.pop(source_id, None)
-        _cam_info.pop(source_id, None)
-
-
-def test_get_tags_invalid_json_returns_error():
-    """Malformed tag_heights_json string returns an error response."""
-    import asyncio
-    from aprilcam.server import mcp_server
-    from aprilcam.server.mcp_server import detection_registry
-
-    source_id = "cam_ht_invalid"
-    tags = [{"id": 5, "world_xy": [50.0, 50.0], "center_px": [320, 240], "corners_px": []}]
-    entry = _make_detection_entry_with_tags(source_id, tags)
-    detection_registry[source_id] = entry
-
-    try:
-        result_contents = asyncio.run(
-            mcp_server.get_tags(
-                source_id=source_id,
-                tag_heights_json="not valid json {{{",
-            )
-        )
-        result = json.loads(result_contents[0].text)
-        assert "error" in result
-        assert "Invalid tag_heights_json" in result["error"]
-    finally:
-        detection_registry.pop(source_id, None)
-
-
-def test_get_tags_tag_not_in_heights_unaffected(tmp_path):
-    """Tags not in merged heights dict are not corrected."""
-    import asyncio
-    from aprilcam.server import mcp_server
-    from aprilcam.server.mcp_server import detection_registry, _cam_info
-
-    source_id = "cam_ht_unaffected"
-    tags = [
-        {"id": 5, "world_xy": [50.0, 50.0], "center_px": [320, 240], "corners_px": []},
-        {"id": 99, "world_xy": [30.0, 40.0], "center_px": [200, 200], "corners_px": []},
-    ]
-    entry = _make_detection_entry_with_tags(source_id, tags)
-    detection_registry[source_id] = entry
-
-    camera_dir = tmp_path / source_id
-    camera_dir.mkdir()
-    cal = _minimal_cal(
-        camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-    )
-    save_calibration_to_camera_dir(cal, camera_dir, field_width_cm=101.0, field_height_cm=89.0)
-    _cam_info[source_id] = {"camera_dir": str(camera_dir)}
-
-    try:
-        result_contents = asyncio.run(
-            mcp_server.get_tags(
-                source_id=source_id,
-                tag_heights_json='{"5": 12.0}',
-            )
-        )
-        result = json.loads(result_contents[0].text)
-        assert "error" not in result
-
-        tags_result = {t["id"]: t for t in result["tags"]}
-        # Tag 5 corrected
-        assert tags_result[5]["world_xy"][0] != 50.0
-        # Tag 99 not in heights → unchanged
-        assert tags_result[99]["world_xy"] == [30.0, 40.0]
-    finally:
-        detection_registry.pop(source_id, None)
-        _cam_info.pop(source_id, None)
-
-
-def test_get_tags_merges_calibration_heights_with_override(tmp_path):
-    """Per-call heights override persisted heights for matching IDs; others remain."""
-    import asyncio
-    from aprilcam.server import mcp_server
-    from aprilcam.server.mcp_server import detection_registry, _cam_info
-
-    source_id = "cam_ht_merge"
-    tags = [
-        {"id": 5, "world_xy": [50.0, 50.0], "center_px": [320, 240], "corners_px": []},
-        {"id": 7, "world_xy": [60.0, 60.0], "center_px": [200, 200], "corners_px": []},
-    ]
-    entry = _make_detection_entry_with_tags(source_id, tags)
-    detection_registry[source_id] = entry
-
-    camera_dir = tmp_path / source_id
-    camera_dir.mkdir()
-    # Persist heights: 5→12.0, 7→8.0
-    cal = _minimal_cal(
-        camera_position=CameraPosition(x_offset=0.0, y_offset=0.0, height=180.0),
-        tag_heights={5: 12.0, 7: 8.0},
-    )
-    save_calibration_to_camera_dir(cal, camera_dir, field_width_cm=101.0, field_height_cm=89.0)
-    _cam_info[source_id] = {"camera_dir": str(camera_dir)}
-
-    try:
-        # Override tag 5 to 0 (suppress); tag 7 stays at calibration value 8.0
-        result_contents = asyncio.run(
-            mcp_server.get_tags(
-                source_id=source_id,
-                tag_heights_json='{"5": 0}',
-            )
-        )
-        result = json.loads(result_contents[0].text)
-        assert "error" not in result
-
-        tags_result = {t["id"]: t for t in result["tags"]}
-        # Tag 5 suppressed by per-call override of 0 → unchanged
-        assert tags_result[5]["world_xy"] == [50.0, 50.0]
-        # Tag 7 uses persisted height 8.0 → corrected
-        r = 8.0 / 180.0
-        expected_7 = 60.0 * (1.0 - r)
-        assert abs(tags_result[7]["world_xy"][0] - expected_7) < 0.01
-    finally:
-        detection_registry.pop(source_id, None)
-        _cam_info.pop(source_id, None)

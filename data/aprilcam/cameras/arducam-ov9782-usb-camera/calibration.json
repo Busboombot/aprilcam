@@ -49,13 +49,6 @@
   ],
   "playfield": {"width": 134.3, "height": 89.3},
   "camera_position": {"x_offset": 0.0, "y_offset": 0.0, "height": 127.0},
-  "tag_heights": {
-    "100": 11.8,
-    "3": 0,
-    "15": 15,
-    "14": 5
-  },
-
   "detection_fps": 10,
   "settings": {
     "program": "uvc-util",
