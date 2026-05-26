@@ -107,6 +107,8 @@ class TagFrame(BaseModel):
     homography: list[list[float]] | None  # 3×3 row-major; None if uncalibrated
     playfield_corners: list[tuple[float, float]]  # 4 corner points (UL/UR/LR/LL)
     fps: float
+    field_width_cm: float = 0.0
+    field_height_cm: float = 0.0
 
     @classmethod
     def from_proto(cls, msg: "aprilcam_pb2.TagFrame") -> "TagFrame":
@@ -134,6 +136,8 @@ class TagFrame(BaseModel):
             homography=homography,
             playfield_corners=playfield_corners,
             fps=float(msg.fps),
+            field_width_cm=float(msg.field_width_cm),
+            field_height_cm=float(msg.field_height_cm),
         )
 
 
