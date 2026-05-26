@@ -132,7 +132,14 @@ class PlayfieldDisplay:
         cv.putText(img, text, org, cv.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness + 2, cv.LINE_AA)
         cv.putText(img, text, org, cv.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv.LINE_AA)
 
-    def draw_overlays(self, frame: np.ndarray, tags: Iterable[AprilTag], homography: Optional[np.ndarray] = None) -> None:
+    def draw_overlays(
+        self,
+        frame: np.ndarray,
+        tags: Iterable[AprilTag],
+        homography: Optional[np.ndarray] = None,
+        origin_x: float = 0.0,
+        origin_y: float = 0.0,
+    ) -> None:
         # playfield outline (transform into display coords)
         poly = self.playfield.get_polygon()
         if poly is not None:
@@ -260,6 +267,27 @@ class PlayfieldDisplay:
                         placed = True
                 if not placed:
                     self._draw_text_with_outline(frame, text, (cx + 8, cy + 14), color=(0, 255, 0), font_scale=0.5, thickness=1)
+            # Yellow cross at the height-adjusted world position
+            if tag.world_xy is not None and homography is not None:
+                try:
+                    H_inv = np.linalg.inv(homography)
+                    wx, wy = tag.world_xy
+                    # Convert A1-centred back to raw corner-origin for H_inv
+                    raw_vec = H_inv @ np.array([wx + origin_x, wy + origin_y, 1.0])
+                    rx, ry = raw_vec[0] / raw_vec[2], raw_vec[1] / raw_vec[2]
+                    cross_src = np.array([[rx, ry]], dtype=np.float32)
+                    cross_disp = self._map_points_to_display(cross_src).reshape(2)
+                    gx, gy = int(round(float(cross_disp[0]))), int(round(float(cross_disp[1])))
+                    # Arm length = half of 1cm in pixels; map (wx+0.5, wy) to get scale
+                    arm_vec = H_inv @ np.array([wx + origin_x + 0.5, wy + origin_y, 1.0])
+                    arm_src = np.array([[arm_vec[0] / arm_vec[2], arm_vec[1] / arm_vec[2]]], dtype=np.float32)
+                    arm_disp = self._map_points_to_display(arm_src).reshape(2)
+                    arm_px = max(4, int(round(float(np.linalg.norm(arm_disp - cross_disp)))))
+                    yellow = (0, 255, 255)
+                    cv.line(frame, (gx - arm_px, gy), (gx + arm_px, gy), yellow, 2, cv.LINE_AA)
+                    cv.line(frame, (gx, gy - arm_px), (gx, gy + arm_px), yellow, 2, cv.LINE_AA)
+                except Exception:
+                    pass
 
     def draw_status_panel(
         self,
