@@ -293,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     cam_name: Optional[str] = None
+    cam_index: Optional[int] = None
     _camera_dir: Optional[str] = None
     try:
         camera_arg = args.camera
@@ -444,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
                     [INSET, dh_f - INSET],
                 ], dtype=np.float32).reshape(-1, 1, 2)
 
+                from dataclasses import replace as _dc_replace
                 raw_objs = color_clf.classify(disp, homography=homography)
                 detected = []
                 for obj in raw_objs:
@@ -454,6 +456,9 @@ def main(argv: list[str] | None = None) -> int:
                     aspect = max(bw, bh) / max(min(bw, bh), 1)
                     if aspect > 2.0 or min(bw, bh) < 15 or max(bw, bh) > 200:
                         continue
+                    if obj.world_xy is not None:
+                        rx, ry = obj.world_xy
+                        obj = _dc_replace(obj, world_xy=(rx - origin_x, origin_y - ry))
                     detected.append(obj)
                 _draw_object_boxes(disp, detected)
                 with _obj_lock:
@@ -561,16 +566,18 @@ def main(argv: list[str] | None = None) -> int:
 
     def _kv_row(parent, row, key, init="--"):
         tk.Label(parent, text=key, font=label_font, fg="#aaaaaa", bg=PANEL_BG,
-                 anchor="w").grid(row=row, column=0, sticky="w", padx=(0, 12), pady=1)
+                 anchor="w").grid(row=row, column=0, sticky="w", padx=(0, 12), pady=0)
         var = tk.StringVar(value=init)
         tk.Label(parent, textvariable=var, font=value_font, fg=FG, bg=PANEL_BG,
-                 anchor="w").grid(row=row, column=1, sticky="w")
+                 anchor="w").grid(row=row, column=1, sticky="w", pady=0)
         return var
 
-    var_fps = _kv_row(status_frame, 0, "FPS")
-    var_tags = _kv_row(status_frame, 1, "Tags")
-    var_cal = _kv_row(status_frame, 2, "Calibrated")
-    var_deskew = _kv_row(status_frame, 3, "Deskew")
+    var_idx = _kv_row(status_frame, 0, "Camera", init=str(cam_index) if cam_index is not None else "--")
+    var_name = _kv_row(status_frame, 1, "Name", init=cam_name or "--")
+    var_fps = _kv_row(status_frame, 2, "FPS")
+    var_tags = _kv_row(status_frame, 3, "Tags")
+    var_cal = _kv_row(status_frame, 4, "Calibrated")
+    var_deskew = _kv_row(status_frame, 5, "Deskew")
 
     # ── Mobile tags section ───────────────────────────────────────────────
     cf_mob = CollapsibleFrame(right_frame, title="Mobile Tags", bg=PANEL_BG, header_fg=MOB_FG)

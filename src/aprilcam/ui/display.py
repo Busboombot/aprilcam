@@ -228,45 +228,6 @@ class PlayfieldDisplay:
             tx = int(cx - tw * 0.5)
             ty = int(cy + th * 0.5)
             self._draw_text_with_outline(frame, id_text, (tx, ty), color=(0, 0, 255), font_scale=0.8, thickness=2)
-            # world coords small label outside bbox
-            if tag.world_xy is not None:
-                Xw, Yw = tag.world_xy
-                text = f"{Xw:.1f},{Yw:.1f}"
-                x_coords = pts[:, 0]
-                y_coords = pts[:, 1]
-                xmin = int(x_coords.min())
-                xmax = int(x_coords.max())
-                ymin = int(y_coords.min())
-                ymax = int(y_coords.max())
-                (tw, th), base = cv.getTextSize(text, cv.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                pad = 8
-                fw, fh = frame.shape[1], frame.shape[0]
-                placed = False
-                tx = int((xmin + xmax) * 0.5 - tw * 0.5)
-                ty = int(ymax + pad + th)
-                if ty + base <= fh and 0 <= tx <= fw - tw:
-                    self._draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                    placed = True
-                if not placed:
-                    tx = int((xmin + xmax) * 0.5 - tw * 0.5)
-                    ty = int(ymin - pad)
-                    if ty - th >= 0 and 0 <= tx <= fw - tw:
-                        self._draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                        placed = True
-                if not placed:
-                    tx = int(xmax + pad)
-                    ty = int((ymin + ymax) * 0.5 + th * 0.5)
-                    if tx + tw <= fw and 0 <= ty - th and ty + base <= fh:
-                        self._draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                        placed = True
-                if not placed:
-                    tx = int(xmin - pad - tw)
-                    ty = int((ymin + ymax) * 0.5 + th * 0.5)
-                    if tx >= 0 and 0 <= ty - th and ty + base <= fh:
-                        self._draw_text_with_outline(frame, text, (tx, ty), color=(0, 255, 0), font_scale=0.5, thickness=1)
-                        placed = True
-                if not placed:
-                    self._draw_text_with_outline(frame, text, (cx + 8, cy + 14), color=(0, 255, 0), font_scale=0.5, thickness=1)
             # Yellow cross at the height-adjusted world position
             if tag.world_xy is not None and homography is not None:
                 try:

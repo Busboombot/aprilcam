@@ -14,12 +14,34 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
+import time
+
 import cv2 as cv
+import grpc
 import numpy as np
 
 from ..camera.camutil import list_cameras, select_camera_by_pattern
 from ..config import Config
 from ..client.control import DaemonControl
+
+
+def _warmup_capture(dc: DaemonControl, cam_name: str, count: int = 10, timeout: float = 5.0) -> None:
+    """Capture ``count`` frames, retrying while the daemon has no frame yet."""
+    deadline = time.monotonic() + timeout
+    captured = 0
+    while captured < count:
+        try:
+            dc.capture_frame(cam_name)
+            captured += 1
+        except grpc.RpcError as e:
+            if (
+                e.code() == grpc.StatusCode.UNAVAILABLE
+                and "no frame captured yet" in (e.details() or "")
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
+                continue
+            raise
 
 
 class _DaemonCapture:
@@ -211,9 +233,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             sec_name, _ = dc.open_camera(sec_idx)
 
             # Warm up
-            for _ in range(10):
-                dc.capture_frame(pri_name)
-                dc.capture_frame(sec_name)
+            _warmup_capture(dc, pri_name)
+            _warmup_capture(dc, sec_name)
 
             pri_cap = _DaemonCapture(dc, pri_name)
             sec_cap = _DaemonCapture(dc, sec_name)
@@ -271,8 +292,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             try:
                 cam_name, _ = dc.open_camera(idx)
 
-                for _ in range(10):
-                    dc.capture_frame(cam_name)
+                _warmup_capture(dc, cam_name)
 
                 cap = _DaemonCapture(dc, cam_name)
 

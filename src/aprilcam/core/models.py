@@ -18,7 +18,9 @@ class AprilTag:
     - center_px: pixel center (computed)
     - top_dir_px: unit vector from center toward the top edge midpoint (image coords)
     - world_xy: optional (X,Y) in world units (via homography)
-    - orientation_yaw: yaw angle in radians in image plane (from +X toward +Y)
+    - orientation_yaw: yaw angle in radians, measured from world +Y axis,
+      positive counter-clockwise (right-handed, world-frame convention).
+      0 → tag's top edge faces world +Y; +pi/2 → faces world -X.
     - last_ts: timestamp of last update
     - frame: video frame index when measured
     - in_playfield: whether the tag center is within the playfield polygon
@@ -58,7 +60,10 @@ class AprilTag:
             perp = np.array([-e[1], e[0]], dtype=np.float32)
             denom = float(np.linalg.norm(perp)) or 1.0
             n_unit = (float(perp[0]) / denom, float(perp[1]) / denom)
-        yaw = math.atan2(n_unit[1], n_unit[0])
+        # Yaw measured from world +Y, CCW positive.
+        # Image y is flipped vs world y, so world dir = (nx, -ny); then
+        # angle from +Y CCW = atan2(-world_x, world_y) = atan2(-nx, -ny).
+        yaw = math.atan2(-n_unit[0], -n_unit[1])
         world_xy: Optional[Tuple[float, float]] = None
         if homography is not None and homography.size == 9:
             vec = np.array([float(c[0]), float(c[1]), 1.0], dtype=float)
@@ -91,7 +96,10 @@ class AprilTag:
             perp = np.array([-e[1], e[0]], dtype=np.float32)
             denom = float(np.linalg.norm(perp)) or 1.0
             n_unit = (float(perp[0]) / denom, float(perp[1]) / denom)
-        yaw = math.atan2(n_unit[1], n_unit[0])
+        # Yaw measured from world +Y, CCW positive.
+        # Image y is flipped vs world y, so world dir = (nx, -ny); then
+        # angle from +Y CCW = atan2(-world_x, world_y) = atan2(-nx, -ny).
+        yaw = math.atan2(-n_unit[0], -n_unit[1])
         self.corners_px = ptsf.copy()
         self.center_px = (float(c[0]), float(c[1]))
         self.top_dir_px = n_unit

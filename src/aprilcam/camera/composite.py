@@ -131,7 +131,8 @@ def map_tags_to_primary(
         p0, p1 = mapped_2d[0], mapped_2d[1]
         top_mid = (p0 + p1) / 2.0
         d = top_mid - center
-        yaw = float(math.atan2(d[1], d[0]))
+        # Yaw from world +Y, CCW positive (image y flipped vs world y).
+        yaw = float(math.atan2(-d[0], -d[1]))
 
         results.append({
             "id": int(tag_id),
